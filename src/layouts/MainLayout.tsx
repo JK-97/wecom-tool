@@ -1,0 +1,78 @@
+import { Outlet, Link, useLocation } from "react-router-dom"
+import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen } from "lucide-react"
+import { cn } from "@/lib/utils"
+
+const navItems = [
+  { name: "微信客服中心", path: "/main/cs-center", icon: MessageSquare },
+  { name: "客户中心", path: "/main/customer-360", icon: Users },
+  { name: "客户列表", path: "/main/customers", icon: Users },
+  { name: "群运营详情", path: "/main/group-detail", icon: Users },
+  { name: "跟进任务中心", path: "/main/task-center", icon: CheckSquare },
+  { name: "策略与素材", path: "/main/strategy", icon: BookOpen },
+  { name: "数据看板", path: "/main/dashboard", icon: BarChart2 },
+  { name: "组织与设置", path: "/main/settings", icon: Settings },
+]
+
+export default function MainLayout() {
+  const location = useLocation()
+
+  return (
+    <div className="flex h-screen w-full bg-[#F0F2F5]">
+      {/* Sidebar Navigation */}
+      <div className="flex w-64 flex-col border-r border-gray-200 bg-white">
+        <div className="flex h-16 shrink-0 items-center px-6 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded bg-blue-600 text-white font-bold">
+              C
+            </div>
+            <span className="text-lg font-semibold text-gray-900">双域沟通平台</span>
+          </div>
+        </div>
+        <nav className="flex-1 space-y-1 p-4">
+          {navItems.map((item) => {
+            const isActive = location.pathname.startsWith(item.path) && item.path !== "#"
+            return (
+              <Link
+                key={item.name}
+                to={item.path}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-blue-50 text-blue-600"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                )}
+              >
+                <item.icon className={cn("h-5 w-5", isActive ? "text-blue-600" : "text-gray-400")} />
+                {item.name}
+              </Link>
+            )
+          })}
+        </nav>
+        <div className="p-4 border-t border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-full bg-gray-200" />
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-gray-900">管理员</span>
+              <span className="text-xs text-gray-500">admin@company.com</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-8">
+          <h1 className="text-lg font-medium text-gray-900">
+            {navItems.find(item => location.pathname.startsWith(item.path))?.name || "工作台"}
+          </h1>
+          <div className="flex items-center gap-4">
+            <Link to="/" className="text-sm text-blue-600 hover:underline">返回导航页</Link>
+          </div>
+        </header>
+        <main className="flex-1 overflow-y-auto p-8">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  )
+}
