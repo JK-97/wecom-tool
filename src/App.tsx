@@ -19,6 +19,9 @@ import StrategyCenter from "./pages/main/StrategyCenter"
 import Dashboard from "./pages/main/Dashboard"
 import OrganizationSettings from "./pages/main/OrganizationSettings"
 import TaskDetailPage from "./pages/main/TaskDetailPage"
+import ReceptionChannels from "./pages/main/ReceptionChannels"
+import RoutingRules from "./pages/main/RoutingRules"
+import Guide from "./pages/main/Guide"
 
 export default function App() {
   return (
@@ -44,6 +47,9 @@ export default function App() {
           <Route path="strategy" element={<StrategyCenter />} />
           <Route path="dashboard" element={<Dashboard onBack={() => window.history.back()} />} />
           <Route path="settings" element={<OrganizationSettings />} />
+          <Route path="reception-channels" element={<ReceptionChannels />} />
+          <Route path="routing-rules" element={<RoutingRules />} />
+          <Route path="guide" element={<Guide />} />
         </Route>
       </Routes>
     </BrowserRouter>

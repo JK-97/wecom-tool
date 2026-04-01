@@ -6,8 +6,29 @@ const TabsContext = React.createContext<{
   setActiveTab: (value: string) => void
 } | null>(null)
 
-export function Tabs({ defaultValue, className, children, ...props }: { defaultValue: string, className?: string, children: React.ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
-  const [activeTab, setActiveTab] = React.useState(defaultValue)
+export function Tabs({ 
+  defaultValue, 
+  value, 
+  onValueChange, 
+  className, 
+  children, 
+  ...props 
+}: { 
+  defaultValue?: string, 
+  value?: string, 
+  onValueChange?: (value: string) => void, 
+  className?: string, 
+  children: React.ReactNode 
+} & React.HTMLAttributes<HTMLDivElement>) {
+  const [uncontrolledValue, setUncontrolledValue] = React.useState(defaultValue)
+  
+  const activeTab = value !== undefined ? value : uncontrolledValue!
+  const setActiveTab = (newValue: string) => {
+    if (value === undefined) {
+      setUncontrolledValue(newValue)
+    }
+    onValueChange?.(newValue)
+  }
 
   return (
     <TabsContext.Provider value={{ activeTab, setActiveTab }}>

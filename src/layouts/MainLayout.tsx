@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom"
-import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen } from "lucide-react"
+import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link as LinkIcon, GitBranch, HelpCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -8,9 +8,12 @@ const navItems = [
   { name: "客户列表", path: "/main/customers", icon: Users },
   { name: "群运营详情", path: "/main/group-detail", icon: Users },
   { name: "跟进任务中心", path: "/main/task-center", icon: CheckSquare },
+  { name: "接待渠道", path: "/main/reception-channels", icon: LinkIcon },
+  { name: "路由规则", path: "/main/routing-rules", icon: GitBranch },
   { name: "策略与素材", path: "/main/strategy", icon: BookOpen },
   { name: "数据看板", path: "/main/dashboard", icon: BarChart2 },
   { name: "组织与设置", path: "/main/settings", icon: Settings },
+  { name: "使用指南", path: "/main/guide", icon: HelpCircle },
 ]
 
 export default function MainLayout() {
