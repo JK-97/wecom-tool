@@ -240,9 +240,9 @@ export default function OrganizationSettings() {
               {/* Toolbar Entry Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {[
-                  { title: "客服工具栏", icon: MessageSquare, url: "https://app.company.com/sidebar/cs?uid={userId}", status: "active", permissions: ["contact", "kf"] },
-                  { title: "单聊工具栏", icon: User, url: "https://app.company.com/sidebar/single?uid={userId}&ext={externalId}", status: "active", permissions: ["contact"] },
-                  { title: "群聊工具栏", icon: Users, url: "https://app.company.com/sidebar/group?uid={userId}&chat={chatId}", status: "inactive", permissions: ["contact", "group"] },
+                  { title: "客服工具栏", icon: MessageSquare, url: "https://app.company.com/sidebar/kf?uid={userId}", status: "active", permissions: ["contact", "kf"] },
+                  { title: "单聊工具栏", icon: User, url: "https://app.company.com/sidebar/contact?uid={userId}&ext={externalId}", status: "active", permissions: ["contact"] },
+                  { title: "群聊工具栏", icon: Users, url: "https://app.company.com/sidebar/contact?mode=group&uid={userId}&chat={chatId}", status: "inactive", permissions: ["contact", "group"] },
                 ].map((item, i) => (
                   <Card key={i} className={`border-gray-200 shadow-sm hover:shadow-md transition-all ${item.status === 'inactive' ? 'opacity-75 grayscale-[0.5]' : ''}`}>
                     <CardHeader className="p-5 pb-2 flex flex-row items-center justify-between space-y-0">

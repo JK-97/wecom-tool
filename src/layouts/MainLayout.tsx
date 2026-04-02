@@ -1,6 +1,8 @@
 import { Outlet, Link, useLocation } from "react-router-dom"
-import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link as LinkIcon, GitBranch, HelpCircle } from "lucide-react"
+import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link as LinkIcon, GitBranch, HelpCircle, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/Button"
+import { useAuth } from "@/context/AuthContext"
 
 const navItems = [
   { name: "微信客服中心", path: "/main/cs-center", icon: MessageSquare },
@@ -18,6 +20,12 @@ const navItems = [
 
 export default function MainLayout() {
   const location = useLocation()
+  const auth = useAuth()
+
+  const handleLogout = async () => {
+    await auth.logout()
+    window.location.assign("/login")
+  }
 
   return (
     <div className="flex h-screen w-full bg-[#F0F2F5]">
@@ -55,8 +63,8 @@ export default function MainLayout() {
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-full bg-gray-200" />
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-gray-900">管理员</span>
-              <span className="text-xs text-gray-500">admin@company.com</span>
+              <span className="text-sm font-medium text-gray-900">{auth.user?.displayName || auth.user?.name || "成员"}</span>
+              <span className="text-xs text-gray-500">{auth.user?.userid || "-"}</span>
             </div>
           </div>
         </div>
@@ -69,7 +77,12 @@ export default function MainLayout() {
             {navItems.find(item => location.pathname.startsWith(item.path))?.name || "工作台"}
           </h1>
           <div className="flex items-center gap-4">
+            {auth.corp?.id ? <span className="text-xs text-gray-500">{auth.corp.name || auth.corp.id}</span> : null}
             <Link to="/" className="text-sm text-blue-600 hover:underline">返回导航页</Link>
+            <Button size="sm" variant="outline" onClick={() => void handleLogout()}>
+              <LogOut className="mr-1 h-3.5 w-3.5" />
+              退出
+            </Button>
           </div>
         </header>
         <main className="flex-1 overflow-y-auto p-8">

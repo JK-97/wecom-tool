@@ -21,7 +21,7 @@ export default function Home() {
               聊天侧工具栏 (执行面)
             </h2>
             <div className="grid gap-4">
-              <Link to="/sidebar/cs">
+              <Link to="/sidebar/kf">
                 <Card className="hover:border-blue-300 hover:shadow-md transition-all cursor-pointer">
                   <CardHeader className="p-4">
                     <CardTitle className="text-base flex items-center gap-2">
@@ -47,7 +47,7 @@ export default function Home() {
                   </CardContent>
                 </Card>
               </Link>
-              <Link to="/sidebar/group">
+              <Link to="/sidebar/contact?mode=group">
                 <Card className="hover:border-blue-300 hover:shadow-md transition-all cursor-pointer">
                   <CardHeader className="p-4">
                     <CardTitle className="text-base flex items-center gap-2">

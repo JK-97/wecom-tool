@@ -1,0 +1,107 @@
+import { requestJSON } from "./http"
+
+type APIReply<T> = {
+  code?: number
+  message?: string
+  data?: T
+}
+
+export type CommandCenterSession = {
+  external_userid?: string
+  open_kfid?: string
+  name?: string
+  source?: string
+  session_state?: number
+  session_label?: string
+  state_bucket?: string
+  assigned_userid?: string
+  last_active?: string
+  last_message?: string
+  unread_count?: number
+  overdue?: boolean
+  queue_wait_secs?: number
+  queue_wait_text?: string
+  reply_overdue?: boolean
+  reply_sla_status?: string
+}
+
+export type CommandCenterViewModel = {
+  queue_count?: number
+  active_count?: number
+  closed_count?: number
+  sessions?: CommandCenterSession[]
+  selected?: CommandCenterSession
+  monitor?: {
+    mood?: string
+    summary?: string
+    compliance_pass?: boolean
+  }
+  warnings?: string[]
+}
+
+export type CommandCenterMessage = {
+  id?: string
+  sender?: string
+  content?: string
+  timestamp?: string
+  type?: string
+  status?: string
+}
+
+export type CommandCenterSessionDetail = {
+  session?: CommandCenterSession
+  messages?: CommandCenterMessage[]
+  route_rule_name?: string
+  route_pool_name?: string
+  warnings?: string[]
+}
+
+export type CommandCenterCommandResult = {
+  success?: boolean
+  stubbed?: boolean
+  status?: string
+  message?: string
+}
+
+export async function getCSCommandCenterView(params?: { open_kfid?: string; limit?: number }): Promise<CommandCenterViewModel | null> {
+  const search = new URLSearchParams()
+  if (params?.open_kfid) search.set("open_kfid", params.open_kfid)
+  if (params?.limit && params.limit > 0) search.set("limit", String(params.limit))
+  const payload = await requestJSON<APIReply<CommandCenterViewModel>>(
+    `/api/v1/main/cs-command-center/view?${search.toString()}`,
+  )
+  return payload?.data || null
+}
+
+export async function getCSCommandCenterSessionDetail(params: {
+  open_kfid?: string
+  external_userid?: string
+  limit?: number
+}): Promise<CommandCenterSessionDetail | null> {
+  const search = new URLSearchParams()
+  if (params.open_kfid) search.set("open_kfid", params.open_kfid)
+  if (params.external_userid) search.set("external_userid", params.external_userid)
+  if (params.limit && params.limit > 0) search.set("limit", String(params.limit))
+  const payload = await requestJSON<APIReply<CommandCenterSessionDetail>>(
+    `/api/v1/main/cs-command-center/session?${search.toString()}`,
+  )
+  return payload?.data || null
+}
+
+export async function executeCSCommandCenterCommand(input: {
+  command: string
+  open_kfid?: string
+  external_userid?: string
+  payload?: Record<string, unknown>
+}): Promise<CommandCenterCommandResult | null> {
+  const payload = await requestJSON<APIReply<CommandCenterCommandResult>>("/api/v1/main/cs-command-center/commands", {
+    method: "POST",
+    body: JSON.stringify({
+      command: input.command,
+      open_kfid: input.open_kfid || "",
+      external_userid: input.external_userid || "",
+      payload_json: JSON.stringify(input.payload || {}),
+    }),
+  })
+  return payload?.data || null
+}
