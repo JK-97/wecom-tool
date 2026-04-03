@@ -29,14 +29,30 @@ export type RoutingDistribution = {
   percent: string
 }
 
+export type RoutingChannelOption = {
+  channelId: string
+  label: string
+  ruleCount: number
+}
+
 export type RoutingRulesViewModel = {
   rules: RoutingRuleViewModel[]
   totalHits7d: number
   transferRate: string
   avgResponseTime: string
   distributions: RoutingDistribution[]
+  channelOptions: RoutingChannelOption[]
+  modeOptions: string[]
+  targetOptions: string[]
   diagnostics: {
     warnings: string[]
+    items: Array<{
+      code: string
+      severity: string
+      message: string
+      channelId: string
+      action: string
+    }>
   }
 }
 
@@ -76,18 +92,48 @@ type RawRoutingRulesViewData = {
   transfer_rate?: string
   avg_response_time?: string
   distributions?: RawRoutingDistribution[]
+  channel_options?: Array<{
+    channel_id?: string
+    label?: string
+    rule_count?: number
+  }>
+  mode_options?: string[]
+  target_options?: string[]
   diagnostics?: {
     warnings?: string[]
+    items?: Array<{
+      code?: string
+      severity?: string
+      message?: string
+      channel_id?: string
+      action?: string
+    }>
   }
 }
 
 export async function getRoutingRulesView(params?: {
   channel_filter?: string
   query?: string
+  status_filter?: string
+  rule_type_filter?: string
+  mode_filter?: string
+  target_filter?: string
+  hit_bucket_filter?: string
+  response_bucket_filter?: string
+  diagnostics_only?: boolean
 }): Promise<RoutingRulesViewModel> {
   const search = new URLSearchParams()
   if (params?.channel_filter) search.set("channel_filter", params.channel_filter)
   if (params?.query) search.set("query", params.query)
+  if (params?.status_filter && params.status_filter !== "all") search.set("status_filter", params.status_filter)
+  if (params?.rule_type_filter && params.rule_type_filter !== "all") search.set("rule_type_filter", params.rule_type_filter)
+  if (params?.mode_filter && params.mode_filter !== "all") search.set("mode_filter", params.mode_filter)
+  if (params?.target_filter && params.target_filter !== "all") search.set("target_filter", params.target_filter)
+  if (params?.hit_bucket_filter && params.hit_bucket_filter !== "all") search.set("hit_bucket_filter", params.hit_bucket_filter)
+  if (params?.response_bucket_filter && params.response_bucket_filter !== "all") {
+    search.set("response_bucket_filter", params.response_bucket_filter)
+  }
+  if (params?.diagnostics_only) search.set("diagnostics_only", "true")
   const payload = await requestJSON<APIReply<RawRoutingRulesViewData>>(
     `/api/v1/main/routing-rules/view?${search.toString()}`,
   )
@@ -102,8 +148,26 @@ export async function getRoutingRulesView(params?: {
       hits7d: Number(item.hits_7d || 0),
       percent: String(item.percent || "0%").trim(),
     })),
+    channelOptions: (data.channel_options || [])
+      .map((item) => ({
+        channelId: String(item.channel_id || "").trim(),
+        label: String(item.label || "").trim(),
+        ruleCount: Number(item.rule_count || 0),
+      }))
+      .filter((item) => item.channelId.length > 0),
+    modeOptions: (data.mode_options || []).map((item) => String(item || "").trim()).filter(Boolean),
+    targetOptions: (data.target_options || []).map((item) => String(item || "").trim()).filter(Boolean),
     diagnostics: {
       warnings: (data.diagnostics?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean),
+      items: (data.diagnostics?.items || [])
+        .map((item) => ({
+          code: String(item.code || "").trim(),
+          severity: String(item.severity || "").trim(),
+          message: String(item.message || "").trim(),
+          channelId: String(item.channel_id || "").trim(),
+          action: String(item.action || "").trim(),
+        }))
+        .filter((item) => item.message.length > 0),
     },
   }
 }

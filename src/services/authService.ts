@@ -58,6 +58,11 @@ export async function getSession(): Promise<SessionSnapshot> {
 export async function getOAuthStartURL(next: string): Promise<string> {
   const params = new URLSearchParams()
   params.set("response", "json")
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent || ""
+  const isWeComWebview = /wxwork/i.test(userAgent)
+  if (isWeComWebview) {
+    params.set("mode", "webview_oauth")
+  }
   if (next.trim() !== "") {
     params.set("next", next.trim())
   }
@@ -68,7 +73,12 @@ export async function getOAuthStartURL(next: string): Promise<string> {
   if (url !== "") {
     return url
   }
-  return `/api/v1/session/oauth/start?next=${encodeURIComponent(next || "/main/dashboard")}`
+  const fallback = new URLSearchParams()
+  if (isWeComWebview) {
+    fallback.set("mode", "webview_oauth")
+  }
+  fallback.set("next", next || "/main/dashboard")
+  return `/api/v1/session/oauth/start?${fallback.toString()}`
 }
 
 export async function logout(): Promise<void> {

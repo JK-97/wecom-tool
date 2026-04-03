@@ -7,9 +7,8 @@ import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   createReceptionChannel,
-  getReceptionOverview,
+  getReceptionChannelsView,
   getReceptionChannelDetail,
-  listReceptionChannels,
   retryReceptionChannelSync,
   triggerReceptionChannelSync,
   type ReceptionChannel,
@@ -25,6 +24,7 @@ export default function ReceptionChannels() {
   const [selectedChannelDetail, setSelectedChannelDetail] = useState<ReceptionChannelDetail | null>(null)
   const [overview, setOverview] = useState<ReceptionOverview | null>(null)
   const [channels, setChannels] = useState<ReceptionChannel[]>([])
+  const [isLoading, setIsLoading] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [isDetailLoading, setIsDetailLoading] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -34,17 +34,18 @@ export default function ReceptionChannels() {
   const [createName, setCreateName] = useState("")
   const [createSource, setCreateSource] = useState("")
   const [createSceneValue, setCreateSceneValue] = useState("")
+  const [selectedSceneValue, setSelectedSceneValue] = useState("")
 
   const loadChannels = async (query?: string) => {
     try {
-      const [loadedOverview, loadedChannels] = await Promise.all([
-        getReceptionOverview(),
-        listReceptionChannels({ query: query || "", limit: 200 }),
-      ])
-      setOverview(loadedOverview)
-      setChannels(loadedChannels)
+      setIsLoading(true)
+      const view = await getReceptionChannelsView({ query: query || "", limit: 200 })
+      setOverview(view?.overview || null)
+      setChannels(view?.channels || [])
     } catch (error) {
       setNotice(normalizeErrorMessage(error))
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -155,7 +156,27 @@ export default function ReceptionChannels() {
     return scenes.length > 0 ? scenes[0] : null
   }, [selectedChannelDetail?.scenes])
 
-  const promotionURL = (primaryScene?.url || "").trim()
+  useEffect(() => {
+    const scenes = selectedChannelDetail?.scenes || []
+    if (scenes.length === 0) {
+      setSelectedSceneValue("")
+      return
+    }
+    const preferred = (selectedSceneValue || "").trim()
+    if (preferred && scenes.some((item) => (item.scene_value || "").trim() === preferred)) {
+      return
+    }
+    setSelectedSceneValue((scenes[0]?.scene_value || "").trim())
+  }, [selectedChannelDetail?.scenes])
+
+  const selectedScene = useMemo(() => {
+    const scenes = selectedChannelDetail?.scenes || []
+    const key = (selectedSceneValue || "").trim()
+    if (!key) return scenes[0] || null
+    return scenes.find((item) => (item.scene_value || "").trim() === key) || scenes[0] || null
+  }, [selectedChannelDetail?.scenes, selectedSceneValue])
+
+  const promotionURL = ((selectedScene?.url || "").trim() || (selectedChannelDetail?.promotion_url || "").trim() || (primaryScene?.url || "").trim())
 
   const handleCopyLink = async () => {
     if (!promotionURL) {
@@ -187,7 +208,7 @@ export default function ReceptionChannels() {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement("a")
       anchor.href = url
-      anchor.download = `${(selectedChannel?.open_kfid || "reception_channel").trim()}-${(primaryScene?.scene_value || "scene").trim()}.png`
+      anchor.download = `${(selectedChannel?.open_kfid || "reception_channel").trim()}-${(selectedScene?.scene_value || primaryScene?.scene_value || "scene").trim()}.png`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -270,6 +291,21 @@ export default function ReceptionChannels() {
           </div>
         </Card>
       </div>
+      {overview?.latest_sync_status || (overview?.tips || []).length > 0 ? (
+        <Card className="p-3 border-none shadow-sm bg-blue-50 text-xs text-blue-700">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {overview?.latest_sync_status ? (
+              <span>
+                最近同步状态：{overview.latest_sync_status}
+                {overview?.latest_sync_time ? ` (${formatDateTime(overview.latest_sync_time)})` : ""}
+              </span>
+            ) : null}
+            {(overview?.tips || []).map((tip) => (
+              <span key={tip}>提示：{tip}</span>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       {/* Main Content */}
       <Card className="border-none shadow-sm overflow-hidden">
@@ -318,7 +354,14 @@ export default function ReceptionChannels() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 bg-white">
-              {channels.map((channel) => (
+              {isLoading ? (
+                <tr>
+                  <td className="px-6 py-10 text-center text-sm text-gray-500" colSpan={7}>
+                    加载中...
+                  </td>
+                </tr>
+              ) : null}
+              {!isLoading ? channels.map((channel) => (
                 <tr key={channel.open_kfid || channel.name} className="hover:bg-gray-50 transition-colors group">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -353,7 +396,10 @@ export default function ReceptionChannels() {
                   </td>
                   <td className="px-6 py-4 text-blue-600">
                     {(channel.open_kfid || "").trim() ? (
-                      <Link className="hover:underline" to={`/main/routing-rules?channel=${encodeURIComponent((channel.open_kfid || "").trim())}`}>
+                      <Link
+                        className="hover:underline"
+                        to={`/main/routing-rules?channel=${encodeURIComponent((channel.open_kfid || "").trim())}${Number(channel.default_rule_id || 0) > 0 ? `&edit_rule_id=${Number(channel.default_rule_id || 0)}` : ""}`}
+                      >
                         {channel.default_rule}
                       </Link>
                     ) : (
@@ -372,7 +418,7 @@ export default function ReceptionChannels() {
                       >
                         详情
                       </Button>
-                      <Link to={`/main/routing-rules?channel=${channel.open_kfid}`}>
+                      <Link to={`/main/routing-rules?channel=${encodeURIComponent((channel.open_kfid || "").trim())}`}>
                         <Button variant="ghost" size="sm" className="text-gray-600 hover:bg-gray-100 h-8">
                           配置路由
                         </Button>
@@ -392,8 +438,8 @@ export default function ReceptionChannels() {
                     </div>
                   </td>
                 </tr>
-              ))}
-              {channels.length === 0 ? (
+              )) : null}
+              {!isLoading && channels.length === 0 ? (
                 <tr>
                   <td className="px-6 py-10 text-center text-sm text-gray-500" colSpan={7}>
                     暂无接待渠道
@@ -445,7 +491,26 @@ export default function ReceptionChannels() {
               )
             })()}
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-gray-500">场景选择</span>
+                {(selectedChannelDetail?.scenes || []).length > 0 ? (
+                  <select
+                    className="w-56 h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={selectedSceneValue}
+                    onChange={(event) => setSelectedSceneValue(event.target.value)}
+                  >
+                    {(selectedChannelDetail?.scenes || []).map((scene) => (
+                      <option key={(scene.scene_value || "").trim() || (scene.name || "").trim()} value={(scene.scene_value || "").trim()}>
+                        {((scene.name || scene.scene_value || "默认场景").trim())}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-[11px] text-gray-400">暂无可选场景</span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-4">
               <div className="p-4 border border-gray-200 rounded-lg flex flex-col items-center gap-3 hover:border-blue-300 transition-colors cursor-pointer group">
                 <div className="h-10 w-10 rounded-full bg-blue-50 flex items-center justify-center group-hover:bg-blue-100">
                   <QrCode className="h-5 w-5 text-blue-600" />
@@ -465,26 +530,63 @@ export default function ReceptionChannels() {
                 </Button>
               </div>
             </div>
+            </div>
 
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">场景预设 (Scene)</h4>
-              <div className="p-3 bg-gray-50 rounded border border-gray-100 text-xs font-mono text-gray-600 break-all">
-                {promotionURL || "-"}
+              <h4 className="text-sm font-semibold text-gray-900">渠道路由规则</h4>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">规则总数 / 启用</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {Number(selectedChannelDetail?.routing_summary?.total_rules || 0)} / {Number(selectedChannelDetail?.routing_summary?.active_rules || 0)}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">近7天总命中</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {Number(selectedChannelDetail?.routing_summary?.total_hits_7d || 0).toLocaleString("zh-CN")}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">Top规则</div>
+                  <div className="text-xs font-semibold text-gray-800 truncate">
+                    {(selectedChannelDetail?.routing_summary?.top_rule_name || "-").trim()}
+                    {(selectedChannelDetail?.routing_summary?.top_rule_percent || "").trim()
+                      ? ` (${(selectedChannelDetail?.routing_summary?.top_rule_percent || "").trim()})`
+                      : ""}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">Scene 重叠</div>
+                  <div className="text-xs font-semibold text-gray-800">{Number(selectedChannelDetail?.routing_summary?.overlapped_scenes || 0)}</div>
+                </div>
               </div>
-              <p className="text-[11px] text-gray-400">
-                提示：通过在链接后增加 scene 参数，可以触发特定的路由规则，实现精准分流。
-              </p>
-              {(selectedChannelDetail?.scenes || []).length > 0 ? (
-                <div className="space-y-2">
-                  {(selectedChannelDetail?.scenes || []).map((scene) => (
-                    <div key={`${scene.scene_value || ""}-${scene.url || ""}`} className="rounded border border-gray-100 bg-white px-3 py-2">
-                      <div className="text-xs font-medium text-gray-700">{(scene.name || "未命名场景").trim()}</div>
-                      <div className="text-[11px] text-gray-500 mt-1 font-mono break-all">{(scene.scene_value || "").trim() || "DEFAULT"}</div>
-                    </div>
+              <div className="text-xs text-gray-600">
+                {(selectedChannelDetail?.staff_summary || "").trim() || "-"}
+                {(selectedChannelDetail?.routing_summary?.latest_rule_update_at || "").trim()
+                  ? ` · 最近规则更新：${formatDateTime((selectedChannelDetail?.routing_summary?.latest_rule_update_at || "").trim())}`
+                  : ""}
+              </div>
+              <div className="text-xs text-gray-500">
+                渠道路由规则明细请在“配置路由”中统一维护，这里仅展示摘要指标。
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-900">接待人员</h4>
+              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                {(selectedChannelDetail?.staff_summary || "").trim() || "接待人员信息暂未同步"}
+              </div>
+              {(selectedChannelDetail?.staff_members || []).length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {(selectedChannelDetail?.staff_members || []).map((staff) => (
+                    <Badge key={staff} variant="secondary" className="bg-gray-100 text-gray-700 border-transparent">
+                      {staff}
+                    </Badge>
                   ))}
                 </div>
               ) : (
-                <div className="text-xs text-gray-500">暂无场景预设</div>
+                <div className="text-xs text-gray-500">当前规则尚未配置明确接待人员</div>
               )}
             </div>
 

@@ -7,6 +7,7 @@ const CHECK_JS_API_LIST = [
   "getCurExternalChat",
   "sendChatMessage",
 ] as const
+const MAIN_WEBVIEW_CHECK_API_LIST = ["getContext", "checkJsApi"] as const
 
 const REGISTER_JS_API_LIST = ["checkJsApi", ...CHECK_JS_API_LIST]
 
@@ -67,6 +68,16 @@ export type SidebarRuntimeContext = {
   external_userid: string
   chat_id: string
   api_support: Record<string, boolean>
+}
+
+export type MainWebviewJSSDKCheckResult = {
+  is_wecom_webview: boolean
+  runtime_state: RuntimeState
+  register_ok: boolean
+  check_ok: boolean
+  check_result: Record<string, boolean>
+  error_code?: string
+  error_message?: string
 }
 
 export class JSSDKRuntimeError extends Error {
@@ -584,5 +595,53 @@ export function toJSSDKErrorMessage(error: unknown): string {
       return "企业微信 JS-SDK 初始化失败"
     default:
       return "企业微信客户端调用失败"
+  }
+}
+
+export async function checkMainWebviewJSSDKRuntime(): Promise<MainWebviewJSSDKCheckResult> {
+  const diagnostics = readRuntimeDiagnostics()
+  const emptyCheck: Record<string, boolean> = {}
+  for (const name of MAIN_WEBVIEW_CHECK_API_LIST) {
+    emptyCheck[name] = false
+  }
+
+  try {
+    await ensureRegistered()
+    if (typeof ww.checkJsApi !== "function") {
+      return {
+        is_wecom_webview: diagnostics.isWxworkWebView,
+        runtime_state: diagnostics.runtimeState,
+        register_ok: true,
+        check_ok: false,
+        check_result: emptyCheck,
+        error_code: "api_unsupported",
+        error_message: "当前环境不支持 checkJsApi",
+      }
+    }
+    const raw = await ww.checkJsApi({ jsApiList: [...MAIN_WEBVIEW_CHECK_API_LIST] })
+    const checkResult = toUnknownRecord((raw as { checkResult?: unknown }).checkResult)
+    const parsed: Record<string, boolean> = {}
+    for (const name of MAIN_WEBVIEW_CHECK_API_LIST) {
+      const value = checkResult[name]
+      parsed[name] = value === true || value === "true" || value === 1
+    }
+    return {
+      is_wecom_webview: diagnostics.isWxworkWebView,
+      runtime_state: diagnostics.runtimeState,
+      register_ok: true,
+      check_ok: true,
+      check_result: parsed,
+    }
+  } catch (error) {
+    const mapped = normalizeJSSDKRuntimeError(error)
+    return {
+      is_wecom_webview: diagnostics.isWxworkWebView,
+      runtime_state: diagnostics.runtimeState,
+      register_ok: mapped.code !== "register_failed",
+      check_ok: false,
+      check_result: emptyCheck,
+      error_code: mapped.code,
+      error_message: mapped.message,
+    }
   }
 }

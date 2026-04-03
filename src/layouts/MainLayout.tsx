@@ -71,7 +71,7 @@ export default function MainLayout() {
       </div>
 
       {/* Main Content */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-8">
           <h1 className="text-lg font-medium text-gray-900">
             {navItems.find(item => location.pathname.startsWith(item.path))?.name || "工作台"}
@@ -85,7 +85,7 @@ export default function MainLayout() {
             </Button>
           </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-8">
+        <main className="min-h-0 flex-1 overflow-y-auto p-8">
           <Outlet />
         </main>
       </div>

@@ -27,32 +27,42 @@ import {
   type RoutingRuleViewModel,
   type RoutingRulesViewModel,
 } from "@/services/routingService"
-import { listReceptionChannels, type ReceptionChannel } from "@/services/receptionService"
 import { normalizeErrorMessage } from "@/services/http"
 
-const emptyView: RoutingRulesViewModel = {
+const initialRoutingRulesView: RoutingRulesViewModel = {
   rules: [],
   totalHits7d: 0,
   transferRate: "0%",
   avgResponseTime: "0s",
   distributions: [],
+  channelOptions: [],
+  modeOptions: [],
+  targetOptions: [],
   diagnostics: {
     warnings: [],
+    items: [],
   },
 }
 
-const defaultTargets = ["VIP 销售组", "通用客服组", "技术支持组", "默认接待池"]
+const MAX_VISIBLE_CHANNEL_TABS = 6
 
 export default function RoutingRules() {
   const [searchParams] = useSearchParams()
-  const [channels, setChannels] = useState<ReceptionChannel[]>([])
-  const [view, setView] = useState<RoutingRulesViewModel>(emptyView)
+  const [view, setView] = useState<RoutingRulesViewModel>(initialRoutingRulesView)
   const [isLoading, setIsLoading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [notice, setNotice] = useState("")
 
   const [filterChannel, setFilterChannel] = useState(searchParams.get("channel") || "all")
   const [keyword, setKeyword] = useState("")
+  const [isAdvancedFilterOpen, setIsAdvancedFilterOpen] = useState(false)
+  const [statusFilter, setStatusFilter] = useState("all")
+  const [ruleTypeFilter, setRuleTypeFilter] = useState("all")
+  const [modeFilter, setModeFilter] = useState("all")
+  const [targetFilter, setTargetFilter] = useState("all")
+  const [hitBucketFilter, setHitBucketFilter] = useState("all")
+  const [responseBucketFilter, setResponseBucketFilter] = useState("all")
+  const [diagnosticsOnly, setDiagnosticsOnly] = useState(false)
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [selectedRule, setSelectedRule] = useState<RoutingRuleViewModel | null>(null)
@@ -61,10 +71,12 @@ export default function RoutingRules() {
   const [formChannelID, setFormChannelID] = useState("")
   const [formScene, setFormScene] = useState("ANY")
   const [formMode, setFormMode] = useState("人工接待")
-  const [formTarget, setFormTarget] = useState("通用客服组")
+  const [formTarget, setFormTarget] = useState("")
   const [formPriority, setFormPriority] = useState(100)
   const [formIsDefault, setFormIsDefault] = useState(false)
   const [formTagFilter, setFormTagFilter] = useState("")
+  const requestedEditRuleID = Number(searchParams.get("edit_rule_id") || 0)
+  const [hasAutoOpenedEditRule, setHasAutoOpenedEditRule] = useState(false)
 
   useEffect(() => {
     const channel = searchParams.get("channel")
@@ -73,63 +85,83 @@ export default function RoutingRules() {
     }
   }, [searchParams])
 
-  const loadChannels = async () => {
-    try {
-      const loaded = await listReceptionChannels({ limit: 300 })
-      setChannels(loaded)
-    } catch (error) {
-      setNotice(normalizeErrorMessage(error))
-    }
-  }
+  useEffect(() => {
+    setHasAutoOpenedEditRule(false)
+  }, [requestedEditRuleID])
 
-  const loadView = async (channel: string, query: string) => {
+  const loadView = async (
+    channel: string,
+    query: string,
+    filters: {
+      statusFilter: string
+      ruleTypeFilter: string
+      modeFilter: string
+      targetFilter: string
+      hitBucketFilter: string
+      responseBucketFilter: string
+      diagnosticsOnly: boolean
+    },
+    options?: { preserveTable?: boolean },
+  ) => {
+    const preserveTable = options?.preserveTable === true
     try {
-      setIsLoading(true)
+      if (!preserveTable) {
+        setIsLoading(true)
+      }
       const loaded = await getRoutingRulesView({
         channel_filter: channel === "all" ? "" : channel,
         query,
+        status_filter: filters.statusFilter,
+        rule_type_filter: filters.ruleTypeFilter,
+        mode_filter: filters.modeFilter,
+        target_filter: filters.targetFilter,
+        hit_bucket_filter: filters.hitBucketFilter,
+        response_bucket_filter: filters.responseBucketFilter,
+        diagnostics_only: filters.diagnosticsOnly,
       })
       setView(loaded)
     } catch (error) {
       setNotice(normalizeErrorMessage(error))
-      setView(emptyView)
+      if (!preserveTable) {
+        setView(initialRoutingRulesView)
+      }
     } finally {
-      setIsLoading(false)
+      if (!preserveTable) {
+        setIsLoading(false)
+      }
     }
   }
 
   useEffect(() => {
-    void loadChannels()
-  }, [])
-
-  useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadView(filterChannel, keyword)
+      void loadView(
+        filterChannel,
+        keyword,
+        {
+          statusFilter,
+          ruleTypeFilter,
+          modeFilter,
+          targetFilter,
+          hitBucketFilter,
+          responseBucketFilter,
+          diagnosticsOnly,
+        },
+        { preserveTable: false },
+      )
     }, 220)
     return () => window.clearTimeout(timer)
-  }, [filterChannel, keyword])
-
-  const channelNameMap = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const item of channels) {
-      const id = (item.open_kfid || "").trim()
-      if (!id) continue
-      const name = (item.name || "").trim()
-      map.set(id, name || id)
-    }
-    return map
-  }, [channels])
+  }, [filterChannel, keyword, statusFilter, ruleTypeFilter, modeFilter, targetFilter, hitBucketFilter, responseBucketFilter, diagnosticsOnly])
 
   const openCreateDrawer = () => {
     setSelectedRule(null)
     setFormName("")
     setFormScene("ANY")
     setFormMode("人工接待")
-    setFormTarget("通用客服组")
+    setFormTarget(view.targetOptions[0] || "默认接待池")
     setFormPriority(100)
     setFormIsDefault(false)
     setFormTagFilter("")
-    setFormChannelID(filterChannel !== "all" ? filterChannel : (channels[0]?.open_kfid || "").trim())
+    setFormChannelID(filterChannel !== "all" ? filterChannel : (view.channelOptions[0]?.channelId || "").trim())
     setIsDrawerOpen(true)
   }
 
@@ -178,7 +210,20 @@ export default function RoutingRules() {
         setNotice(message)
       }
       if (options?.refresh !== false) {
-        await loadView(filterChannel, keyword)
+        await loadView(
+          filterChannel,
+          keyword,
+          {
+            statusFilter,
+            ruleTypeFilter,
+            modeFilter,
+            targetFilter,
+            hitBucketFilter,
+            responseBucketFilter,
+            diagnosticsOnly,
+          },
+          { preserveTable: true },
+        )
       }
       return result
     } catch (error) {
@@ -193,6 +238,7 @@ export default function RoutingRules() {
     const name = formName.trim()
     const channelID = formChannelID.trim()
     const scene = formScene.trim() || "ANY"
+    const target = formTarget.trim() || "默认接待池"
     if (!name) {
       setNotice("请输入规则名称")
       return
@@ -207,7 +253,7 @@ export default function RoutingRules() {
       channel_id: channelID,
       scene,
       mode: formMode,
-      target: formTarget,
+      target,
       priority: formPriority,
       is_default: formIsDefault,
       tag_filter: formTagFilter.trim(),
@@ -225,14 +271,78 @@ export default function RoutingRules() {
       return
     }
     setIsDrawerOpen(false)
-    await loadChannels()
-    await loadView(filterChannel, keyword)
   }
 
   const filteredRules = view.rules
 
   const statsTotal = Number(view.totalHits7d || 0)
+  const diagnosticItems = view.diagnostics?.items || []
   const diagnostics = view.diagnostics?.warnings || []
+  const isEditingDefaultRule = selectedRule?.isDefault === true
+  const activeAdvancedFilterCount = [
+    statusFilter !== "all",
+    ruleTypeFilter !== "all",
+    modeFilter !== "all",
+    targetFilter !== "all",
+    hitBucketFilter !== "all",
+    responseBucketFilter !== "all",
+    diagnosticsOnly,
+  ].filter(Boolean).length
+
+  const { primaryChannels, overflowChannels } = useMemo(() => {
+    const channels = [...view.channelOptions]
+    if (channels.length <= MAX_VISIBLE_CHANNEL_TABS) {
+      return { primaryChannels: channels, overflowChannels: [] as typeof channels }
+    }
+    if (filterChannel === "all") {
+      return {
+        primaryChannels: channels.slice(0, MAX_VISIBLE_CHANNEL_TABS),
+        overflowChannels: channels.slice(MAX_VISIBLE_CHANNEL_TABS),
+      }
+    }
+    const selected = channels.find((item) => item.channelId === filterChannel)
+    if (!selected) {
+      return {
+        primaryChannels: channels.slice(0, MAX_VISIBLE_CHANNEL_TABS),
+        overflowChannels: channels.slice(MAX_VISIBLE_CHANNEL_TABS),
+      }
+    }
+    const seed = channels.filter((item) => item.channelId !== filterChannel).slice(0, MAX_VISIBLE_CHANNEL_TABS - 1)
+    const primary = [...seed, selected]
+    const primarySet = new Set(primary.map((item) => item.channelId))
+    return {
+      primaryChannels: primary,
+      overflowChannels: channels.filter((item) => !primarySet.has(item.channelId)),
+    }
+  }, [view.channelOptions, filterChannel])
+
+  const resolveDiagnosticChannelID = (warning: string): string => {
+    const text = (warning || "").trim()
+    if (!text) return ""
+    const direct = view.channelOptions.find((item) => text.includes(item.channelId))
+    if (direct?.channelId) return direct.channelId
+    const byLabel = view.channelOptions.find((item) => item.label && text.includes(item.label))
+    if (byLabel?.channelId) return byLabel.channelId
+    return ""
+  }
+
+  const resetAdvancedFilters = () => {
+    setStatusFilter("all")
+    setRuleTypeFilter("all")
+    setModeFilter("all")
+    setTargetFilter("all")
+    setHitBucketFilter("all")
+    setResponseBucketFilter("all")
+    setDiagnosticsOnly(false)
+  }
+
+  useEffect(() => {
+    if (requestedEditRuleID <= 0 || hasAutoOpenedEditRule || isLoading) return
+    const matched = view.rules.find((item) => Number(item.id || 0) === requestedEditRuleID)
+    if (!matched) return
+    openEditDrawer(matched)
+    setHasAutoOpenedEditRule(true)
+  }, [requestedEditRuleID, hasAutoOpenedEditRule, isLoading, view.rules])
 
   return (
     <div className="flex h-full gap-6">
@@ -241,21 +351,39 @@ export default function RoutingRules() {
         <Card className="border-none shadow-sm overflow-hidden flex-1 flex flex-col">
           <div className="p-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between shrink-0">
             <Tabs value={filterChannel} onValueChange={setFilterChannel}>
-              <TabsList className="bg-white border border-gray-200 shadow-sm overflow-x-auto">
+              <TabsList className="bg-white border border-gray-200 shadow-sm overflow-x-auto overflow-y-hidden whitespace-nowrap">
                 <TabsTrigger value="all" className="data-[state=active]:bg-gray-100">
                   全部渠道
                 </TabsTrigger>
-                {channels.map((channel) => {
-                  const id = (channel.open_kfid || "").trim()
+                {primaryChannels.map((channel) => {
+                  const id = (channel.channelId || "").trim()
                   if (!id) return null
                   return (
                     <TabsTrigger key={id} value={id} className="data-[state=active]:bg-gray-100">
-                      {(channel.name || id).trim()}
+                      {(channel.label || id).trim()}
                     </TabsTrigger>
                   )
                 })}
               </TabsList>
             </Tabs>
+            {overflowChannels.length > 0 ? (
+              <select
+                className="h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={overflowChannels.some((item) => item.channelId === filterChannel) ? filterChannel : ""}
+                onChange={(event) => {
+                  const value = event.target.value.trim()
+                  if (!value) return
+                  setFilterChannel(value)
+                }}
+              >
+                <option value="">更多渠道</option>
+                {overflowChannels.map((channel) => (
+                  <option key={channel.channelId} value={channel.channelId}>
+                    {channel.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreateDrawer}>
               + 新建路由规则
             </Button>
@@ -275,14 +403,120 @@ export default function RoutingRules() {
             <Button
               variant="ghost"
               className="text-blue-600 hover:bg-blue-50 ml-auto"
-              onClick={() => {
-                setKeyword("")
-                setFilterChannel("all")
-              }}
+              onClick={() => setIsAdvancedFilterOpen((prev) => !prev)}
             >
-              <Filter className="h-4 w-4 mr-2" /> 更多筛选
+              <Filter className="h-4 w-4 mr-2" />
+              更多筛选
+              {activeAdvancedFilterCount > 0 ? ` (${activeAdvancedFilterCount})` : ""}
             </Button>
           </div>
+          {isAdvancedFilterOpen ? (
+            <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 space-y-3">
+              <div className="grid grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-gray-500">规则状态</label>
+                  <select
+                    className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={statusFilter}
+                    onChange={(event) => setStatusFilter(event.target.value)}
+                  >
+                    <option value="all">全部状态</option>
+                    <option value="active">仅启用</option>
+                    <option value="inactive">仅停用</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-gray-500">规则类型</label>
+                  <select
+                    className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={ruleTypeFilter}
+                    onChange={(event) => setRuleTypeFilter(event.target.value)}
+                  >
+                    <option value="all">全部类型</option>
+                    <option value="normal">普通规则</option>
+                    <option value="default">仅兜底规则</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-gray-500">接待模式</label>
+                  <select
+                    className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={modeFilter}
+                    onChange={(event) => setModeFilter(event.target.value)}
+                  >
+                    <option value="all">全部模式</option>
+                    {view.modeOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-gray-500">分配目标</label>
+                  <select
+                    className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={targetFilter}
+                    onChange={(event) => setTargetFilter(event.target.value)}
+                  >
+                    <option value="all">全部目标</option>
+                    {view.targetOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-gray-500">命中区间</label>
+                  <select
+                    className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={hitBucketFilter}
+                    onChange={(event) => setHitBucketFilter(event.target.value)}
+                  >
+                    <option value="all">全部命中</option>
+                    <option value="none">0 次</option>
+                    <option value="low">1-49 次</option>
+                    <option value="medium">50-199 次</option>
+                    <option value="high">200+ 次</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-gray-500">响应区间</label>
+                  <select
+                    className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={responseBucketFilter}
+                    onChange={(event) => setResponseBucketFilter(event.target.value)}
+                  >
+                    <option value="all">全部响应</option>
+                    <option value="fast">快 (&lt;=10s)</option>
+                    <option value="normal">中 (11-29s)</option>
+                    <option value="slow">慢 (&gt;=30s)</option>
+                  </select>
+                </div>
+                <div className="col-span-2 flex items-end justify-between">
+                  <label className="flex items-center gap-2 text-xs text-gray-600 pb-1">
+                    <input
+                      type="checkbox"
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      checked={diagnosticsOnly}
+                      onChange={(event) => setDiagnosticsOnly(event.target.checked)}
+                    />
+                    仅显示有诊断建议的规则
+                  </label>
+                  <Button
+                    variant="ghost"
+                    className="h-8 px-3 text-xs text-gray-600 hover:bg-gray-100"
+                    onClick={resetAdvancedFilters}
+                  >
+                    清空高级筛选
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {notice ? <div className="px-4 py-2 text-xs text-blue-600 border-b border-gray-100 bg-blue-50">{notice}</div> : null}
 
@@ -318,29 +552,31 @@ export default function RoutingRules() {
                     <tr key={rule.id} className="hover:bg-blue-50/30 transition-colors group">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs font-bold text-gray-400 w-4">{rule.priority}</span>
+                          <span className="font-mono text-xs font-bold text-gray-400 w-8">
+                            {rule.isDefault ? "固定" : rule.priority}
+                          </span>
                           <div className="flex flex-col gap-0.5">
                             <button
-                              className="text-gray-300 hover:text-blue-600 transition-colors"
+                              className="text-gray-300 hover:text-blue-600 transition-colors disabled:opacity-40"
                               onClick={() =>
                                 void runCommand({
                                   command: "move_priority_up",
                                   ruleID: Number(rule.id || 0),
                                 })
                               }
-                              disabled={isSubmitting}
+                              disabled={isSubmitting || rule.isDefault}
                             >
                               <ArrowUp className="h-3 w-3" />
                             </button>
                             <button
-                              className="text-gray-300 hover:text-blue-600 transition-colors"
+                              className="text-gray-300 hover:text-blue-600 transition-colors disabled:opacity-40"
                               onClick={() =>
                                 void runCommand({
                                   command: "move_priority_down",
                                   ruleID: Number(rule.id || 0),
                                 })
                               }
-                              disabled={isSubmitting}
+                              disabled={isSubmitting || rule.isDefault}
                             >
                               <ArrowDown className="h-3 w-3" />
                             </button>
@@ -355,7 +591,7 @@ export default function RoutingRules() {
                           ) : null}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-xs text-gray-500">{rule.channel || channelNameMap.get(rule.channelId) || rule.channelId}</td>
+                      <td className="px-6 py-4 text-xs text-gray-500">{rule.channel || rule.channelId || "未指定渠道"}</td>
                       <td className="px-6 py-4">
                         <code className="bg-gray-100 px-1.5 py-0.5 rounded text-[11px] text-gray-600 font-mono">{rule.scene}</code>
                       </td>
@@ -465,7 +701,9 @@ export default function RoutingRules() {
                   view.distributions.map((item) => (
                     <div key={`${item.ruleName}-${item.hits7d}`} className="space-y-1">
                       <div className="flex justify-between text-[10px]">
-                        <span className="text-gray-600 truncate">{item.ruleName}</span>
+                        <span className="text-gray-600 truncate" title={item.ruleName}>
+                          {item.ruleName}
+                        </span>
                         <span className="font-medium">{item.percent}</span>
                       </div>
                       <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
@@ -482,29 +720,41 @@ export default function RoutingRules() {
           </div>
         </Card>
 
-        {diagnostics.length > 0 ? (
+        {diagnosticItems.length > 0 || diagnostics.length > 0 ? (
           <Card className="p-4 border-none shadow-sm bg-orange-50 border-l-4 border-l-orange-400">
             <div className="flex items-start gap-3">
               <AlertTriangle className="h-5 w-5 text-orange-500 shrink-0" />
               <div>
                 <h4 className="text-xs font-bold text-orange-800">配置建议</h4>
-                <p className="text-[11px] text-orange-700 mt-1 leading-relaxed">{diagnostics[0]}</p>
-                <Button
-                  variant="link"
-                  className="text-orange-800 p-0 h-auto text-[11px] font-bold mt-2"
-                  disabled={isSubmitting}
-                  onClick={() =>
-                    void runCommand({
-                      command: "resolve_diagnostic",
-                      payload: {
-                        warning: diagnostics[0],
-                        channel_id: filterChannel,
-                      },
-                    })
-                  }
-                >
-                  立即处理
-                </Button>
+                <p className="text-[11px] text-orange-700 mt-1 leading-relaxed">
+                  {diagnosticItems[0]?.message || diagnostics[0] || "存在待处理的配置建议。"}
+                </p>
+                {(diagnosticItems[0]?.action || "resolve_diagnostic") === "resolve_diagnostic" ? (
+                  <Button
+                    variant="link"
+                    className="text-orange-800 p-0 h-auto text-[11px] font-bold mt-2"
+                    disabled={isSubmitting}
+                    onClick={() => {
+                      const firstItem = diagnosticItems[0]
+                      const warning = firstItem?.message || diagnostics[0] || ""
+                      const channelFromItem = (firstItem?.channelId || "").trim()
+                      const resolvedChannelID =
+                        filterChannel !== "all"
+                          ? filterChannel
+                          : channelFromItem || resolveDiagnosticChannelID(warning) || "all"
+                      void runCommand({
+                        command: "resolve_diagnostic",
+                        payload: {
+                          code: (firstItem?.code || "").trim(),
+                          warning,
+                          channel_id: resolvedChannelID,
+                        },
+                      })
+                    }}
+                  >
+                    立即处理
+                  </Button>
+                ) : null}
               </div>
             </div>
           </Card>
@@ -567,12 +817,12 @@ export default function RoutingRules() {
                   value={formChannelID}
                   onChange={(event) => setFormChannelID(event.target.value)}
                 >
-                  {channels.map((channel) => {
-                    const id = (channel.open_kfid || "").trim()
+                  {view.channelOptions.map((channel) => {
+                    const id = (channel.channelId || "").trim()
                     if (!id) return null
                     return (
                       <option key={id} value={id}>
-                        {(channel.name || id).trim()}
+                        {(channel.label || id).trim()}
                       </option>
                     )
                   })}
@@ -652,9 +902,15 @@ export default function RoutingRules() {
                   value={formMode}
                   onChange={(event) => setFormMode(event.target.value)}
                 >
-                  <option>人工接待</option>
-                  <option>机器人+人工</option>
-                  <option>仅机器人</option>
+                  {view.modeOptions.length > 0 ? (
+                    view.modeOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={formMode}>{formMode}</option>
+                  )}
                 </select>
               </div>
               <div className="space-y-2">
@@ -664,7 +920,7 @@ export default function RoutingRules() {
                   value={formTarget}
                   onChange={(event) => setFormTarget(event.target.value)}
                 >
-                  {defaultTargets.map((target) => (
+                  {(view.targetOptions.length > 0 ? view.targetOptions : [formTarget]).map((target) => (
                     <option key={target} value={target}>
                       {target}
                     </option>
@@ -680,7 +936,11 @@ export default function RoutingRules() {
                 className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 value={formPriority}
                 onChange={(event) => setFormPriority(Number(event.target.value || 1))}
+                disabled={formIsDefault}
               />
+              {formIsDefault ? (
+                <p className="text-[10px] text-amber-600">兜底规则优先级固定为系统末位，不可手动修改。</p>
+              ) : null}
             </div>
             <div className="flex items-center gap-2 pt-2">
               <input
@@ -689,11 +949,13 @@ export default function RoutingRules() {
                 className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 checked={formIsDefault}
                 onChange={(event) => setFormIsDefault(event.target.checked)}
+                disabled={isEditingDefaultRule}
               />
               <label htmlFor="isDefault" className="text-xs text-gray-600">
                 设为该渠道的兜底规则 (优先级最低)
               </label>
             </div>
+            {isEditingDefaultRule ? <p className="text-[10px] text-gray-500">当前规则已是兜底规则，类型不可变更。</p> : null}
             <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 flex items-center gap-2">
               <Info className="h-3.5 w-3.5" />
               保存后会立即生效到路由执行链路。
