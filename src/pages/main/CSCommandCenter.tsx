@@ -11,6 +11,7 @@ import {
   executeCSCommandCenterCommand,
   getCSCommandCenterSessionDetail,
   getCSCommandCenterView,
+  type CommandCenterMessage,
   type CommandCenterSession,
   type CommandCenterSessionDetail,
   type CommandCenterViewModel,
@@ -19,6 +20,7 @@ import { executeContactSidebarCommand } from "@/services/sidebarService"
 import { normalizeErrorMessage } from "@/services/http"
 
 type SessionTab = "queue" | "active" | "closed"
+const COMMAND_CENTER_POLL_INTERVAL_MS = 5000
 
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
   const bucket = (session.state_bucket || "").trim().toLowerCase()
@@ -122,6 +124,18 @@ export default function CSCommandCenter() {
     }
   }, [queryOpenKFID, selectedExternalUserID])
 
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return
+      void loadView()
+      if (selectedExternalUserID.trim() !== "") {
+        void loadDetail(selectedExternalUserID)
+      }
+    }, COMMAND_CENTER_POLL_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [queryOpenKFID, selectedExternalUserID])
+
   const sessions = useMemo(() => view?.sessions || [], [view?.sessions])
   const selectedSession = useMemo(() => {
     if (sessions.length === 0) return null
@@ -139,6 +153,13 @@ export default function CSCommandCenter() {
       return joined.includes(q)
     })
   }, [activeTab, keyword, sessions])
+
+  const orderedMessages = useMemo(() => {
+    return (detail?.messages || [])
+      .map((message, index) => ({ message, index }))
+      .sort((left, right) => compareCommandCenterMessages(left.message, right.message, left.index, right.index))
+      .map((item) => item.message)
+  }, [detail?.messages])
 
   const queueCount = useMemo(() => sessions.filter((item) => resolveSessionBucket(item) === "queue").length, [sessions])
   const activeCount = useMemo(() => sessions.filter((item) => resolveSessionBucket(item) === "active").length, [sessions])
@@ -350,10 +371,10 @@ export default function CSCommandCenter() {
 
         <div className="flex-1 flex min-h-0">
           <div className="flex-1 bg-[#F5F7FA] p-6 overflow-y-auto flex flex-col gap-6">
-            {(detail?.messages || []).length === 0 ? (
+            {orderedMessages.length === 0 ? (
               <div className="text-sm text-gray-500">暂无会话消息</div>
             ) : (
-              (detail?.messages || []).map((message) => {
+              orderedMessages.map((message) => {
                 const outgoing = (message.sender || "").trim() !== "customer"
                 return (
                   <div key={message.id || `${message.timestamp}-${message.content}`} className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}>
@@ -602,4 +623,31 @@ export default function CSCommandCenter() {
       </Dialog>
     </div>
   )
+}
+
+function compareCommandCenterMessages(left: CommandCenterMessage, right: CommandCenterMessage, leftIndex: number, rightIndex: number): number {
+  const primary = compareTimeStrings(left.timestamp, right.timestamp)
+  if (primary !== 0) return primary
+
+  const secondary = compareTimeStrings(
+    left.delivered_at || left.last_attempt_at || left.next_retry_at || "",
+    right.delivered_at || right.last_attempt_at || right.next_retry_at || "",
+  )
+  if (secondary !== 0) return secondary
+
+  return leftIndex - rightIndex
+}
+
+function compareTimeStrings(left: string, right: string): number {
+  const leftMs = Date.parse((left || "").trim())
+  const rightMs = Date.parse((right || "").trim())
+  const leftValid = Number.isFinite(leftMs)
+  const rightValid = Number.isFinite(rightMs)
+  if (leftValid && rightValid && leftMs !== rightMs) {
+    return leftMs - rightMs
+  }
+  if (leftValid !== rightValid) {
+    return leftValid ? -1 : 1
+  }
+  return 0
 }

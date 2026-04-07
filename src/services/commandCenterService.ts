@@ -46,6 +46,10 @@ export type CommandCenterMessage = {
   timestamp?: string
   type?: string
   status?: string
+  delivery_status?: string
+  last_attempt_at?: string
+  delivered_at?: string
+  next_retry_at?: string
 }
 
 export type CommandCenterSessionDetail = {
