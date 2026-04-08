@@ -9,6 +9,7 @@ import {
   createReceptionChannel,
   getReceptionChannelsView,
   getReceptionChannelDetail,
+  listKFServicerAssignments,
   retryReceptionChannelSync,
   triggerReceptionChannelSync,
   type ReceptionChannel,
@@ -22,6 +23,7 @@ export default function ReceptionChannels() {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [selectedChannel, setSelectedChannel] = useState<ReceptionChannel | null>(null)
   const [selectedChannelDetail, setSelectedChannelDetail] = useState<ReceptionChannelDetail | null>(null)
+  const [servicerAssignments, setServicerAssignments] = useState<Array<{ userid?: string; department_id?: number; status?: number }>>([])
   const [overview, setOverview] = useState<ReceptionOverview | null>(null)
   const [channels, setChannels] = useState<ReceptionChannel[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -91,9 +93,12 @@ export default function ReceptionChannels() {
     try {
       const detail = await getReceptionChannelDetail(channel.open_kfid)
       setSelectedChannelDetail(detail)
+      const assignments = await listKFServicerAssignments(channel.open_kfid)
+      setServicerAssignments(assignments)
     } catch (error) {
       setNotice(normalizeErrorMessage(error))
       setSelectedChannelDetail(null)
+      setServicerAssignments([])
     } finally {
       setIsDetailLoading(false)
     }
@@ -175,6 +180,15 @@ export default function ReceptionChannels() {
     if (!key) return scenes[0] || null
     return scenes.find((item) => (item.scene_value || "").trim() === key) || scenes[0] || null
   }, [selectedChannelDetail?.scenes, selectedSceneValue])
+
+  const assignedUsers = useMemo(
+    () => servicerAssignments.map((item) => (item.userid || "").trim()).filter(Boolean),
+    [servicerAssignments],
+  )
+  const assignedDepartments = useMemo(
+    () => servicerAssignments.map((item) => Number(item.department_id || 0)).filter((item) => item > 0),
+    [servicerAssignments],
+  )
 
   const promotionURL = ((selectedScene?.url || "").trim() || (selectedChannelDetail?.promotion_url || "").trim() || (primaryScene?.url || "").trim())
 
@@ -576,10 +590,13 @@ export default function ReceptionChannels() {
               <h4 className="text-sm font-semibold text-gray-900">接待人员</h4>
               <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700">
                 {(selectedChannelDetail?.staff_summary || "").trim() || "接待人员信息暂未同步"}
+                {assignedUsers.length > 0 || assignedDepartments.length > 0
+                  ? ` · 成员 ${assignedUsers.length} / 部门 ${assignedDepartments.length}`
+                  : ""}
               </div>
-              {(selectedChannelDetail?.staff_members || []).length > 0 ? (
+              {(selectedChannelDetail?.staff_members || []).length > 0 || assignedUsers.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
-                  {(selectedChannelDetail?.staff_members || []).map((staff) => (
+                  {Array.from(new Set([...(selectedChannelDetail?.staff_members || []), ...assignedUsers])).map((staff) => (
                     <Badge key={staff} variant="secondary" className="bg-gray-100 text-gray-700 border-transparent">
                       {staff}
                     </Badge>
@@ -587,6 +604,17 @@ export default function ReceptionChannels() {
                 </div>
               ) : (
                 <div className="text-xs text-gray-500">当前规则尚未配置明确接待人员</div>
+              )}
+              {assignedDepartments.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {Array.from(new Set(assignedDepartments)).map((departmentID) => (
+                    <Badge key={departmentID} variant="secondary" className="bg-blue-50 text-blue-700 border-transparent">
+                      部门 #{departmentID}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500">当前未配置按部门维度接待人员分配</div>
               )}
             </div>
 

@@ -57,6 +57,11 @@ export type ReceptionChannelDetail = {
   promotion_url?: string
   staff_summary?: string
   staff_members?: string[]
+  servicer_assignments?: Array<{
+    userid?: string
+    department_id?: number
+    status?: number
+  }>
   routing_summary?: {
     total_rules?: number
     active_rules?: number
@@ -68,6 +73,12 @@ export type ReceptionChannelDetail = {
     top_rule_percent?: string
     latest_rule_update_at?: string
   }
+}
+
+export type KFServicerAssignment = {
+  userid?: string
+  department_id?: number
+  status?: number
 }
 
 export type ReceptionChannelsView = {
@@ -119,6 +130,11 @@ export async function createReceptionChannel(input: {
 export async function getReceptionChannelDetail(openKFID: string): Promise<ReceptionChannelDetail | null> {
   const payload = await requestJSON<APIReply<ReceptionChannelDetail>>(`/api/v1/reception/channels/${encodeURIComponent(openKFID)}`)
   return payload?.data || null
+}
+
+export async function listKFServicerAssignments(openKFID: string): Promise<KFServicerAssignment[]> {
+  const payload = await requestJSON<APIReply<{ servicer_list?: KFServicerAssignment[] }>>(`/api/v1/kf/servicers?open_kfid=${encodeURIComponent(openKFID)}`)
+  return payload?.data?.servicer_list || []
 }
 
 export async function triggerReceptionChannelSync(openKFID: string): Promise<boolean> {
