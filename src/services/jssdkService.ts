@@ -260,12 +260,12 @@ function mapRuntimeError(
   })
 }
 
-async function fetchSignatureBundle(targetURL: string, preferredAgentID?: number): Promise<SignatureBundle> {
+async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle> {
   const normalizedURL = targetURL.trim()
   if (!normalizedURL) {
     throw new JSSDKRuntimeError("register_failed", "签名 URL 为空，无法初始化 JS-SDK。")
   }
-  const cacheKey = `${normalizedURL}::${preferredAgentID || 0}`
+  const cacheKey = normalizedURL
   const cached = signatureCache.get(cacheKey)
   if (cached) return cached
 
@@ -273,7 +273,6 @@ async function fetchSignatureBundle(targetURL: string, preferredAgentID?: number
     method: "POST",
     body: JSON.stringify({
       url: normalizedURL,
-      agent_id: preferredAgentID && preferredAgentID > 0 ? preferredAgentID : undefined,
     }),
   })
 
@@ -320,7 +319,7 @@ async function registerWithJSSDK(pageURL: string): Promise<void> {
   const fixedAgentID = seedBundle.agent_id
   const getBundle = async (rawURL: string): Promise<SignatureBundle> => {
     const source = rawURL && rawURL.trim() ? rawURL.trim() : pageURL
-    return fetchSignatureBundle(source, fixedAgentID)
+    return fetchSignatureBundle(source)
   }
 
   const registerOptions: Parameters<typeof ww.register>[0] = {

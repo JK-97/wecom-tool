@@ -57,6 +57,22 @@ export type OrganizationSettingsView = {
     member_count?: number
     last_sync_error?: string
   }
+  app_visibility?: {
+    corp_id?: string
+    suite_id?: string
+    agent_id?: number
+    agent_name?: string
+    allow_party_count?: number
+    allow_user_count?: number
+    allow_tag_count?: number
+    has_department_scope?: boolean
+    has_user_scope?: boolean
+    has_tag_scope?: boolean
+    synced_at?: string
+    updated_at?: string
+    status?: string
+    note?: string
+  }
   toolbar_runtime?: Array<{
     code?: string
     name?: string
@@ -187,6 +203,26 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
         department_count: readNumber(row.department_count, row.DepartmentCount),
         member_count: readNumber(row.member_count, row.MemberCount),
         last_sync_error: readString(row.last_sync_error, row.LastSyncError),
+      }
+    })(),
+    app_visibility: (() => {
+      const row = asRecord(view.app_visibility)
+      if (!row) return undefined
+      return {
+        corp_id: readString(row.corp_id, row.CorpID),
+        suite_id: readString(row.suite_id, row.SuiteID),
+        agent_id: readNumber(row.agent_id, row.AgentID),
+        agent_name: readString(row.agent_name, row.AgentName),
+        allow_party_count: readNumber(row.allow_party_count, row.AllowPartyCount),
+        allow_user_count: readNumber(row.allow_user_count, row.AllowUserCount),
+        allow_tag_count: readNumber(row.allow_tag_count, row.AllowTagCount),
+        has_department_scope: readBool(row.has_department_scope, row.HasDepartmentScope),
+        has_user_scope: readBool(row.has_user_scope, row.HasUserScope),
+        has_tag_scope: readBool(row.has_tag_scope, row.HasTagScope),
+        synced_at: readString(row.synced_at, row.SyncedAt),
+        updated_at: readString(row.updated_at, row.UpdatedAt),
+        status: readString(row.status, row.Status),
+        note: readString(row.note, row.Note),
       }
     })(),
     toolbar_runtime: readArray(view.toolbar_runtime).map((row) => ({

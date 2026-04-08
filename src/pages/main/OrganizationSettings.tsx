@@ -335,6 +335,7 @@ export default function OrganizationSettings() {
 
   const integration = view?.integration
   const orgSync = view?.org_sync
+  const appVisibility = view?.app_visibility
   const integrationAdmins = view?.integration_admins || []
   const integrationPermissions = view?.integration_permissions || []
   const integrationLicenseSummary = view?.integration_license_summary
@@ -784,6 +785,53 @@ export default function OrganizationSettings() {
                   </div>
 
                   <div className="p-6 space-y-4 bg-white">
+                    <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-bold text-gray-900">授权应用可见范围快照</div>
+                          <div className="text-xs text-gray-500">这层表示当前第三方应用在该企业下的真实可见范围，不等于企业原生组织结构本身。</div>
+                        </div>
+                        <Badge variant={(appVisibility?.status || "").trim() === "ready" ? "success" : "secondary"}>
+                          {((appVisibility?.status || "unavailable").trim() || "unavailable")}
+                        </Badge>
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
+                        <div>
+                          <div className="text-[10px] text-gray-500">应用 AgentID</div>
+                          <div className="text-xs font-semibold text-gray-800">{Number(appVisibility?.agent_id || 0) > 0 ? String(appVisibility?.agent_id) : "-"}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500">可见部门</div>
+                          <div className="text-xs font-semibold text-gray-800">{Number(appVisibility?.allow_party_count || 0).toLocaleString("zh-CN")}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500">可见成员</div>
+                          <div className="text-xs font-semibold text-gray-800">{Number(appVisibility?.allow_user_count || 0).toLocaleString("zh-CN")}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500">可见标签</div>
+                          <div className="text-xs font-semibold text-gray-800">{Number(appVisibility?.allow_tag_count || 0).toLocaleString("zh-CN")}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500">最近快照时间</div>
+                          <div className="text-xs font-semibold text-gray-800">{formatDateTime((appVisibility?.synced_at || appVisibility?.updated_at || "").trim())}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge variant={appVisibility?.has_department_scope ? "success" : "secondary"}>
+                          {appVisibility?.has_department_scope ? "部门级可见" : "无部门级可见"}
+                        </Badge>
+                        <Badge variant={appVisibility?.has_user_scope ? "warning" : "secondary"}>
+                          {appVisibility?.has_user_scope ? "成员级可见" : "无成员级可见"}
+                        </Badge>
+                        <Badge variant={appVisibility?.has_tag_scope ? "warning" : "secondary"}>
+                          {appVisibility?.has_tag_scope ? "标签级可见" : "无标签级可见"}
+                        </Badge>
+                      </div>
+                      {(appVisibility?.note || "").trim() ? (
+                        <div className="mt-3 text-xs text-blue-800">{(appVisibility?.note || "").trim()}</div>
+                      ) : null}
+                    </div>
                     <div className="text-sm font-bold text-gray-900">同步范围</div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[{ key: "all", title: "全量同步", desc: "同步所有部门与成员", icon: Users }, { key: "selected", title: "指定部门同步", desc: "仅同步选中的部门", icon: Shield }].map((item) => {
