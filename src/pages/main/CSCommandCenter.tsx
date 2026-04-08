@@ -1,12 +1,26 @@
-import { Badge } from "@/components/ui/Badge"
-import { Button } from "@/components/ui/Button"
-import { Avatar } from "@/components/ui/Avatar"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
-import { Dialog } from "@/components/ui/Dialog"
-import { Textarea } from "@/components/ui/Textarea"
-import { Search, AlertCircle, Clock, CheckCircle2, UserX, ShieldAlert, AlertTriangle, GitBranch, UserPlus, ExternalLink, Info, ChevronRight, Star } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Avatar } from "@/components/ui/Avatar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
+import { Dialog } from "@/components/ui/Dialog";
+import { Textarea } from "@/components/ui/Textarea";
+import {
+  Search,
+  AlertCircle,
+  Clock,
+  CheckCircle2,
+  UserX,
+  ShieldAlert,
+  AlertTriangle,
+  GitBranch,
+  UserPlus,
+  ExternalLink,
+  Info,
+  ChevronRight,
+  Star,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   executeCSCommandCenterCommand,
   getCSCommandCenterSessionDetail,
@@ -15,96 +29,107 @@ import {
   type CommandCenterSession,
   type CommandCenterSessionDetail,
   type CommandCenterViewModel,
-} from "@/services/commandCenterService"
-import { executeContactSidebarCommand } from "@/services/sidebarService"
-import { normalizeErrorMessage } from "@/services/http"
+} from "@/services/commandCenterService";
+import { executeContactSidebarCommand } from "@/services/sidebarService";
+import { normalizeErrorMessage } from "@/services/http";
 
-type SessionTab = "queue" | "active" | "closed"
-const COMMAND_CENTER_POLL_INTERVAL_MS = 5000
+type SessionTab = "queue" | "active" | "closed";
+const COMMAND_CENTER_POLL_INTERVAL_MS = 5000;
 
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
-  const bucket = (session.state_bucket || "").trim().toLowerCase()
-  if (bucket === "active") return "active"
-  if (bucket === "closed") return "closed"
-  if (bucket === "queue") return "queue"
-  const state = Number(session.session_state || 0)
-  if (state === 3) return "active"
-  if (state === 4) return "closed"
-  return "queue"
+  const bucket = (session.state_bucket || "").trim().toLowerCase();
+  if (bucket === "active") return "active";
+  if (bucket === "closed") return "closed";
+  if (bucket === "queue") return "queue";
+  const state = Number(session.session_state || 0);
+  if (state === 3) return "active";
+  if (state === 4) return "closed";
+  return "queue";
 }
 
 export default function CSCommandCenter() {
-  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false)
-  const [isEndModalOpen, setIsEndModalOpen] = useState(false)
-  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false)
-  const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false)
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [isEndModalOpen, setIsEndModalOpen] = useState(false);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false);
 
-  const [view, setView] = useState<CommandCenterViewModel | null>(null)
-  const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null)
-  const [selectedExternalUserID, setSelectedExternalUserID] = useState("")
-  const [activeTab, setActiveTab] = useState<SessionTab>("queue")
-  const [keyword, setKeyword] = useState("")
-  const [notice, setNotice] = useState("")
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [view, setView] = useState<CommandCenterViewModel | null>(null);
+  const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null);
+  const [selectedExternalUserID, setSelectedExternalUserID] = useState("");
+  const [activeTab, setActiveTab] = useState<SessionTab>("queue");
+  const [keyword, setKeyword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理")
-  const [upgradeReason, setUpgradeReason] = useState("高意向潜客")
-  const [upgradeTask, setUpgradeTask] = useState("")
-  const [upgradeStars, setUpgradeStars] = useState(4)
+  const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
+  const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
+  const [upgradeTask, setUpgradeTask] = useState("");
+  const [upgradeStars, setUpgradeStars] = useState(4);
 
-  const [transferTarget, setTransferTarget] = useState("")
-  const [transferReason, setTransferReason] = useState("")
+  const [transferTarget, setTransferTarget] = useState("");
+  const [transferReason, setTransferReason] = useState("");
 
   const queryOpenKFID = useMemo(() => {
-    if (typeof window === "undefined") return ""
-    const params = new URLSearchParams(window.location.search)
-    return (params.get("open_kfid") || "").trim()
-  }, [])
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+    return (params.get("open_kfid") || "").trim();
+  }, []);
 
   const loadView = async () => {
-    const data = await getCSCommandCenterView({ open_kfid: queryOpenKFID, limit: 200 })
-    setView(data)
-    const selectedID = (data?.selected?.external_userid || data?.sessions?.[0]?.external_userid || "").trim()
-    setSelectedExternalUserID((prev) => prev || selectedID)
-  }
+    const data = await getCSCommandCenterView({
+      open_kfid: queryOpenKFID,
+      limit: 200,
+    });
+    setView(data);
+    const selectedID = (
+      data?.selected?.external_userid ||
+      data?.sessions?.[0]?.external_userid ||
+      ""
+    ).trim();
+    setSelectedExternalUserID((prev) => prev || selectedID);
+  };
 
   const loadDetail = async (externalUserID: string) => {
-    const selected = (externalUserID || "").trim()
+    const selected = (externalUserID || "").trim();
     if (!selected) {
-      setDetail(null)
-      return
+      setDetail(null);
+      return;
     }
     const data = await getCSCommandCenterSessionDetail({
       open_kfid: queryOpenKFID,
       external_userid: selected,
       limit: 200,
-    })
-    setDetail(data)
-  }
+    });
+    setDetail(data);
+  };
 
   useEffect(() => {
-    let alive = true
+    let alive = true;
     void getCSCommandCenterView({ open_kfid: queryOpenKFID, limit: 200 })
       .then((data) => {
-        if (!alive) return
-        setView(data)
-        const selectedID = (data?.selected?.external_userid || data?.sessions?.[0]?.external_userid || "").trim()
-        setSelectedExternalUserID(selectedID)
+        if (!alive) return;
+        setView(data);
+        const selectedID = (
+          data?.selected?.external_userid ||
+          data?.sessions?.[0]?.external_userid ||
+          ""
+        ).trim();
+        setSelectedExternalUserID(selectedID);
       })
       .catch(() => {
-        if (!alive) return
-        setView(null)
-      })
+        if (!alive) return;
+        setView(null);
+      });
     return () => {
-      alive = false
-    }
-  }, [queryOpenKFID])
+      alive = false;
+    };
+  }, [queryOpenKFID]);
 
   useEffect(() => {
-    let alive = true
+    let alive = true;
     if (!selectedExternalUserID) {
-      setDetail(null)
-      return
+      setDetail(null);
+      return;
     }
     void getCSCommandCenterSessionDetail({
       open_kfid: queryOpenKFID,
@@ -112,85 +137,111 @@ export default function CSCommandCenter() {
       limit: 200,
     })
       .then((data) => {
-        if (!alive) return
-        setDetail(data)
+        if (!alive) return;
+        setDetail(data);
       })
       .catch(() => {
-        if (!alive) return
-        setDetail(null)
-      })
+        if (!alive) return;
+        setDetail(null);
+      });
     return () => {
-      alive = false
-    }
-  }, [queryOpenKFID, selectedExternalUserID])
+      alive = false;
+    };
+  }, [queryOpenKFID, selectedExternalUserID]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return
+    if (typeof window === "undefined") return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return
-      void loadView()
+      if (document.visibilityState === "hidden") return;
+      void loadView();
       if (selectedExternalUserID.trim() !== "") {
-        void loadDetail(selectedExternalUserID)
+        void loadDetail(selectedExternalUserID);
       }
-    }, COMMAND_CENTER_POLL_INTERVAL_MS)
-    return () => window.clearInterval(timer)
-  }, [queryOpenKFID, selectedExternalUserID])
+    }, COMMAND_CENTER_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [queryOpenKFID, selectedExternalUserID]);
 
-  const sessions = useMemo(() => view?.sessions || [], [view?.sessions])
+  const sessions = useMemo(() => view?.sessions || [], [view?.sessions]);
   const selectedSession = useMemo(() => {
-    if (sessions.length === 0) return null
-    const found = sessions.find((item) => (item.external_userid || "").trim() === selectedExternalUserID.trim())
-    return found || sessions[0]
-  }, [selectedExternalUserID, sessions])
+    if (sessions.length === 0) return null;
+    const found = sessions.find(
+      (item) =>
+        (item.external_userid || "").trim() === selectedExternalUserID.trim(),
+    );
+    return found || sessions[0];
+  }, [selectedExternalUserID, sessions]);
 
   const filteredSessions = useMemo(() => {
-    const q = keyword.trim().toLowerCase()
+    const q = keyword.trim().toLowerCase();
     return sessions.filter((item) => {
-      const bucket = resolveSessionBucket(item)
-      if (activeTab !== bucket) return false
-      if (!q) return true
-      const joined = `${item.name || ""} ${item.last_message || ""} ${item.source || ""}`.toLowerCase()
-      return joined.includes(q)
-    })
-  }, [activeTab, keyword, sessions])
+      const bucket = resolveSessionBucket(item);
+      if (activeTab !== bucket) return false;
+      if (!q) return true;
+      const joined =
+        `${item.name || ""} ${item.last_message || ""} ${item.source || ""}`.toLowerCase();
+      return joined.includes(q);
+    });
+  }, [activeTab, keyword, sessions]);
 
   const orderedMessages = useMemo(() => {
     return (detail?.messages || [])
       .map((message, index) => ({ message, index }))
-      .sort((left, right) => compareCommandCenterMessages(left.message, right.message, left.index, right.index))
-      .map((item) => item.message)
-  }, [detail?.messages])
+      .sort((left, right) =>
+        compareCommandCenterMessages(
+          left.message,
+          right.message,
+          left.index,
+          right.index,
+        ),
+      )
+      .map((item) => item.message);
+  }, [detail?.messages]);
 
-  const queueCount = useMemo(() => sessions.filter((item) => resolveSessionBucket(item) === "queue").length, [sessions])
-  const activeCount = useMemo(() => sessions.filter((item) => resolveSessionBucket(item) === "active").length, [sessions])
-  const closedCount = useMemo(() => sessions.filter((item) => resolveSessionBucket(item) === "closed").length, [sessions])
+  const queueCount = useMemo(
+    () =>
+      sessions.filter((item) => resolveSessionBucket(item) === "queue").length,
+    [sessions],
+  );
+  const activeCount = useMemo(
+    () =>
+      sessions.filter((item) => resolveSessionBucket(item) === "active").length,
+    [sessions],
+  );
+  const closedCount = useMemo(
+    () =>
+      sessions.filter((item) => resolveSessionBucket(item) === "closed").length,
+    [sessions],
+  );
 
-  const runCSCommand = async (command: string, payload?: Record<string, unknown>) => {
+  const runCSCommand = async (
+    command: string,
+    payload?: Record<string, unknown>,
+  ) => {
     try {
-      setIsSubmitting(true)
+      setIsSubmitting(true);
       const result = await executeCSCommandCenterCommand({
         command,
         open_kfid: selectedSession?.open_kfid,
         external_userid: selectedSession?.external_userid,
         payload,
-      })
-      setNotice((result?.message || "命令已提交").trim())
-      await loadView()
-      await loadDetail(selectedSession?.external_userid || "")
+      });
+      setNotice((result?.message || "命令已提交").trim());
+      await loadView();
+      await loadDetail(selectedSession?.external_userid || "");
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      setNotice(normalizeErrorMessage(error));
     } finally {
-      setIsSubmitting(false)
+      setIsSubmitting(false);
     }
-  }
+  };
 
   const handleUpgrade = async () => {
     if (!selectedSession?.external_userid) {
-      setNotice("未选择会话")
-      return
+      setNotice("未选择会话");
+      return;
     }
     try {
-      setIsSubmitting(true)
+      setIsSubmitting(true);
       const result = await executeContactSidebarCommand({
         command: "cs_upgrade_to_contact",
         external_userid: selectedSession.external_userid,
@@ -203,35 +254,65 @@ export default function CSCommandCenter() {
           open_kfid: selectedSession.open_kfid,
           contact_name: selectedSession.name,
         },
-      })
-      setNotice((result?.message || "升级命令已提交").trim())
-      setIsUpgradeModalOpen(false)
+      });
+      setNotice((result?.message || "升级命令已提交").trim());
+      setIsUpgradeModalOpen(false);
       if (result?.success) {
-        setIsUpgradeSuccess(true)
-        setTimeout(() => setIsUpgradeSuccess(false), 2500)
+        setIsUpgradeSuccess(true);
+        setTimeout(() => setIsUpgradeSuccess(false), 2500);
       }
-      await loadView()
+      await loadView();
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      setNotice(normalizeErrorMessage(error));
     } finally {
-      setIsSubmitting(false)
+      setIsSubmitting(false);
     }
-  }
+  };
 
-  const monitorMood = (view?.monitor?.mood || "neutral").trim()
-  const monitorEmoji = monitorMood === "stable" ? "🙂" : monitorMood === "neutral" ? "😐" : "😠"
+  const activeMonitor = detail?.monitor || view?.monitor;
+  const monitorMood = (
+    activeMonitor?.emotion?.label ||
+    activeMonitor?.mood ||
+    "neutral"
+  )
+    .trim()
+    .toLowerCase();
+  const monitorEmoji =
+    monitorMood === "stable" ? "🙂" : monitorMood === "neutral" ? "😐" : "😠";
+  const analysisStatus = (activeMonitor?.meta?.status || "idle")
+    .trim()
+    .toLowerCase();
+  const summaryText = (
+    activeMonitor?.summary_detail?.text ||
+    activeMonitor?.summary ||
+    "暂无会话摘要"
+  ).trim();
+  const complianceRisk =
+    (activeMonitor?.compliance?.status || "").trim().toLowerCase() === "risk" ||
+    activeMonitor?.compliance_pass === false;
 
   return (
     <div className="flex h-full gap-6">
       <div className="w-[380px] shrink-0 flex flex-col border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="p-4 border-b border-gray-100 bg-gray-50">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">微信客服中心</h2>
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SessionTab)}>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            微信客服中心
+          </h2>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as SessionTab)}
+          >
             <TabsList className="w-full grid grid-cols-3 bg-white border border-gray-200">
-              <TabsTrigger value="queue" className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700">
+              <TabsTrigger
+                value="queue"
+                className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700"
+              >
                 排队中 ({queueCount})
               </TabsTrigger>
-              <TabsTrigger value="active" className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+              <TabsTrigger
+                value="active"
+                className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700"
+              >
                 接待中 ({activeCount})
               </TabsTrigger>
               <TabsTrigger value="closed">已结束 ({closedCount})</TabsTrigger>
@@ -250,7 +331,9 @@ export default function CSCommandCenter() {
               className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          {notice ? <div className="text-[11px] text-blue-600">{notice}</div> : null}
+          {notice ? (
+            <div className="text-[11px] text-blue-600">{notice}</div>
+          ) : null}
         </div>
 
         <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
@@ -258,25 +341,44 @@ export default function CSCommandCenter() {
             <div className="p-4 text-sm text-gray-500">当前筛选下暂无会话</div>
           ) : (
             filteredSessions.map((session) => {
-              const selected = (session.external_userid || "").trim() === (selectedSession?.external_userid || "").trim()
-              const bucket = resolveSessionBucket(session)
-              const queueWaitText = (session.queue_wait_text || "").trim()
-              const replyOverdue = session.reply_overdue === true || session.overdue === true
-              const slaStatus = (session.reply_sla_status || "").trim().toLowerCase()
+              const selected =
+                (session.external_userid || "").trim() ===
+                (selectedSession?.external_userid || "").trim();
+              const bucket = resolveSessionBucket(session);
+              const queueWaitText = (session.queue_wait_text || "").trim();
+              const replyOverdue =
+                session.reply_overdue === true || session.overdue === true;
+              const slaStatus = (session.reply_sla_status || "")
+                .trim()
+                .toLowerCase();
               return (
                 <div
-                  key={(session.external_userid || session.name || "session").trim()}
+                  key={(
+                    session.external_userid ||
+                    session.name ||
+                    "session"
+                  ).trim()}
                   className={`p-4 cursor-pointer transition-colors ${selected ? "bg-blue-50/50 border-l-4 border-blue-600" : "hover:bg-gray-50"}`}
-                  onClick={() => setSelectedExternalUserID((session.external_userid || "").trim())}
+                  onClick={() =>
+                    setSelectedExternalUserID(
+                      (session.external_userid || "").trim(),
+                    )
+                  }
                 >
                   <div className="flex items-start justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <Avatar src="" size="sm" />
                       <div className="flex flex-col">
-                        <span className="text-sm font-medium text-gray-900">{(session.name || "未命名客户").trim()}</span>
+                        <span className="text-sm font-medium text-gray-900">
+                          {(session.name || "未命名客户").trim()}
+                        </span>
                         <div className="flex items-center gap-1 mt-0.5">
-                          <Badge className="text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none">{(session.source || "未知渠道").trim()}</Badge>
-                          <Badge className="text-[9px] px-1 py-0 bg-gray-100 text-gray-500 border-none">{(session.session_label || "会话中").trim()}</Badge>
+                          <Badge className="text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none">
+                            {(session.source || "未知渠道").trim()}
+                          </Badge>
+                          <Badge className="text-[9px] px-1 py-0 bg-gray-100 text-gray-500 border-none">
+                            {(session.session_label || "会话中").trim()}
+                          </Badge>
                         </div>
                       </div>
                     </div>
@@ -286,25 +388,36 @@ export default function CSCommandCenter() {
                           <AlertCircle className="w-3 h-3 mr-1" /> 超时告警
                         </div>
                       ) : bucket === "queue" ? (
-                        <div className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}>
-                          <Clock className="w-3 h-3 mr-1" /> 排队 {queueWaitText || "-"}
+                        <div
+                          className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}
+                        >
+                          <Clock className="w-3 h-3 mr-1" /> 排队{" "}
+                          {queueWaitText || "-"}
                         </div>
                       ) : (
                         <div className="flex items-center text-[10px] font-medium text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded">
-                          <Clock className="w-3 h-3 mr-1" /> {session.unread_count || 0} 未读
+                          <Clock className="w-3 h-3 mr-1" />{" "}
+                          {session.unread_count || 0} 未读
                         </div>
                       )}
                     </div>
                   </div>
-                  <p className="text-xs text-gray-600 line-clamp-1 mb-2">{(session.last_message || "暂无消息").trim()}</p>
+                  <p className="text-xs text-gray-600 line-clamp-1 mb-2">
+                    {(session.last_message || "暂无消息").trim()}
+                  </p>
                   <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span className="flex items-center gap-1">
-                      <GitBranch className="w-3 h-3" /> {(session.assigned_userid || "待分配").trim()}
+                      <GitBranch className="w-3 h-3" />{" "}
+                      {(session.assigned_userid || "待分配").trim()}
                     </span>
-                    <span>{(session.last_active || "").replace("T", " ").slice(0, 16)}</span>
+                    <span>
+                      {(session.last_active || "")
+                        .replace("T", " ")
+                        .slice(0, 16)}
+                    </span>
                   </div>
                 </div>
-              )
+              );
             })
           )}
         </div>
@@ -314,20 +427,42 @@ export default function CSCommandCenter() {
         <div className="border-b border-gray-200 bg-white shrink-0">
           <div className="h-16 px-6 flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <h3 className="text-lg font-semibold text-gray-900">{(selectedSession?.name || "未选择会话").trim()}</h3>
-              <Badge variant="success" className="bg-green-50 text-green-700 border-green-200">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {(selectedSession?.name || "未选择会话").trim()}
+              </h3>
+              <Badge
+                variant="success"
+                className="bg-green-50 text-green-700 border-green-200"
+              >
                 {(selectedSession?.session_label || "-").trim()}
               </Badge>
-              <span className="text-sm text-gray-500 border-l border-gray-200 pl-4">接待人：{(selectedSession?.assigned_userid || "待分配").trim()}</span>
+              <span className="text-sm text-gray-500 border-l border-gray-200 pl-4">
+                接待人：{(selectedSession?.assigned_userid || "待分配").trim()}
+              </span>
             </div>
             <div className="flex items-center gap-3">
-              <Button variant="outline" size="sm" className="text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setIsUpgradeModalOpen(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                onClick={() => setIsUpgradeModalOpen(true)}
+              >
                 <UserPlus className="w-4 h-4 mr-2" /> 升级为客户联系
               </Button>
-              <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700" onClick={() => setIsTransferModalOpen(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                onClick={() => setIsTransferModalOpen(true)}
+              >
                 <UserX className="w-4 h-4 mr-2" /> 强制转交
               </Button>
-              <Button variant="outline" size="sm" className="text-gray-600 hover:bg-gray-100" onClick={() => setIsEndModalOpen(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-gray-600 hover:bg-gray-100"
+                onClick={() => setIsEndModalOpen(true)}
+              >
                 强制结束
               </Button>
             </div>
@@ -336,35 +471,50 @@ export default function CSCommandCenter() {
           <div className="px-6 py-2 bg-gray-50 border-t border-gray-100 flex items-center gap-6 text-[11px]">
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">来源渠道:</span>
-              <span className="text-gray-900">{(selectedSession?.source || "-").trim()}</span>
+              <span className="text-gray-900">
+                {(selectedSession?.source || "-").trim()}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">路由规则:</span>
               <span className="text-blue-600 flex items-center gap-0.5 cursor-pointer hover:underline">
-                {(detail?.route_rule_name || "-").trim()} <ExternalLink className="w-3 h-3" />
+                {(detail?.route_rule_name || "-").trim()}{" "}
+                <ExternalLink className="w-3 h-3" />
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">接待池:</span>
-              <span className="text-gray-900">{(detail?.route_pool_name || "-").trim()}</span>
+              <span className="text-gray-900">
+                {(detail?.route_pool_name || "-").trim()}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500 ml-auto">
               <span className="font-medium">告警状态:</span>
-              {(selectedSession?.reply_overdue === true || selectedSession?.overdue === true) ? (
-                <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">超时</Badge>
+              {selectedSession?.reply_overdue === true ||
+              selectedSession?.overdue === true ? (
+                <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
+                  超时
+                </Badge>
               ) : (
                 <Badge className="bg-gray-100 text-gray-700 border-none text-[10px] px-1.5 py-0">
-                  {((selectedSession?.reply_sla_status || "normal").trim() || "normal") === "warning" ? "预警" : "正常"}
+                  {((selectedSession?.reply_sla_status || "normal").trim() ||
+                    "normal") === "warning"
+                    ? "预警"
+                    : "正常"}
                 </Badge>
               )}
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">排队时间:</span>
-              <span className="text-gray-900">{(selectedSession?.queue_wait_text || "-").trim() || "-"}</span>
+              <span className="text-gray-900">
+                {(selectedSession?.queue_wait_text || "-").trim() || "-"}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">升级状态:</span>
-              <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">{isUpgradeSuccess ? "已升级" : "未升级"}</Badge>
+              <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
+                {isUpgradeSuccess ? "已升级" : "未升级"}
+              </Badge>
             </div>
           </div>
         </div>
@@ -375,26 +525,43 @@ export default function CSCommandCenter() {
               <div className="text-sm text-gray-500">暂无会话消息</div>
             ) : (
               orderedMessages.map((message) => {
-                const outgoing = (message.sender || "").trim() !== "customer"
+                const outgoing = (message.sender || "").trim() !== "customer";
                 return (
-                  <div key={message.id || `${message.timestamp}-${message.content}`} className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}>
+                  <div
+                    key={
+                      message.id || `${message.timestamp}-${message.content}`
+                    }
+                    className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
+                  >
                     {outgoing ? (
                       <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                        <span className="text-xs font-bold text-blue-600">AI</span>
+                        <span className="text-xs font-bold text-blue-600">
+                          AI
+                        </span>
                       </div>
                     ) : (
                       <Avatar src="" size="sm" />
                     )}
                     <div
                       className={`px-4 py-2.5 max-w-[70%] shadow-sm rounded-2xl ${
-                        outgoing ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
+                        outgoing
+                          ? "bg-blue-600 text-white rounded-tr-none"
+                          : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
                       }`}
                     >
-                      <p className="text-sm">{(message.content || "").trim()}</p>
-                      <p className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}>{(message.timestamp || "").replace("T", " ").slice(0, 16)}</p>
+                      <p className="text-sm">
+                        {(message.content || "").trim()}
+                      </p>
+                      <p
+                        className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+                      >
+                        {(message.timestamp || "")
+                          .replace("T", " ")
+                          .slice(0, 16)}
+                      </p>
                     </div>
                   </div>
-                )
+                );
               })
             )}
           </div>
@@ -407,18 +574,27 @@ export default function CSCommandCenter() {
               <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500">命中渠道</span>
-                  <span className="text-xs font-medium">{(selectedSession?.source || "-").trim()}</span>
+                  <span className="text-xs font-medium">
+                    {(selectedSession?.source || "-").trim()}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500">匹配规则</span>
-                  <span className="text-xs font-medium text-blue-600">{(detail?.route_rule_name || "-").trim()}</span>
+                  <span className="text-xs font-medium text-blue-600">
+                    {(detail?.route_rule_name || "-").trim()}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500">接待池</span>
-                  <span className="text-xs font-medium">{(detail?.route_pool_name || "-").trim()}</span>
+                  <span className="text-xs font-medium">
+                    {(detail?.route_pool_name || "-").trim()}
+                  </span>
                 </div>
                 <div className="pt-2 border-t border-gray-100">
-                  <Link to="/main/routing-rules" className="text-[11px] text-blue-600 flex items-center justify-center gap-1 hover:underline">
+                  <Link
+                    to="/main/routing-rules"
+                    className="text-[11px] text-blue-600 flex items-center justify-center gap-1 hover:underline"
+                  >
                     前往调整路由规则 <ChevronRight className="w-3 h-3" />
                   </Link>
                 </div>
@@ -430,8 +606,13 @@ export default function CSCommandCenter() {
                 <UserPlus className="w-4 h-4 text-blue-600" /> 客户升级
               </h4>
               <div className="bg-blue-50 rounded-lg border border-blue-100 p-4 text-center">
-                <p className="text-xs text-blue-700 mb-3 leading-relaxed">可将当前会话升级为客户联系并自动创建跟进任务。</p>
-                <Button className="w-full bg-blue-600 hover:bg-blue-700 text-xs h-8" onClick={() => setIsUpgradeModalOpen(true)}>
+                <p className="text-xs text-blue-700 mb-3 leading-relaxed">
+                  可将当前会话升级为客户联系并自动创建跟进任务。
+                </p>
+                <Button
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-xs h-8"
+                  onClick={() => setIsUpgradeModalOpen(true)}
+                >
                   立即升级
                 </Button>
               </div>
@@ -444,26 +625,82 @@ export default function CSCommandCenter() {
 
               <div className="space-y-6">
                 <div>
-                  <div className="text-xs text-gray-500 mb-2">客户情绪</div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs text-gray-500">客户情绪</div>
+                    {analysisStatus === "running" ||
+                    analysisStatus === "queued" ? (
+                      <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">
+                        进行中
+                      </Badge>
+                    ) : analysisStatus === "failed" ? (
+                      <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
+                        分析失败
+                      </Badge>
+                    ) : analysisStatus === "succeeded" ? (
+                      <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
+                        最近已完成
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-gray-100 text-gray-600 border-none text-[10px] px-1.5 py-0">
+                        未启动
+                      </Badge>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <span className="text-2xl">{monitorEmoji}</span>
                     <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div className={`h-full ${monitorMood === "stable" ? "bg-green-500 w-[35%]" : monitorMood === "neutral" ? "bg-yellow-500 w-[55%]" : "bg-orange-500 w-[70%]"}`} />
+                      <div
+                        className={`h-full ${monitorMood === "stable" ? "bg-green-500 w-[35%]" : monitorMood === "neutral" ? "bg-yellow-500 w-[55%]" : monitorMood === "positive" ? "bg-green-500 w-[30%]" : "bg-orange-500 w-[70%]"}`}
+                      />
                     </div>
-                    <span className="text-xs font-medium text-orange-600">{monitorMood === "stable" ? "稳定" : monitorMood === "neutral" ? "中性" : "焦急"}</span>
+                    <span className="text-xs font-medium text-orange-600">
+                      {activeMonitor?.emotion?.label?.trim() ||
+                        (monitorMood === "stable"
+                          ? "稳定"
+                          : monitorMood === "neutral"
+                            ? "中性"
+                            : "焦急")}
+                    </span>
                   </div>
+                  {activeMonitor?.emotion?.reason ? (
+                    <div className="mt-2 text-[11px] text-gray-500 leading-relaxed">
+                      {activeMonitor.emotion.reason.trim()}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
                   <div className="text-xs text-gray-500 mb-2">会话摘要</div>
                   <div className="bg-gray-50 p-3 rounded-md border border-gray-100 text-sm text-gray-700 leading-relaxed">
-                    {(view?.monitor?.summary || "暂无会话摘要").trim()}
+                    {summaryText}
                   </div>
+                  {activeMonitor?.summary_detail?.customer_intent ||
+                  activeMonitor?.summary_detail?.suggested_focus ? (
+                    <div className="mt-2 space-y-1 text-[11px] text-gray-500">
+                      {activeMonitor?.summary_detail?.customer_intent ? (
+                        <div>
+                          客户诉求：
+                          {activeMonitor.summary_detail.customer_intent.trim()}
+                        </div>
+                      ) : null}
+                      {activeMonitor?.summary_detail?.priority ? (
+                        <div>
+                          优先级：{activeMonitor.summary_detail.priority.trim()}
+                        </div>
+                      ) : null}
+                      {activeMonitor?.summary_detail?.suggested_focus ? (
+                        <div>
+                          跟进重点：
+                          {activeMonitor.summary_detail.suggested_focus.trim()}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
                   <div className="text-xs text-gray-500 mb-2">合规质检</div>
-                  {view?.monitor?.compliance_pass === false ? (
+                  {complianceRisk ? (
                     <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 p-2 rounded-md border border-red-100">
                       <AlertTriangle className="w-4 h-4" /> 检测到潜在风险话术
                     </div>
@@ -472,6 +709,30 @@ export default function CSCommandCenter() {
                       <CheckCircle2 className="w-4 h-4" /> 未发现违规话术
                     </div>
                   )}
+                  {activeMonitor?.compliance?.reason ? (
+                    <div className="mt-2 text-[11px] text-gray-500 leading-relaxed">
+                      {activeMonitor.compliance.reason.trim()}
+                    </div>
+                  ) : null}
+                  {activeMonitor?.compliance?.risk_tags &&
+                  activeMonitor.compliance.risk_tags.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {activeMonitor.compliance.risk_tags.map((tag) => (
+                        <Badge
+                          key={tag}
+                          className="bg-amber-100 text-amber-700 border-none text-[10px] px-1.5 py-0"
+                        >
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
+                  {activeMonitor?.compliance?.recommended_action ? (
+                    <div className="mt-2 text-[11px] text-gray-500">
+                      建议动作：
+                      {activeMonitor.compliance.recommended_action.trim()}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -491,10 +752,17 @@ export default function CSCommandCenter() {
         className="max-w-[520px]"
         footer={
           <>
-            <Button variant="outline" onClick={() => setIsUpgradeModalOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setIsUpgradeModalOpen(false)}
+            >
               取消
             </Button>
-            <Button className="bg-blue-600 hover:bg-blue-700" disabled={isSubmitting} onClick={() => void handleUpgrade()}>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={isSubmitting}
+              onClick={() => void handleUpgrade()}
+            >
               确认升级并创建任务
             </Button>
           </>
@@ -503,12 +771,16 @@ export default function CSCommandCenter() {
         <div className="space-y-5">
           <div className="p-3 bg-blue-50 rounded-lg border border-blue-100 flex items-start gap-3">
             <Info className="w-4 h-4 text-blue-600 mt-0.5" />
-            <p className="text-xs text-blue-800 leading-relaxed">升级后将自动生成客户档案和跟进任务，当前为内部命令链路执行。</p>
+            <p className="text-xs text-blue-800 leading-relaxed">
+              升级后将自动生成客户档案和跟进任务，当前为内部命令链路执行。
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">负责人</label>
+              <label className="text-sm font-medium text-gray-700">
+                负责人
+              </label>
               <input
                 value={upgradeOwner}
                 onChange={(event) => setUpgradeOwner(event.target.value)}
@@ -516,17 +788,25 @@ export default function CSCommandCenter() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">意向等级</label>
+              <label className="text-sm font-medium text-gray-700">
+                意向等级
+              </label>
               <div className="flex gap-1">
                 {[1, 2, 3, 4, 5].map((i) => (
-                  <Star key={i} className={`w-5 h-5 cursor-pointer ${i <= upgradeStars ? "text-yellow-400 fill-yellow-400" : "text-gray-200"}`} onClick={() => setUpgradeStars(i)} />
+                  <Star
+                    key={i}
+                    className={`w-5 h-5 cursor-pointer ${i <= upgradeStars ? "text-yellow-400 fill-yellow-400" : "text-gray-200"}`}
+                    onClick={() => setUpgradeStars(i)}
+                  />
                 ))}
               </div>
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">升级原因</label>
+            <label className="text-sm font-medium text-gray-700">
+              升级原因
+            </label>
             <input
               value={upgradeReason}
               onChange={(event) => setUpgradeReason(event.target.value)}
@@ -535,8 +815,15 @@ export default function CSCommandCenter() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">下一步任务</label>
-            <Textarea className="text-sm min-h-[80px]" value={upgradeTask} onChange={(event) => setUpgradeTask(event.target.value)} placeholder="请输入需要负责人执行的具体任务" />
+            <label className="text-sm font-medium text-gray-700">
+              下一步任务
+            </label>
+            <Textarea
+              className="text-sm min-h-[80px]"
+              value={upgradeTask}
+              onChange={(event) => setUpgradeTask(event.target.value)}
+              placeholder="请输入需要负责人执行的具体任务"
+            />
           </div>
         </div>
       </Dialog>
@@ -544,7 +831,9 @@ export default function CSCommandCenter() {
       {isUpgradeSuccess ? (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3">
           <CheckCircle2 className="w-5 h-5" />
-          <span className="font-medium">升级成功！已同步至客户中心并创建跟进任务。</span>
+          <span className="font-medium">
+            升级成功！已同步至客户中心并创建跟进任务。
+          </span>
         </div>
       ) : null}
 
@@ -555,17 +844,23 @@ export default function CSCommandCenter() {
         className="max-w-[480px]"
         footer={
           <>
-            <Button variant="outline" onClick={() => setIsTransferModalOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setIsTransferModalOpen(false)}
+            >
               取消
             </Button>
             <Button
               className="bg-blue-600"
               disabled={isSubmitting}
               onClick={async () => {
-                await runCSCommand("cs_transfer_session", { assigned_userid: transferTarget, reason: transferReason })
-                setIsTransferModalOpen(false)
-                setTransferTarget("")
-                setTransferReason("")
+                await runCSCommand("cs_transfer_session", {
+                  assigned_userid: transferTarget,
+                  reason: transferReason,
+                });
+                setIsTransferModalOpen(false);
+                setTransferTarget("");
+                setTransferReason("");
               }}
             >
               确认转交
@@ -585,8 +880,15 @@ export default function CSCommandCenter() {
             />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">转交原因</label>
-            <Textarea className="text-sm min-h-[80px]" value={transferReason} onChange={(event) => setTransferReason(event.target.value)} placeholder="请输入转交原因" />
+            <label className="text-sm font-medium text-gray-700">
+              转交原因
+            </label>
+            <Textarea
+              className="text-sm min-h-[80px]"
+              value={transferReason}
+              onChange={(event) => setTransferReason(event.target.value)}
+              placeholder="请输入转交原因"
+            />
           </div>
         </div>
       </Dialog>
@@ -610,8 +912,8 @@ export default function CSCommandCenter() {
               className="bg-red-600 hover:bg-red-700 text-white"
               disabled={isSubmitting}
               onClick={async () => {
-                await runCSCommand("cs_end_session", {})
-                setIsEndModalOpen(false)
+                await runCSCommand("cs_end_session", {});
+                setIsEndModalOpen(false);
               }}
             >
               强制结束
@@ -619,35 +921,42 @@ export default function CSCommandCenter() {
           </>
         }
       >
-        <p className="text-sm text-gray-600">强制结束会话将中断当前客服接待。请确认是否继续？</p>
+        <p className="text-sm text-gray-600">
+          强制结束会话将中断当前客服接待。请确认是否继续？
+        </p>
       </Dialog>
     </div>
-  )
+  );
 }
 
-function compareCommandCenterMessages(left: CommandCenterMessage, right: CommandCenterMessage, leftIndex: number, rightIndex: number): number {
-  const primary = compareTimeStrings(left.timestamp, right.timestamp)
-  if (primary !== 0) return primary
+function compareCommandCenterMessages(
+  left: CommandCenterMessage,
+  right: CommandCenterMessage,
+  leftIndex: number,
+  rightIndex: number,
+): number {
+  const primary = compareTimeStrings(left.timestamp, right.timestamp);
+  if (primary !== 0) return primary;
 
   const secondary = compareTimeStrings(
     left.delivered_at || left.last_attempt_at || left.next_retry_at || "",
     right.delivered_at || right.last_attempt_at || right.next_retry_at || "",
-  )
-  if (secondary !== 0) return secondary
+  );
+  if (secondary !== 0) return secondary;
 
-  return leftIndex - rightIndex
+  return leftIndex - rightIndex;
 }
 
 function compareTimeStrings(left: string, right: string): number {
-  const leftMs = Date.parse((left || "").trim())
-  const rightMs = Date.parse((right || "").trim())
-  const leftValid = Number.isFinite(leftMs)
-  const rightValid = Number.isFinite(rightMs)
+  const leftMs = Date.parse((left || "").trim());
+  const rightMs = Date.parse((right || "").trim());
+  const leftValid = Number.isFinite(leftMs);
+  const rightValid = Number.isFinite(rightMs);
   if (leftValid && rightValid && leftMs !== rightMs) {
-    return leftMs - rightMs
+    return leftMs - rightMs;
   }
   if (leftValid !== rightValid) {
-    return leftValid ? -1 : 1
+    return leftValid ? -1 : 1;
   }
-  return 0
+  return 0;
 }
