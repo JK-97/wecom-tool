@@ -52,6 +52,10 @@ export type OrganizationSettingsView = {
     sync_scope?: string
     sync_interval?: string
     last_sync_at?: string
+    last_sync_status?: string
+    department_count?: number
+    member_count?: number
+    last_sync_error?: string
   }
   toolbar_runtime?: Array<{
     code?: string
@@ -70,7 +74,6 @@ export type OrganizationSettingsView = {
   }>
   members?: Array<{
     userid?: string
-    display_name?: string
     role?: string
     is_app_admin?: boolean
   }>
@@ -180,6 +183,10 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
         sync_scope: readString(row.sync_scope, row.SyncScope),
         sync_interval: readString(row.sync_interval, row.SyncInterval),
         last_sync_at: readString(row.last_sync_at, row.LastSyncAt),
+        last_sync_status: readString(row.last_sync_status, row.LastSyncStatus),
+        department_count: readNumber(row.department_count, row.DepartmentCount),
+        member_count: readNumber(row.member_count, row.MemberCount),
+        last_sync_error: readString(row.last_sync_error, row.LastSyncError),
       }
     })(),
     toolbar_runtime: readArray(view.toolbar_runtime).map((row) => ({
@@ -199,7 +206,6 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
     })),
     members: readArray(view.members).map((row) => ({
       userid: readString(row.userid, row.UserID),
-      display_name: readString(row.display_name, row.DisplayName),
       role: readString(row.role, row.Role),
       is_app_admin: readBool(row.is_app_admin, row.IsAppAdmin),
     })),

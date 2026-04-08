@@ -3,6 +3,7 @@ import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/Button"
 import { useAuth } from "@/context/AuthContext"
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 
 const navItems = [
   { name: "微信客服中心", path: "/main/cs-center", icon: MessageSquare },
@@ -26,6 +27,10 @@ export default function MainLayout() {
     await auth.logout()
     window.location.assign("/login")
   }
+
+  const departmentNames = (auth.user?.departments || [])
+    .map((item) => (item.name || "").trim())
+    .filter(Boolean)
 
   return (
     <div className="flex h-screen w-full bg-[#F0F2F5]">
@@ -61,10 +66,21 @@ export default function MainLayout() {
         </nav>
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-gray-200" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-[11px] font-semibold text-gray-500">
+              {auth.user?.userid?.slice(0, 1).toUpperCase() || "U"}
+            </div>
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-gray-900">{auth.user?.displayName || auth.user?.name || "成员"}</span>
-              <span className="text-xs text-gray-500">{auth.user?.userid || "-"}</span>
+              <WecomOpenDataName
+                userid={auth.user?.userid || ""}
+                corpId={auth.corp?.id}
+                fallback={auth.user?.userid || "成员"}
+                className="truncate text-sm font-medium text-gray-900"
+                hintClassName="text-[10px] text-gray-400"
+              />
+              <span className="text-xs text-gray-500">
+                {auth.user?.userid || "-"}
+                {departmentNames.length > 0 ? ` · ${departmentNames.join(" / ")}` : ""}
+              </span>
             </div>
           </div>
         </div>
@@ -78,6 +94,7 @@ export default function MainLayout() {
           </h1>
           <div className="flex items-center gap-4">
             {auth.corp?.id ? <span className="text-xs text-gray-500">{auth.corp.name || auth.corp.id}</span> : null}
+            {departmentNames.length > 0 ? <span className="text-xs text-gray-500">部门：{departmentNames.join(" / ")}</span> : null}
             <Link to="/" className="text-sm text-blue-600 hover:underline">返回导航页</Link>
             <Button size="sm" variant="outline" onClick={() => void handleLogout()}>
               <LogOut className="mr-1 h-3.5 w-3.5" />

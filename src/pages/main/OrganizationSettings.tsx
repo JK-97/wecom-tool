@@ -18,6 +18,7 @@ import {
   type OrganizationSettingsView,
 } from "@/services/organizationSettingsService"
 import { checkMainWebviewJSSDKRuntime } from "@/services/jssdkService"
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 
 const ROLE_OPTIONS = [
   { key: "super_admin", label: "超级管理员" },
@@ -234,6 +235,16 @@ export default function OrganizationSettings() {
       })
       const message = await executeOrganizationSettingsCommand("update_org_sync", payload)
       setNotice(message || "组织同步配置已更新")
+      await loadView()
+    } catch (error) {
+      setNotice(normalizeErrorMessage(error))
+    }
+  }
+
+  const syncOrgDirectory = async () => {
+    try {
+      const message = await executeOrganizationSettingsCommand("sync_org_directory")
+      setNotice(message || "组织目录同步已开始")
       await loadView()
     } catch (error) {
       setNotice(normalizeErrorMessage(error))
@@ -751,7 +762,7 @@ export default function OrganizationSettings() {
                 </div>
                 <Button
                   className="bg-blue-600 hover:bg-blue-700 shadow-sm"
-                  onClick={() => void updateOrgSync(Boolean(orgSync?.auto_sync_enabled), (orgSync?.sync_scope || "all").trim() || "all")}
+                  onClick={() => void syncOrgDirectory()}
                 >
                   <RefreshCw className="w-4 h-4 mr-2" /> 立即手动同步
                 </Button>
@@ -799,7 +810,32 @@ export default function OrganizationSettings() {
                         )
                       })}
                     </div>
-                    <div className="text-xs text-gray-500">同步间隔：{(orgSync?.sync_interval || "-").trim() || "-"}，最近同步：{formatDateTime((orgSync?.last_sync_at || "").trim())}</div>
+                    <div className="grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 md:grid-cols-4">
+                      <div>
+                        <div className="text-[10px] text-gray-500">最近同步状态</div>
+                        <div className="text-xs font-semibold text-gray-800">{(orgSync?.last_sync_status || "idle").trim() || "idle"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-gray-500">部门数量</div>
+                        <div className="text-xs font-semibold text-gray-800">{Number(orgSync?.department_count || 0).toLocaleString("zh-CN")}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-gray-500">成员数量</div>
+                        <div className="text-xs font-semibold text-gray-800">{Number(orgSync?.member_count || 0).toLocaleString("zh-CN")}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-gray-500">最近同步时间</div>
+                        <div className="text-xs font-semibold text-gray-800">{formatDateTime((orgSync?.last_sync_at || "").trim())}</div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      同步间隔：{(orgSync?.sync_interval || "-").trim() || "-"}。姓名、头像等通讯录展示字段未来需要由企业微信 open-data 组件承接，当前后端仅保证组织结构与可可靠获取字段。
+                    </div>
+                    {(orgSync?.last_sync_error || "").trim() ? (
+                      <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                        最近同步错误：{(orgSync?.last_sync_error || "").trim()}
+                      </div>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
@@ -861,6 +897,9 @@ export default function OrganizationSettings() {
                   <CardTitle className="text-sm font-bold text-gray-900">成员与角色绑定</CardTitle>
                 </CardHeader>
                 <CardContent className="p-5 space-y-3">
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] leading-relaxed text-blue-700">
+                    成员真实姓名展示优先由企业微信 open-data 组件承接；若当前浏览器未满足企业微信内打开或管理后台同域跳转条件，将回退显示 userid。
+                  </div>
                   {(view?.members || []).map((member) => {
                     const userID = (member.userid || "").trim()
                     if (!userID) return null
@@ -869,7 +908,13 @@ export default function OrganizationSettings() {
                     return (
                       <div key={userID} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-gray-900 truncate">{(member.display_name || userID).trim()}</div>
+                          <WecomOpenDataName
+                            userid={userID}
+                            corpId={view?.integration?.corp_id}
+                            fallback={userID}
+                            className="block truncate text-xs font-bold text-gray-900"
+                            hintClassName="text-[10px] text-gray-400"
+                          />
                           <div className="text-[10px] text-gray-500">{userID}{isAppAdmin ? " · 企微应用管理员（角色锁定）" : ""}</div>
                         </div>
                         <div className="flex items-center gap-2">

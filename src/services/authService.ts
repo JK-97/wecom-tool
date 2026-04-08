@@ -4,14 +4,15 @@ export type SessionUser = {
   userid: string
   openUserID: string
   corpID: string
-  name: string
-  displayName: string
-  wecomName: string
-  avatar: string
-  avatarURL: string
   role: string
   isAppAdmin: boolean
   teamIDs: string[]
+  departments: Array<{
+    departmentID: number
+    name: string
+    parentID: number
+    order: number
+  }>
 }
 
 export type SessionCorp = {
@@ -100,14 +101,23 @@ function mapSessionUser(raw?: Record<string, unknown>): SessionUser | null {
     userid: userID,
     openUserID: readString(raw.open_userid),
     corpID: readString(raw.corp_id),
-    name: readString(raw.name),
-    displayName: readString(raw.display_name),
-    wecomName: readString(raw.wecom_name),
-    avatar: readString(raw.avatar),
-    avatarURL: readString(raw.avatar_url),
     role: readString(raw.role),
     isAppAdmin: raw.is_app_admin === true,
     teamIDs: Array.isArray(raw.team_ids) ? raw.team_ids.map((item) => readString(item)).filter(Boolean) : [],
+    departments: Array.isArray(raw.departments)
+      ? raw.departments
+          .map((item) => {
+            const row = item && typeof item === "object" ? (item as Record<string, unknown>) : null
+            if (!row) return null
+            return {
+              departmentID: readNumber(row.department_id),
+              name: readString(row.name),
+              parentID: readNumber(row.parent_id),
+              order: readNumber(row.order),
+            }
+          })
+          .filter((item): item is NonNullable<typeof item> => Boolean(item) && item.departmentID > 0)
+      : [],
   }
 }
 
@@ -127,4 +137,8 @@ function mapSessionCorp(raw?: Record<string, unknown>): SessionCorp | null {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function readNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
