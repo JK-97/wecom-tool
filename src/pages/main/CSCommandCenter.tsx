@@ -270,15 +270,13 @@ export default function CSCommandCenter() {
   };
 
   const activeMonitor = detail?.monitor || view?.monitor;
-  const monitorMood = (
-    activeMonitor?.emotion?.label ||
-    activeMonitor?.mood ||
-    "neutral"
-  )
-    .trim()
-    .toLowerCase();
-  const monitorEmoji =
-    monitorMood === "stable" ? "🙂" : monitorMood === "neutral" ? "😐" : "😠";
+  const emotionCode = normalizeEmotionCode(
+    activeMonitor?.emotion?.code || activeMonitor?.mood || "neutral",
+  );
+  const emotionPresentation = getEmotionPresentation(
+    emotionCode,
+    activeMonitor?.emotion?.score || 0,
+  );
   const analysisStatus = (activeMonitor?.meta?.status || "idle")
     .trim()
     .toLowerCase();
@@ -647,19 +645,15 @@ export default function CSCommandCenter() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-2xl">{monitorEmoji}</span>
+                    <span className="text-2xl">{emotionPresentation.emoji}</span>
                     <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div
-                        className={`h-full ${monitorMood === "stable" ? "bg-green-500 w-[35%]" : monitorMood === "neutral" ? "bg-yellow-500 w-[55%]" : monitorMood === "positive" ? "bg-green-500 w-[30%]" : "bg-orange-500 w-[70%]"}`}
+                        className={`h-full ${emotionPresentation.barClass}`}
+                        style={{ width: `${emotionPresentation.width}%` }}
                       />
                     </div>
-                    <span className="text-xs font-medium text-orange-600">
-                      {activeMonitor?.emotion?.label?.trim() ||
-                        (monitorMood === "stable"
-                          ? "稳定"
-                          : monitorMood === "neutral"
-                            ? "中性"
-                            : "焦急")}
+                    <span className={`text-xs font-medium ${emotionPresentation.textClass}`}>
+                      {activeMonitor?.emotion?.label?.trim() || "中性"}
                     </span>
                   </div>
                   {activeMonitor?.emotion?.reason ? (
@@ -927,6 +921,82 @@ export default function CSCommandCenter() {
       </Dialog>
     </div>
   );
+}
+
+function normalizeEmotionCode(value?: string):
+  | "stable"
+  | "neutral"
+  | "positive"
+  | "anxious"
+  | "angry"
+  | "negative" {
+  const normalized = (value || "").trim().toLowerCase();
+  switch (normalized) {
+    case "stable":
+    case "neutral":
+    case "positive":
+    case "anxious":
+    case "angry":
+    case "negative":
+      return normalized;
+    default:
+      return "neutral";
+  }
+}
+
+function getEmotionPresentation(
+  code: ReturnType<typeof normalizeEmotionCode>,
+  score: number,
+) {
+  const clampedScore = Number.isFinite(score)
+    ? Math.max(0, Math.min(1, score))
+    : 0;
+  const baseWidth = Math.round(clampedScore * 100);
+  switch (code) {
+    case "stable":
+      return {
+        emoji: "🙂",
+        textClass: "text-emerald-600",
+        barClass: "bg-emerald-500",
+        width: Math.max(baseWidth, 28),
+      };
+    case "positive":
+      return {
+        emoji: "😊",
+        textClass: "text-green-600",
+        barClass: "bg-green-500",
+        width: Math.max(baseWidth, 36),
+      };
+    case "anxious":
+      return {
+        emoji: "😟",
+        textClass: "text-amber-600",
+        barClass: "bg-amber-500",
+        width: Math.max(baseWidth, 58),
+      };
+    case "angry":
+      return {
+        emoji: "😠",
+        textClass: "text-red-600",
+        barClass: "bg-red-500",
+        width: Math.max(baseWidth, 72),
+      };
+    case "negative":
+      return {
+        emoji: "☹️",
+        textClass: "text-orange-600",
+        barClass: "bg-orange-500",
+        width: Math.max(baseWidth, 64),
+      };
+    case "neutral":
+    default:
+      return {
+        emoji: "😐",
+        textClass: "text-slate-600",
+        barClass: "bg-slate-400",
+        width: Math.max(baseWidth, 46),
+      };
+  }
 }
 
 function compareCommandCenterMessages(

@@ -36,6 +36,7 @@ export type CommandCenterViewModel = {
     summary?: string;
     compliance_pass?: boolean;
     emotion?: {
+      code?: string;
       label?: string;
       score?: number;
       risk_level?: string;
