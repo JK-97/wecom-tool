@@ -968,6 +968,7 @@ export default function ReceptionChannels() {
   const isValidChannelDisplayName = (value: string, openKFID: string) => {
     const trimmed = value.trim();
     if (!trimmed) return false;
+    if (trimmed === "未命名客服渠道") return false;
     if (openKFID && trimmed === openKFID) return false;
     if (openKFID && trimmed === `渠道 ${openKFID}`) return false;
     if (/^[A-Za-z0-9_:-]+$/.test(trimmed)) return false;
