@@ -310,6 +310,12 @@ async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle>
     throw new JSSDKRuntimeError("register_failed", "签名接口返回字段不完整。", data)
   }
 
+  logJSSDKDiagnostic("signature_bundle_loaded", {
+    url: normalizedURL,
+    corp_id: bundle.corp_id,
+    suite_id: bundle.suite_id,
+    agent_id: bundle.agent_id,
+  })
   signatureCache.set(cacheKey, bundle)
   return bundle
 }
@@ -351,6 +357,12 @@ async function registerWithJSSDK(pageURL: string): Promise<void> {
     },
   }
 
+  logJSSDKDiagnostic("register_options_ready", {
+    corp_id: seedBundle.corp_id,
+    suite_id: seedBundle.suite_id,
+    agent_id: fixedAgentID,
+    js_api_list: [...REGISTER_JS_API_LIST],
+  })
   ww.register(registerOptions)
   if (typeof ww.ensureConfigReady === "function") {
     await ww.ensureConfigReady()
