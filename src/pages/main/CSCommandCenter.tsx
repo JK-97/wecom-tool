@@ -21,20 +21,50 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import {
-  executeCSCommandCenterCommand,
   getCSCommandCenterSessionDetail,
   getCSCommandCenterView,
+  transitionKFServiceState,
   type CommandCenterMessage,
   type CommandCenterSession,
   type CommandCenterSessionDetail,
   type CommandCenterViewModel,
 } from "@/services/commandCenterService";
+import { getOrganizationSettingsView, type OrganizationSettingsView } from "@/services/organizationSettingsService";
+import { listKFServicerAssignments, type KFServicerAssignment } from "@/services/receptionService";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 
 type SessionTab = "queue" | "active" | "closed";
 const COMMAND_CENTER_POLL_INTERVAL_MS = 5000;
+type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
+
+type SessionActionDescriptor = {
+  key: ActionKey;
+  label: string;
+  description: string;
+  tone: "primary" | "secondary" | "danger";
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
+type SessionActionPanel = {
+  title: string;
+  description: string;
+  primaryAction: SessionActionDescriptor | null;
+  secondaryActions: SessionActionDescriptor[];
+  emptyHint?: string;
+};
+
+type TransferCandidate = {
+  servicerUserID: string;
+  userid: string;
+  openUserID: string;
+  role: string;
+  searchText: string;
+  fallbackName: string;
+};
 
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
   const bucket = (session.state_bucket || "").trim().toLowerCase();
@@ -49,6 +79,7 @@ function resolveSessionBucket(session: CommandCenterSession): SessionTab {
 
 export default function CSCommandCenter() {
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [isEndModalOpen, setIsEndModalOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false);
@@ -60,14 +91,16 @@ export default function CSCommandCenter() {
   const [keyword, setKeyword] = useState("");
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [orgView, setOrgView] = useState<OrganizationSettingsView | null>(null);
+  const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
+  const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
+  const [transferSearch, setTransferSearch] = useState("");
+  const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
   const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
   const [upgradeTask, setUpgradeTask] = useState("");
   const [upgradeStars, setUpgradeStars] = useState(4);
-
-  const [transferTarget, setTransferTarget] = useState("");
-  const [transferReason, setTransferReason] = useState("");
 
   const queryOpenKFID = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -150,6 +183,23 @@ export default function CSCommandCenter() {
   }, [queryOpenKFID, selectedExternalUserID]);
 
   useEffect(() => {
+    let alive = true;
+    if (orgView) return;
+    void getOrganizationSettingsView()
+      .then((data) => {
+        if (!alive) return;
+        setOrgView(data);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setOrgView(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orgView]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
@@ -166,10 +216,75 @@ export default function CSCommandCenter() {
     if (sessions.length === 0) return null;
     const found = sessions.find(
       (item) =>
-        (item.external_userid || "").trim() === selectedExternalUserID.trim(),
+      (item.external_userid || "").trim() === selectedExternalUserID.trim(),
     );
     return found || sessions[0];
   }, [selectedExternalUserID, sessions]);
+
+  useEffect(() => {
+    const openKFID = (selectedSession?.open_kfid || "").trim();
+    if (!openKFID) {
+      setTransferCandidates([]);
+      setSelectedTransferServicerID("");
+      return;
+    }
+    let alive = true;
+    if (isTransferModalOpen) {
+      setIsLoadingTransferCandidates(true);
+    }
+    void Promise.all([
+      orgView ? Promise.resolve(orgView) : getOrganizationSettingsView(),
+      listKFServicerAssignments(openKFID),
+    ])
+      .then(([organization, assignments]) => {
+        if (!alive) return;
+        if (!orgView) {
+          setOrgView(organization);
+        }
+        const nextCandidates = buildTransferCandidates(assignments, organization);
+        setTransferCandidates(nextCandidates);
+        setSelectedTransferServicerID((prev) => {
+          if (prev && nextCandidates.some((item) => item.servicerUserID === prev)) {
+            return prev;
+          }
+          return nextCandidates[0]?.servicerUserID || "";
+        });
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setTransferCandidates([]);
+        setSelectedTransferServicerID("");
+        setNotice(normalizeErrorMessage(error));
+      })
+      .finally(() => {
+        if (!alive) return;
+        setIsLoadingTransferCandidates(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isTransferModalOpen, orgView, selectedSession?.open_kfid]);
+
+  const transferCandidatesFiltered = useMemo(() => {
+    const query = transferSearch.trim().toLowerCase();
+    if (!query) return transferCandidates;
+    return transferCandidates.filter((item) => item.searchText.includes(query));
+  }, [transferCandidates, transferSearch]);
+
+  const actionPanel = useMemo(() => {
+    if (!selectedSession) {
+      return {
+        title: "尚未选择会话",
+        description: "请先从左侧选择一个客户会话，再执行人工流转操作。",
+        primaryAction: null,
+        secondaryActions: [],
+      } satisfies SessionActionPanel;
+    }
+    const state = Number(selectedSession.session_state || 0);
+    return buildSessionActionPanel(state, transferCandidates.length);
+  }, [selectedSession?.session_state, transferCandidates.length]);
+
+  const poolCandidateCount = transferCandidates.length;
 
   const filteredSessions = useMemo(() => {
     const q = keyword.trim().toLowerCase();
@@ -213,23 +328,30 @@ export default function CSCommandCenter() {
     [sessions],
   );
 
-  const runCSCommand = async (
-    command: string,
-    payload?: Record<string, unknown>,
-  ) => {
+  const runRealSessionTransition = async (input: {
+    serviceState: 2 | 3 | 4;
+    servicerUserID?: string;
+    successMessage: string;
+  }) => {
+    if (!selectedSession?.open_kfid || !selectedSession?.external_userid) {
+      setNotice("未选择有效会话");
+      return false;
+    }
     try {
       setIsSubmitting(true);
-      const result = await executeCSCommandCenterCommand({
-        command,
-        open_kfid: selectedSession?.open_kfid,
-        external_userid: selectedSession?.external_userid,
-        payload,
+      await transitionKFServiceState({
+        open_kfid: selectedSession.open_kfid,
+        external_userid: selectedSession.external_userid,
+        service_state: input.serviceState,
+        servicer_userid: input.servicerUserID,
       });
-      setNotice((result?.message || "命令已提交").trim());
+      setNotice(input.successMessage);
       await loadView();
-      await loadDetail(selectedSession?.external_userid || "");
+      await loadDetail(selectedSession.external_userid || "");
+      return true;
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      setNotice(describeSessionActionError(error));
+      return false;
     } finally {
       setIsSubmitting(false);
     }
@@ -266,6 +388,26 @@ export default function CSCommandCenter() {
       setNotice(normalizeErrorMessage(error));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleActionClick = async (action: SessionActionDescriptor) => {
+    switch (action.key) {
+      case "send_to_queue": {
+        setIsQueueModalOpen(true);
+        return;
+      }
+      case "transfer_to_human": {
+        setTransferSearch("");
+        setIsTransferModalOpen(true);
+        return;
+      }
+      case "end_session": {
+        setIsEndModalOpen(true);
+        return;
+      }
+      default:
+        return;
     }
   };
 
@@ -438,31 +580,16 @@ export default function CSCommandCenter() {
                 接待人：{(selectedSession?.assigned_userid || "待分配").trim()}
               </span>
             </div>
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-blue-600 border-blue-200 hover:bg-blue-50"
-                onClick={() => setIsUpgradeModalOpen(true)}
-              >
-                <UserPlus className="w-4 h-4 mr-2" /> 升级为客户联系
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-                onClick={() => setIsTransferModalOpen(true)}
-              >
-                <UserX className="w-4 h-4 mr-2" /> 强制转交
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-gray-600 hover:bg-gray-100"
-                onClick={() => setIsEndModalOpen(true)}
-              >
-                强制结束
-              </Button>
+            <div className="text-right">
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-gray-400">
+                当前操作状态
+              </div>
+              <div className="mt-1 text-sm font-medium text-gray-900">
+                {actionPanel.title}
+              </div>
+              <div className="mt-1 text-xs text-gray-500">
+                {actionPanel.description}
+              </div>
             </div>
           </div>
 
@@ -565,6 +692,63 @@ export default function CSCommandCenter() {
           </div>
 
           <div className="w-[300px] border-l border-gray-200 bg-white p-5 overflow-y-auto space-y-6">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <UserX className="w-4 h-4 text-blue-600" /> 会话操作
+              </h4>
+              <div className="rounded-lg border border-gray-100 bg-gray-50 p-4 space-y-4">
+                <div className="space-y-1">
+                  <div className="text-xs text-gray-500">当前状态</div>
+                  <div className="text-sm font-medium text-gray-900">
+                    {actionPanel.title}
+                  </div>
+                  <div className="text-xs leading-relaxed text-gray-500">
+                    {actionPanel.description}
+                  </div>
+                </div>
+
+                {actionPanel.emptyHint ? (
+                  <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+                    {actionPanel.emptyHint}
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  {actionPanel.primaryAction ? (
+                    <Button
+                      className={resolveActionButtonClassName(actionPanel.primaryAction)}
+                      disabled={isSubmitting || actionPanel.primaryAction.disabled}
+                      onClick={() => void handleActionClick(actionPanel.primaryAction!)}
+                    >
+                      {actionPanel.primaryAction.label}
+                    </Button>
+                  ) : null}
+
+                  {actionPanel.secondaryActions.length > 0 ? (
+                    <div className="grid gap-2">
+                      {actionPanel.secondaryActions.map((action) => (
+                        <Button
+                          key={action.key}
+                          variant="outline"
+                          className={resolveActionButtonClassName(action)}
+                          disabled={isSubmitting || action.disabled}
+                          onClick={() => void handleActionClick(action)}
+                        >
+                          {action.label}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                {readActionDisabledMessage(actionPanel) ? (
+                  <div className="text-[11px] leading-relaxed text-gray-500">
+                    {readActionDisabledMessage(actionPanel)}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
             <div>
               <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <GitBranch className="w-4 h-4 text-blue-600" /> 路由信息
@@ -834,55 +1018,133 @@ export default function CSCommandCenter() {
       <Dialog
         isOpen={isTransferModalOpen}
         onClose={() => setIsTransferModalOpen(false)}
-        title="强制转交会话"
-        className="max-w-[480px]"
+        title="转给指定人工"
+        className="max-w-[640px]"
         footer={
           <>
             <Button
               variant="outline"
-              onClick={() => setIsTransferModalOpen(false)}
+              onClick={() => {
+                setIsTransferModalOpen(false);
+                setTransferSearch("");
+              }}
             >
               取消
             </Button>
             <Button
               className="bg-blue-600"
-              disabled={isSubmitting}
+              disabled={isSubmitting || !selectedTransferServicerID}
               onClick={async () => {
-                await runCSCommand("cs_transfer_session", {
-                  assigned_userid: transferTarget,
-                  reason: transferReason,
+                const succeeded = await runRealSessionTransition({
+                  serviceState: 3,
+                  servicerUserID: selectedTransferServicerID,
+                  successMessage: "会话已转给指定人工。",
                 });
-                setIsTransferModalOpen(false);
-                setTransferTarget("");
-                setTransferReason("");
+                if (succeeded) {
+                  setIsTransferModalOpen(false);
+                  setTransferSearch("");
+                }
               }}
             >
-              确认转交
+              确认转给该人工
             </Button>
           </>
         }
       >
         <div className="space-y-4">
+          <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-xs leading-relaxed text-blue-800">
+            只能从当前接待池中选择一个人工接待人员。确认后会发起企业微信真实转接，不再使用本地投影命令。
+          </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">转交给</label>
+            <label className="text-sm font-medium text-gray-700">选择接待人员</label>
             <input
               type="text"
-              value={transferTarget}
-              onChange={(event) => setTransferTarget(event.target.value)}
-              placeholder="输入客服人员或技能组"
+              value={transferSearch}
+              onChange={(event) => setTransferSearch(event.target.value)}
+              placeholder="搜索当前接待池中的人工"
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">
-              转交原因
-            </label>
-            <Textarea
-              className="text-sm min-h-[80px]"
-              value={transferReason}
-              onChange={(event) => setTransferReason(event.target.value)}
-              placeholder="请输入转交原因"
-            />
+          <div className="rounded-lg border border-gray-200 bg-white">
+            <div className="border-b border-gray-100 px-3 py-2 text-xs text-gray-500">
+              {isLoadingTransferCandidates
+                ? "正在加载当前接待池内的人工..."
+                : `当前可转接人工 ${poolCandidateCount} 人`}
+            </div>
+            <div className="max-h-[320px] overflow-y-auto">
+              {isLoadingTransferCandidates ? (
+                <div className="px-4 py-10 text-sm text-gray-500">正在加载可选接待人员...</div>
+              ) : transferCandidatesFiltered.length === 0 ? (
+                <div className="px-4 py-10 text-sm text-gray-500">
+                  {poolCandidateCount > 0 ? "没有匹配的接待人员" : "当前接待池没有可转接人工"}
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {transferCandidatesFiltered.map((candidate) => {
+                    const selected = candidate.servicerUserID === selectedTransferServicerID;
+                    return (
+                      <button
+                        key={candidate.servicerUserID}
+                        type="button"
+                        className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors ${selected ? "bg-blue-50" : "hover:bg-gray-50"}`}
+                        onClick={() => setSelectedTransferServicerID(candidate.servicerUserID)}
+                      >
+                        <div className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"}`} />
+                        <div className="min-w-0 flex-1">
+                          <WecomOpenDataName
+                            userid={candidate.openUserID || candidate.servicerUserID || candidate.userid}
+                            corpId={(orgView?.integration?.corp_id || "").trim()}
+                            fallback={candidate.fallbackName}
+                            className="truncate text-sm font-medium text-gray-900"
+                          />
+                          <div className="mt-1 text-xs text-gray-500">
+                            {(candidate.role || "接待池成员").trim()}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={isQueueModalOpen}
+        onClose={() => setIsQueueModalOpen(false)}
+        title="送入待接入池"
+        className="max-w-[420px]"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setIsQueueModalOpen(false)}>
+              取消
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={isSubmitting}
+              onClick={async () => {
+                const succeeded = await runRealSessionTransition({
+                  serviceState: 2,
+                  successMessage: "会话已送入待接入池。",
+                });
+                if (succeeded) {
+                  setIsQueueModalOpen(false);
+                }
+              }}
+            >
+              确认送入待接入池
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm leading-relaxed text-gray-600">
+            该操作会把当前会话送入企业微信待接入池，等待人工继续接入。
+          </p>
+          <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-3 text-xs leading-relaxed text-amber-700">
+            适用于当前需要人工接入，但暂时不指定具体接待人员的场景。
           </div>
         </div>
       </Dialog>
@@ -893,7 +1155,7 @@ export default function CSCommandCenter() {
         title={
           <div className="flex items-center gap-2 text-red-600">
             <AlertTriangle className="w-5 h-5" />
-            强制结束会话
+            结束会话
           </div>
         }
         className="max-w-[400px]"
@@ -906,17 +1168,22 @@ export default function CSCommandCenter() {
               className="bg-red-600 hover:bg-red-700 text-white"
               disabled={isSubmitting}
               onClick={async () => {
-                await runCSCommand("cs_end_session", {});
-                setIsEndModalOpen(false);
+                const succeeded = await runRealSessionTransition({
+                  serviceState: 4,
+                  successMessage: "会话已结束。",
+                });
+                if (succeeded) {
+                  setIsEndModalOpen(false);
+                }
               }}
             >
-              强制结束
+              确认结束会话
             </Button>
           </>
         }
       >
         <p className="text-sm text-gray-600">
-          强制结束会话将中断当前客服接待。请确认是否继续？
+          该操作会执行企业微信真实结束会话动作。结束后当前会话不会继续处于人工接待中。
         </p>
       </Dialog>
     </div>
@@ -942,6 +1209,156 @@ function normalizeEmotionCode(value?: string):
     default:
       return "neutral";
   }
+}
+
+function buildTransferCandidates(
+  assignments: KFServicerAssignment[],
+  orgView: OrganizationSettingsView | null,
+): TransferCandidate[] {
+  const aliasToMember = new Map<
+    string,
+    NonNullable<OrganizationSettingsView["members"]>[number]
+  >();
+  for (const member of orgView?.members || []) {
+    const userid = (member.userid || "").trim();
+    const openUserID = (member.open_userid || "").trim();
+    if (userid) aliasToMember.set(userid, member);
+    if (openUserID) aliasToMember.set(openUserID, member);
+  }
+
+  const deduped = new Map<string, TransferCandidate>();
+  for (const assignment of assignments || []) {
+    const servicerUserID = (assignment.userid || "").trim();
+    if (!servicerUserID) continue;
+    const member = aliasToMember.get(servicerUserID);
+    const userid = (member?.userid || "").trim();
+    const openUserID = (member?.open_userid || "").trim();
+    const role = (member?.role || "").trim();
+    const fallbackName = userid || openUserID || servicerUserID;
+    const searchText = `${fallbackName} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
+    deduped.set(servicerUserID, {
+      servicerUserID,
+      userid,
+      openUserID,
+      role,
+      fallbackName,
+      searchText,
+    });
+  }
+  return Array.from(deduped.values()).sort((left, right) =>
+    left.fallbackName.localeCompare(right.fallbackName, "zh-CN"),
+  );
+}
+
+function buildSessionActionPanel(
+  sessionState: number,
+  poolCandidateCount: number,
+): SessionActionPanel {
+  const hasHumanCandidates = poolCandidateCount > 0;
+  const transferAction: SessionActionDescriptor = {
+    key: "transfer_to_human",
+    label: "转给指定人工",
+    description: "从当前接待池中选择一个人工接待人员",
+    tone: "primary",
+    disabled: !hasHumanCandidates,
+    disabledReason: hasHumanCandidates ? "" : "当前接待池没有可转接人工",
+  };
+  const queueAction: SessionActionDescriptor = {
+    key: "send_to_queue",
+    label: "送入待接入池",
+    description: "送回企业微信待接入池，等待人工继续接入",
+    tone: "secondary",
+  };
+  const endAction: SessionActionDescriptor = {
+    key: "end_session",
+    label: "结束会话",
+    description: "结束当前会话，不再继续人工接待",
+    tone: "danger",
+  };
+
+  switch (sessionState) {
+    case 0:
+      return {
+        title: "当前会话尚未进入人工处理",
+        description: "可以先送入待接入池，也可以直接转给当前接待池中的人工。",
+        primaryAction: queueAction,
+        secondaryActions: [transferAction],
+        emptyHint: hasHumanCandidates
+          ? ""
+          : "当前接待池没有可选人工，建议先送入待接入池。",
+      };
+    case 1:
+      return {
+        title: "当前由智能助手接待",
+        description: "需要人工介入时，可直接转给指定人工，或先送入待接入池。",
+        primaryAction: transferAction,
+        secondaryActions: [queueAction],
+        emptyHint: hasHumanCandidates
+          ? ""
+          : "当前接待池没有可选人工，只能先送入待接入池。",
+      };
+    case 2:
+      return {
+        title: "当前在待接入池排队中",
+        description: "可从当前接待池中指定人工，立即转入人工接待。",
+        primaryAction: transferAction,
+        secondaryActions: [],
+        emptyHint: hasHumanCandidates ? "" : "当前接待池没有可转接人工。",
+      };
+    case 3:
+      return {
+        title: "当前由人工接待",
+        description: "可继续转给其他人工，或送回待接入池、直接结束会话。",
+        primaryAction: transferAction,
+        secondaryActions: [queueAction, endAction],
+        emptyHint: hasHumanCandidates ? "" : "当前接待池没有其他可转接人工。",
+      };
+    case 4:
+      return {
+        title: "当前会话已结束",
+        description: "已结束会话不再提供后台流转动作。如需重新接入，请在企业微信客户端中执行。",
+        primaryAction: null,
+        secondaryActions: [],
+      };
+    default:
+      return {
+        title: "当前会话状态未识别",
+        description: "建议先等待状态同步完成，再执行人工流转操作。",
+        primaryAction: null,
+        secondaryActions: [],
+      };
+  }
+}
+
+function resolveActionButtonClassName(action: SessionActionDescriptor): string {
+  if (action.tone === "primary") {
+    return "w-full bg-blue-600 text-white hover:bg-blue-700";
+  }
+  if (action.tone === "danger") {
+    return "w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700";
+  }
+  return "w-full border-gray-200 text-gray-700 hover:bg-gray-100";
+}
+
+function readActionDisabledMessage(panel: SessionActionPanel): string {
+  if (panel.primaryAction?.disabledReason) return panel.primaryAction.disabledReason;
+  const disabledSecondary = panel.secondaryActions.find((item) => item.disabledReason);
+  return disabledSecondary?.disabledReason || "";
+}
+
+function describeSessionActionError(error: unknown): string {
+  const message = normalizeErrorMessage(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("60011")) {
+    return "企业微信暂不允许执行该流转，请先确认当前接待池、会话状态和目标接待人员。";
+  }
+  if (lower.includes("servicer_userid")) {
+    return "当前转接缺少有效接待人员，请重新选择接待池中的人工。";
+  }
+  if (lower.includes("service state")) {
+    return "当前会话状态暂不支持该操作，请稍后刷新后重试。";
+  }
+  return message;
 }
 
 function getEmotionPresentation(

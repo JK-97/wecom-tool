@@ -66,6 +66,11 @@ export type ReceptionChannelDetail = {
     system_queue_state?: string;
     fallback_mode?: string;
     pending_human_target_display?: string;
+    routing_state?: string;
+    execution_status?: string;
+    waiting_human_accept?: boolean;
+    effective_human_target_display?: string;
+    state_hint?: string;
   };
   route_bindings?: Array<{
     rule_id?: number;

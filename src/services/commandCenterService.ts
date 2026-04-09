@@ -4,6 +4,7 @@ type APIReply<T> = {
   code?: number;
   message?: string;
   data?: T;
+  request_id?: string;
 };
 
 export type CommandCenterSession = {
@@ -99,6 +100,14 @@ export type CommandCenterCommandResult = {
   message?: string;
 };
 
+export type KFServiceStateTransitionResult = {
+  message?: string;
+  request_id?: string;
+  data?: {
+    transfer_id?: string;
+  };
+};
+
 export async function getCSCommandCenterView(params?: {
   open_kfid?: string;
   limit?: number;
@@ -149,4 +158,29 @@ export async function executeCSCommandCenterCommand(input: {
     },
   );
   return payload?.data || null;
+}
+
+export async function transitionKFServiceState(input: {
+  open_kfid?: string;
+  external_userid?: string;
+  service_state: number;
+  servicer_userid?: string;
+}): Promise<KFServiceStateTransitionResult | null> {
+  const payload = await requestJSON<APIReply<{ transfer_id?: string }>>(
+    "/api/v1/kf/service-state/trans",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        open_kfid: input.open_kfid || "",
+        external_userid: input.external_userid || "",
+        service_state: input.service_state,
+        servicer_userid: input.servicer_userid || "",
+      }),
+    },
+  );
+  return {
+    message: payload?.message,
+    request_id: payload?.request_id,
+    data: payload?.data,
+  };
 }

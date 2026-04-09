@@ -1919,6 +1919,18 @@ export default function ReceptionChannels() {
                     {(stateLayers?.system_queue_state || "未启用").trim() || "未启用"}
                   </div>
                 </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">当前路由状态</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {(stateLayers?.routing_state || "尚无最近路由决策").trim()}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">最近一次执行</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {(stateLayers?.execution_status || "暂无执行记录").trim()}
+                  </div>
+                </div>
               </div>
               <div className="rounded border border-gray-200 bg-white px-3 py-3 space-y-2 text-xs text-gray-700">
                 <div className="flex items-center justify-between gap-3">
@@ -1943,9 +1955,33 @@ export default function ReceptionChannels() {
                     "待通过会话状态接口与事件回调回写"}
                 </div>
                 <div>
+                  系统内路由状态：
+                  {(stateLayers?.routing_state || "尚无最近路由决策").trim()}
+                </div>
+                <div>
                   当前兜底模式：
                   {fallbackModeLabel(stateLayers?.fallback_mode || fallbackRoute?.mode)}
                 </div>
+                <div>
+                  当前待转人工目标：
+                  {(stateLayers?.pending_human_target_display || formatPoolTargetDisplay()).trim()}
+                </div>
+                {(stateLayers?.effective_human_target_display || "").trim() ? (
+                  <div>
+                    当前人工接待目标：
+                    {(stateLayers?.effective_human_target_display || "").trim()}
+                  </div>
+                ) : null}
+                {stateLayers?.waiting_human_accept ? (
+                  <div className="rounded border border-blue-200 bg-blue-50 px-2 py-2 text-blue-700">
+                    当前会话已进入系统排队，等待人工接入。
+                  </div>
+                ) : null}
+                {(stateLayers?.state_hint || "").trim() ? (
+                  <div className="rounded border border-gray-200 bg-gray-50 px-2 py-2 text-gray-600">
+                    {(stateLayers?.state_hint || "").trim()}
+                  </div>
+                ) : null}
                 {fallbackRoute?.human_target_valid === false &&
                 (fallbackRoute?.invalid_reason || "").trim() ? (
                   <div className="rounded border border-orange-200 bg-orange-50 px-2 py-2 text-orange-700">
