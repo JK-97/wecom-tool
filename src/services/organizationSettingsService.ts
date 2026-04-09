@@ -90,6 +90,7 @@ export type OrganizationSettingsView = {
   }>
   members?: Array<{
     userid?: string
+    open_userid?: string
     role?: string
     is_app_admin?: boolean
     departments?: Array<{
@@ -164,6 +165,7 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
   const integration = asRecord(view.integration)
   const members = readArray(view.members ?? view.Members).map((row) => ({
     userid: readString(row.userid, row.UserID),
+    open_userid: readString(row.open_userid, row.OpenUserid, row.OpenUserID),
     role: readString(row.role, row.Role),
     is_app_admin: readBool(row.is_app_admin, row.IsAppAdmin),
     departments: readArray(row.departments ?? row.Departments).map((department) => ({

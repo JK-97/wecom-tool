@@ -91,6 +91,62 @@ const normalizeSelectionItems = (
   return out;
 };
 
+const selectionItemsFromAssignments = (
+  assignments: Array<{ userid?: string; department_id?: number; status?: number }>,
+  memberUserIDByAlias?: Map<string, string>,
+): DirectorySelectionItem[] =>
+  normalizeSelectionItems([
+    ...assignments
+      .map((item) => {
+        const rawID = (item.userid || "").trim();
+        if (!rawID) return "";
+        return memberUserIDByAlias?.get(rawID) || rawID;
+      })
+      .filter(Boolean)
+      .map((userID) => ({ type: "user" as const, id: userID })),
+    ...assignments
+      .map((item) => Number(item.department_id || 0))
+      .filter((departmentID) => departmentID > 0)
+      .map((departmentID) => ({
+        type: "department" as const,
+        id: String(departmentID),
+      })),
+  ]);
+
+const isSameSelection = (
+  left: DirectorySelectionItem[],
+  right: DirectorySelectionItem[],
+): boolean => {
+  const leftKeys = normalizeSelectionItems(left).map(selectionKey).sort();
+  const rightKeys = normalizeSelectionItems(right).map(selectionKey).sort();
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every((value, index) => value === rightKeys[index]);
+};
+
+const mergeServicerUpsertResponses = (
+  responses: Array<KFServicerUpsertResponse | null>,
+): KFServicerUpsertResponse | null => {
+  const rows = responses.filter(Boolean) as KFServicerUpsertResponse[];
+  if (rows.length === 0) return null;
+  const resultList = rows.flatMap((item) => item.result_list || []);
+  const successCount = resultList.filter((item) => item.status === "succeeded").length;
+  const failureCount = resultList.length - successCount;
+  return {
+    summary: {
+      overall_status:
+        successCount > 0 && failureCount > 0
+          ? "partial"
+          : successCount > 0
+            ? "succeeded"
+            : "failed",
+      total_count: resultList.length,
+      success_count: successCount,
+      failure_count: failureCount,
+    },
+    result_list: resultList,
+  };
+};
+
 function DirectoryTreeSelect({
   label,
   placeholder,
@@ -105,7 +161,6 @@ function DirectoryTreeSelect({
   disabled = false,
   emptyText,
 }: DirectoryTreeSelectProps) {
-  const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [expandedDepartments, setExpandedDepartments] = useState<Set<number>>(
     () => new Set(treeRoots.map((item) => Number(item.department.department_id || 0))),
@@ -289,144 +344,219 @@ function DirectoryTreeSelect({
 
   return (
     <div className="space-y-1.5">
-      <label className="text-[11px] font-medium text-gray-700">{label}</label>
-      <div className="relative">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => setIsOpen((prev) => !prev)}
-          className="flex h-10 w-full items-center justify-between rounded-md border border-gray-200 bg-white px-3 text-left text-xs text-gray-700 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
-        >
-          <span className="truncate">
-            {selectedItems.length > 0
-              ? `已选择 ${selectedItems.length} 项`
-              : placeholder}
-          </span>
-          <ChevronDown
-            className={`h-4 w-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
-          />
-        </button>
-        {isOpen ? (
-          <div className="absolute left-0 top-[calc(100%+6px)] z-30 w-[min(1080px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] rounded-lg border border-gray-200 bg-white shadow-lg">
-            <div className="border-b border-gray-100 p-2">
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={searchPlaceholder}
-                className="h-8 w-full rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-0 md:grid-cols-[minmax(0,1.65fr)_340px] xl:grid-cols-[minmax(0,1.8fr)_360px]">
-              <div className="max-h-[32rem] overflow-y-auto p-3">
-                {hasContent ? (
-                  <div className="space-y-1">
-                    {filteredRoots.map((node) => renderDepartment(node, 0))}
-                    {filteredUngroupedUsers.length > 0 ? (
-                      <div className="pt-2">
-                        <div className="px-2 py-1 text-[11px] font-semibold text-gray-500">
-                          未绑定部门成员（少量异常兜底）
-                        </div>
-                        {filteredUngroupedUsers.map((userID) => renderMember(userID, 1))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="px-2 py-3 text-center text-xs text-gray-400">
-                    {emptyText}
-                  </div>
-                )}
-              </div>
-              <div className="border-t border-gray-100 bg-gray-50 p-3 md:max-h-[32rem] md:overflow-y-auto md:border-l md:border-t-0">
-                <div className="mb-2 text-[11px] font-semibold text-gray-600">
-                  已选结果
-                </div>
-                {selectedItems.length > 0 ? (
-                  <div className="space-y-2">
-                    {selectedDepartmentIDs.map((departmentID) => (
-                      <div
-                        key={`selected-department-${departmentID}`}
-                        className="rounded-md border border-blue-100 bg-white px-2 py-1.5 text-xs text-blue-800"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium">
-                            <WecomOpenDataDepartment
-                              departmentId={departmentID}
-                              corpId={corpId}
-                              fallback={
-                                (departmentMap.get(departmentID)?.name || "").trim() ||
-                                `部门 #${departmentID}`
-                              }
-                              className="truncate text-xs font-medium text-blue-800"
-                              hintClassName="text-[10px] text-blue-400"
-                            />
-                          </span>
-                          <button
-                            type="button"
-                            className="text-[11px] text-blue-500 hover:text-blue-700"
-                            onClick={() =>
-                              toggleSelection({
-                                type: "department",
-                                id: String(departmentID),
-                              })
-                            }
-                          >
-                            移除
-                          </button>
-                        </div>
-                        <div className="mt-0.5 text-[10px] text-blue-600">
-                          部门
-                        </div>
-                      </div>
-                    ))}
-                    {selectedUserIDs.map((userID) => (
-                      <div
-                        key={`selected-user-${userID}`}
-                        className="rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <WecomOpenDataName
-                            userid={userID}
-                            corpId={corpId}
-                            fallback={userID}
-                            className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800"
-                            hintClassName="text-[10px] text-gray-400"
-                          />
-                          <button
-                            type="button"
-                            className="text-[11px] text-gray-500 hover:text-gray-700"
-                            onClick={() =>
-                              toggleSelection({ type: "user", id: userID })
-                            }
-                          >
-                            移除
-                          </button>
-                        </div>
-                        <div className="mt-0.5 text-[10px] text-gray-500">
-                          成员
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-dashed border-gray-200 bg-white px-2 py-3 text-center text-[11px] text-gray-400">
-                    暂无已选成员或部门
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center justify-between border-t border-gray-100 px-2 py-2 text-[11px] text-gray-500">
-              <span>已选 {selectedItems.length} 项</span>
-              <button
-                type="button"
-                className="text-blue-600 hover:text-blue-700"
-                onClick={() => setIsOpen(false)}
-              >
-                完成
-              </button>
-            </div>
-          </div>
-        ) : null}
+      <div className="flex items-center justify-between gap-3">
+        <label className="text-[11px] font-medium text-gray-700">{label}</label>
+        <div className="flex items-center gap-2 text-[11px] text-gray-500">
+          <span>{selectedItems.length > 0 ? `已选 ${selectedItems.length} 项` : placeholder}</span>
+          {selectedItems.length > 0 ? (
+            <button
+              type="button"
+              className="text-blue-600 hover:text-blue-700"
+              onClick={() => onChange([])}
+              disabled={disabled}
+            >
+              清空
+            </button>
+          ) : null}
+        </div>
       </div>
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+        <div className="border-b border-gray-100 px-3 py-2">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={searchPlaceholder}
+            disabled={disabled}
+            className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50"
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-0 lg:grid-cols-[minmax(0,1.55fr)_320px]">
+          <div className="min-h-[20rem] max-h-[28rem] overflow-y-auto p-3">
+            {hasContent ? (
+              <div className="space-y-1">
+                {filteredRoots.map((node) => renderDepartment(node, 0))}
+                {filteredUngroupedUsers.length > 0 ? (
+                  <div className="pt-3">
+                    <div className="px-2 py-1 text-[11px] font-semibold text-gray-500">
+                      未绑定部门成员（少量异常兜底）
+                    </div>
+                    {filteredUngroupedUsers.map((userID) => renderMember(userID, 1))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="px-2 py-8 text-center text-xs text-gray-400">
+                {emptyText}
+              </div>
+            )}
+          </div>
+          <div className="border-t border-gray-100 bg-gray-50 p-3 lg:max-h-[28rem] lg:overflow-y-auto lg:border-l lg:border-t-0">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold text-gray-700">已选结果</div>
+                <div className="text-[10px] text-gray-500">取消即可移除</div>
+              </div>
+              <Badge variant="secondary" className="bg-white text-gray-700">
+                {selectedItems.length} 项
+              </Badge>
+            </div>
+            {selectedItems.length > 0 ? (
+              <div className="space-y-2">
+                {selectedDepartmentIDs.map((departmentID) => (
+                  <div
+                    key={`selected-department-${departmentID}`}
+                    className="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs text-blue-800"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-medium">
+                        <WecomOpenDataDepartment
+                          departmentId={departmentID}
+                          corpId={corpId}
+                          fallback={
+                            (departmentMap.get(departmentID)?.name || "").trim() ||
+                            `部门 #${departmentID}`
+                          }
+                          className="truncate text-xs font-medium text-blue-800"
+                          hintClassName="text-[10px] text-blue-400"
+                        />
+                      </span>
+                      <button
+                        type="button"
+                        className="text-[11px] text-blue-500 hover:text-blue-700"
+                        onClick={() =>
+                          toggleSelection({
+                            type: "department",
+                            id: String(departmentID),
+                          })
+                        }
+                      >
+                        移除
+                      </button>
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-blue-600">部门</div>
+                  </div>
+                ))}
+                {selectedUserIDs.map((userID) => (
+                  <div
+                    key={`selected-user-${userID}`}
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <WecomOpenDataName
+                        userid={userID}
+                        corpId={corpId}
+                        fallback={userID}
+                        className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800"
+                        hintClassName="text-[10px] text-gray-400"
+                      />
+                      <button
+                        type="button"
+                        className="text-[11px] text-gray-500 hover:text-gray-700"
+                        onClick={() => toggleSelection({ type: "user", id: userID })}
+                      >
+                        移除
+                      </button>
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-gray-500">成员</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-gray-200 bg-white px-3 py-6 text-center text-[11px] text-gray-400">
+                暂无已选成员或部门
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ServicerUpsertResultPanel({
+  result,
+  formatReason,
+  orgCorpID,
+  orgDepartmentMap,
+}: {
+  result: KFServicerUpsertResponse | null;
+  formatReason: (item: KFServicerUpsertResult) => string;
+  orgCorpID: string;
+  orgDepartmentMap: Map<number, DirectoryDepartment>;
+}) {
+  if (!result) return null;
+  const summary = result.summary;
+  const overallStatus = (summary?.overall_status || "").trim();
+  const resultList = result.result_list || [];
+  if (!summary && resultList.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-3">
+      <div
+        className={`rounded-lg px-3 py-2 text-xs ${
+          overallStatus === "succeeded"
+            ? "bg-green-50 text-green-700"
+            : overallStatus === "partial"
+              ? "bg-orange-50 text-orange-700"
+              : "bg-red-50 text-red-700"
+        }`}
+      >
+        {overallStatus === "succeeded"
+          ? "已保存，当前修改已生效。"
+          : overallStatus === "partial"
+            ? `部分保存成功：成功 ${Number(summary?.success_count || 0)} 项，失败 ${Number(summary?.failure_count || 0)} 项。`
+            : "这次保存没有完成，请根据下面的提示调整后重试。"}
+      </div>
+      {resultList.length > 0 ? (
+        <div className="space-y-2">
+          {resultList.map((item, index) => (
+            <div
+              key={`${item.target_type || "unknown"}-${item.target_id || index}-${item.reason_code || item.status || "result"}`}
+              className={`rounded-lg border px-3 py-2 text-xs ${
+                item.status === "succeeded"
+                  ? "border-green-200 bg-white text-gray-700"
+                  : "border-orange-200 bg-white text-gray-700"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">
+                  {item.target_type === "department" ? (
+                    <WecomOpenDataDepartment
+                      departmentId={Number(item.department_id || item.target_id || 0)}
+                      corpId={orgCorpID}
+                      fallback={
+                        (orgDepartmentMap.get(
+                          Number(item.department_id || item.target_id || 0),
+                        )?.name || "").trim() ||
+                        `部门 #${item.department_id || item.target_id || "-"}`
+                      }
+                      className="text-xs font-medium text-inherit"
+                      hintClassName="text-[10px] opacity-70"
+                    />
+                  ) : (
+                    <WecomOpenDataName
+                      userid={(item.userid || item.target_id || "").trim()}
+                      corpId={orgCorpID}
+                      fallback={(item.userid || item.target_id || "").trim()}
+                      className="text-xs font-medium text-inherit"
+                    />
+                  )}
+                </span>
+                <Badge
+                  variant={item.status === "succeeded" ? "success" : "warning"}
+                  className={
+                    item.status === "succeeded"
+                      ? "bg-green-100 text-green-700"
+                      : "bg-orange-100 text-orange-700"
+                  }
+                >
+                  {item.status === "succeeded" ? "已保存" : "未保存"}
+                </Badge>
+              </div>
+              <div className="mt-1">{formatReason(item)}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -458,10 +588,10 @@ export default function ReceptionChannels() {
   const [createSource, setCreateSource] = useState("");
   const [createSceneValue, setCreateSceneValue] = useState("");
   const [selectedSceneValue, setSelectedSceneValue] = useState("");
-  const [servicerOp, setServicerOp] = useState<"add" | "del">("add");
   const [selectedServicerTargets, setSelectedServicerTargets] = useState<
     DirectorySelectionItem[]
   >([]);
+  const [isPoolEditorOpen, setIsPoolEditorOpen] = useState(false);
   const [servicerUpsertResult, setServicerUpsertResult] =
     useState<KFServicerUpsertResponse | null>(null);
   const [fallbackModeInput, setFallbackModeInput] = useState("ai_only");
@@ -469,6 +599,7 @@ export default function ReceptionChannels() {
     DirectorySelectionItem[]
   >([]);
   const [isSavingFallbackRoute, setIsSavingFallbackRoute] = useState(false);
+  const [isFallbackEditorOpen, setIsFallbackEditorOpen] = useState(false);
 
   const loadChannels = async (query?: string) => {
     try {
@@ -548,30 +679,30 @@ export default function ReceptionChannels() {
     try {
       const detail = await getReceptionChannelDetail(channel.open_kfid);
       setSelectedChannelDetail(detail);
-      setFallbackModeInput(
-        (detail?.fallback_route?.mode || "ai_only").trim() || "ai_only",
-      );
+      setFallbackModeInput((detail?.fallback_route?.mode || "ai_only").trim() || "ai_only");
       setSelectedFallbackTargets(
         normalizeSelectionItems([
           ...(detail?.fallback_route?.human_user_ids || []).map((userID) => ({
             type: "user" as const,
             id: userID,
           })),
-          ...(detail?.fallback_route?.human_department_ids || []).map(
-            (departmentID) => ({
-              type: "department" as const,
-              id: String(departmentID),
-            }),
-          ),
+          ...(detail?.fallback_route?.human_department_ids || []).map((departmentID) => ({
+            type: "department" as const,
+            id: String(departmentID),
+          })),
         ]),
       );
       const assignments = await listKFServicerAssignments(channel.open_kfid);
       setServicerAssignments(assignments);
+      setSelectedServicerTargets(
+        selectionItemsFromAssignments(assignments, orgMemberUserIDByAlias),
+      );
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
       setSelectedChannelDetail(null);
       setServicerAssignments([]);
       setServicerUpsertResult(null);
+      setSelectedServicerTargets([]);
     } finally {
       setIsDetailLoading(false);
     }
@@ -598,6 +729,22 @@ export default function ReceptionChannels() {
       return text;
     }
     return new Date(parsed).toLocaleString("zh-CN", { hour12: false });
+  };
+
+  const syncFallbackDraftFromDetail = (detail: ReceptionChannelDetail | null) => {
+    setFallbackModeInput((detail?.fallback_route?.mode || "ai_only").trim() || "ai_only");
+    setSelectedFallbackTargets(
+      normalizeSelectionItems([
+        ...(detail?.fallback_route?.human_user_ids || []).map((userID) => ({
+          type: "user" as const,
+          id: userID,
+        })),
+        ...(detail?.fallback_route?.human_department_ids || []).map((departmentID) => ({
+          type: "department" as const,
+          id: String(departmentID),
+        })),
+      ]),
+    );
   };
 
   const handleCreateChannel = async () => {
@@ -698,6 +845,42 @@ export default function ReceptionChannels() {
     });
     return next;
   }, [organizationView?.members]);
+
+  const orgMemberUserIDByAlias = useMemo(() => {
+    const next = new Map<string, string>();
+    (organizationView?.members || []).forEach((member) => {
+      const userID = (member.userid || "").trim();
+      const openUserID = (member.open_userid || "").trim();
+      if (userID) next.set(userID, userID);
+      if (openUserID && userID) next.set(openUserID, userID);
+    });
+    return next;
+  }, [organizationView?.members]);
+
+  useEffect(() => {
+    if (isPoolEditorOpen) return;
+    if (servicerAssignments.length === 0) {
+      setSelectedServicerTargets([]);
+      return;
+    }
+    setSelectedServicerTargets(
+      selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+    );
+  }, [isPoolEditorOpen, orgMemberUserIDByAlias, servicerAssignments]);
+
+  useEffect(() => {
+    if (orgMemberUserIDByAlias.size === 0) return;
+    setSelectedServicerTargets((prev) => {
+      const normalized = normalizeSelectionItems(
+        prev.map((item) => {
+          if (item.type !== "user") return item;
+          const normalizedID = orgMemberUserIDByAlias.get(item.id.trim()) || item.id.trim();
+          return normalizedID === item.id ? item : { ...item, id: normalizedID };
+        }),
+      );
+      return isSameSelection(prev, normalized) ? prev : normalized;
+    });
+  }, [orgMemberUserIDByAlias]);
 
   const orderedDepartments = useMemo(() => {
     const rows = [...(organizationView?.departments || [])];
@@ -828,6 +1011,26 @@ export default function ReceptionChannels() {
         .map((item) => Number(item.id))
         .filter((item) => Number.isInteger(item) && item > 0),
     [selectedFallbackTargetsDeduped],
+  );
+  const currentPoolSelection = useMemo(
+    () => selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+    [orgMemberUserIDByAlias, servicerAssignments],
+  );
+  const currentPoolRawUsersByNormalizedID = useMemo(() => {
+    const next = new Map<string, string[]>();
+    servicerAssignments.forEach((item) => {
+      const rawID = (item.userid || "").trim();
+      if (!rawID) return;
+      const normalizedID = orgMemberUserIDByAlias.get(rawID) || rawID;
+      const bucket = next.get(normalizedID) || [];
+      if (!bucket.includes(rawID)) bucket.push(rawID);
+      next.set(normalizedID, bucket);
+    });
+    return next;
+  }, [orgMemberUserIDByAlias, servicerAssignments]);
+  const poolSelectionChanged = useMemo(
+    () => !isSameSelection(currentPoolSelection, selectedServicerTargetsDeduped),
+    [currentPoolSelection, selectedServicerTargetsDeduped],
   );
 
   const receptionPool = selectedChannelDetail?.reception_pool;
@@ -998,7 +1201,7 @@ export default function ReceptionChannels() {
     }
   };
 
-  const handleServicerUpsert = async () => {
+  const handleServicerPoolSave = async () => {
     const openKFID = (
       selectedChannelDetail?.channel?.open_kfid ||
       selectedChannel?.open_kfid ||
@@ -1008,40 +1211,93 @@ export default function ReceptionChannels() {
       setNotice("当前渠道缺少 Open KFID");
       return;
     }
-    const userIDs = selectedServicerUsersDeduped;
-    const departmentIDs = selectedServicerDepartmentsDeduped;
-    if (userIDs.length === 0 && departmentIDs.length === 0) {
-      setNotice("请至少勾选一个成员或部门");
+    const currentSelection = selectionItemsFromAssignments(
+      servicerAssignments,
+      orgMemberUserIDByAlias,
+    );
+    const desiredSelection = selectedServicerTargetsDeduped;
+    if (desiredSelection.length === 0) {
+      setNotice("当前未选择任何接待对象，请至少保留一个成员或部门。");
       return;
     }
+    if (isSameSelection(currentSelection, desiredSelection)) {
+      setServicerUpsertResult(null);
+      setNotice("接待池配置没有变化。");
+      return;
+    }
+    const currentUserSet = new Set(
+      currentSelection
+        .filter((item) => item.type === "user")
+        .map((item) => item.id.trim())
+        .filter(Boolean),
+    );
+    const currentDepartmentSet = new Set(
+      currentSelection
+        .filter((item) => item.type === "department")
+        .map((item) => Number(item.id))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    );
+    const desiredUserSet = new Set(selectedServicerUsersDeduped);
+    const desiredDepartmentSet = new Set(selectedServicerDepartmentsDeduped);
+    const addUsers = selectedServicerUsersDeduped.filter((item) => !currentUserSet.has(item));
+    const addDepartments = selectedServicerDepartmentsDeduped.filter(
+      (item) => !currentDepartmentSet.has(item),
+    );
+    const removeUsers = Array.from(currentUserSet).flatMap((item) => {
+      if (desiredUserSet.has(item)) return [];
+      const rawIDs = currentPoolRawUsersByNormalizedID.get(item) || [item];
+      return rawIDs;
+    });
+    const removeDepartments = Array.from(currentDepartmentSet).filter(
+      (item) => !desiredDepartmentSet.has(item),
+    );
     try {
       setIsUpsertingServicers(true);
-      const result = await upsertKFServicerAssignments({
-        open_kfid: openKFID,
-        op: servicerOp,
-        userid_list: userIDs,
-        department_id_list: departmentIDs,
-      });
+      const responses: Array<KFServicerUpsertResponse | null> = [];
+      if (addUsers.length > 0 || addDepartments.length > 0) {
+        responses.push(
+          await upsertKFServicerAssignments({
+            open_kfid: openKFID,
+            op: "add",
+            userid_list: addUsers,
+            department_id_list: addDepartments,
+          }),
+        );
+      }
+      if (removeUsers.length > 0 || removeDepartments.length > 0) {
+        responses.push(
+          await upsertKFServicerAssignments({
+            open_kfid: openKFID,
+            op: "del",
+            userid_list: removeUsers,
+            department_id_list: removeDepartments,
+          }),
+        );
+      }
+      const result = mergeServicerUpsertResponses(responses);
       setServicerUpsertResult(result);
       const summary = result?.summary;
       const successCount = Number(summary?.success_count || 0);
       const failureCount = Number(summary?.failure_count || 0);
       const overallStatus = (summary?.overall_status || "").trim();
       if (overallStatus === "succeeded") {
-        setNotice(`接待人员${servicerOp === "add" ? "添加" : "移除"}成功`);
+        setNotice("接待池配置已更新。");
       } else if (overallStatus === "partial") {
-        setNotice(
-          `部分处理成功：成功 ${successCount} 项，失败 ${failureCount} 项`,
-        );
+        setNotice(`部分对象保存成功：成功 ${successCount} 项，失败 ${failureCount} 项。`);
       } else {
-        setNotice(`处理未完成：失败 ${failureCount} 项`);
+        setNotice(`接待池保存未完成：失败 ${failureCount} 项。`);
       }
       if (successCount > 0) {
         const refreshedAssignments = await listKFServicerAssignments(openKFID);
         setServicerAssignments(refreshedAssignments);
         const refreshedDetail = await getReceptionChannelDetail(openKFID);
         setSelectedChannelDetail(refreshedDetail);
-        setSelectedServicerTargets([]);
+        setSelectedServicerTargets(
+          selectionItemsFromAssignments(refreshedAssignments, orgMemberUserIDByAlias),
+        );
+        if (overallStatus === "succeeded" || (successCount > 0 && failureCount === 0)) {
+          setIsPoolEditorOpen(false);
+        }
         await loadChannels(keyword);
       }
     } catch (error) {
@@ -1098,32 +1354,99 @@ export default function ReceptionChannels() {
       }
       const refreshedDetail = await getReceptionChannelDetail(openKFID);
       setSelectedChannelDetail(refreshedDetail);
-      setFallbackModeInput(
-        (refreshedDetail?.fallback_route?.mode || "ai_only").trim() ||
-          "ai_only",
-      );
-      setSelectedFallbackTargets(
-        normalizeSelectionItems([
-          ...(refreshedDetail?.fallback_route?.human_user_ids || []).map(
-            (userID) => ({
-              type: "user" as const,
-              id: userID,
-            }),
-          ),
-          ...(refreshedDetail?.fallback_route?.human_department_ids || []).map(
-            (departmentID) => ({
-              type: "department" as const,
-              id: String(departmentID),
-            }),
-          ),
-        ]),
-      );
+      syncFallbackDraftFromDetail(refreshedDetail);
+      setIsFallbackEditorOpen(false);
       await loadChannels(keyword);
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
     } finally {
       setIsSavingFallbackRoute(false);
     }
+  };
+
+  const openPoolEditor = () => {
+    setSelectedServicerTargets(
+      selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+    );
+    setServicerUpsertResult(null);
+    setIsPoolEditorOpen(true);
+  };
+
+  const closePoolEditor = () => {
+    setSelectedServicerTargets(
+      selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+    );
+    setServicerUpsertResult(null);
+    setIsPoolEditorOpen(false);
+  };
+
+  const openFallbackEditor = () => {
+    syncFallbackDraftFromDetail(selectedChannelDetail);
+    setIsFallbackEditorOpen(true);
+  };
+
+  const closeFallbackEditor = () => {
+    syncFallbackDraftFromDetail(selectedChannelDetail);
+    setIsFallbackEditorOpen(false);
+  };
+
+  const renderSelectionSummary = (
+    items: DirectorySelectionItem[],
+    options?: { maxItems?: number; emptyText?: string },
+  ) => {
+    const maxItems = options?.maxItems ?? 6;
+    const normalized = normalizeSelectionItems(items);
+    if (normalized.length === 0) {
+      return (
+        <div className="text-xs text-gray-500">
+          {options?.emptyText || "当前未选择成员或部门"}
+        </div>
+      );
+    }
+    const visibleItems = normalized.slice(0, maxItems);
+    const extraCount = normalized.length - visibleItems.length;
+    return (
+      <div className="flex flex-wrap gap-2">
+        {visibleItems.map((item) =>
+          item.type === "department" ? (
+            <Badge
+              key={selectionKey(item)}
+              variant="secondary"
+              className="bg-blue-50 text-blue-700 border-transparent"
+            >
+              <WecomOpenDataDepartment
+                departmentId={Number(item.id)}
+                corpId={orgCorpID}
+                fallback={
+                  (orgDepartmentMap.get(Number(item.id))?.name || "").trim() ||
+                  `部门 #${item.id}`
+                }
+                className="text-xs font-medium text-blue-700"
+                hintClassName="text-[10px] text-blue-300"
+              />
+            </Badge>
+          ) : (
+            <Badge
+              key={selectionKey(item)}
+              variant="secondary"
+              className="bg-gray-100 text-gray-700 border-transparent"
+            >
+              <WecomOpenDataName
+                userid={item.id}
+                corpId={orgCorpID}
+                fallback={item.id}
+                className="text-xs font-medium text-gray-700"
+              />
+            </Badge>
+          ),
+        )}
+        {extraCount > 0 ? (
+          <Badge variant="secondary" className="bg-white text-gray-500 border-gray-200">
+            还有 {extraCount} 项
+          </Badge>
+        ) : null}
+      </div>
+    );
   };
 
   return (
@@ -1380,9 +1703,13 @@ export default function ReceptionChannels() {
       {/* Detail Drawer (Dialog) */}
       <Dialog
         isOpen={isDetailOpen}
-        onClose={() => setIsDetailOpen(false)}
+        onClose={() => {
+          setIsDetailOpen(false);
+          setIsPoolEditorOpen(false);
+          setIsFallbackEditorOpen(false);
+        }}
         title="渠道详情与推广"
-        className="max-w-[480px]"
+        className="max-w-[840px]"
         footer={
           <Button
             className="w-full bg-blue-600"
@@ -1643,204 +1970,124 @@ export default function ReceptionChannels() {
 
             <div className="space-y-3">
               <h4 className="text-sm font-semibold text-gray-900">接待池配置</h4>
-              <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-                已同步接待池摘要：成员 {assignedUsers.length} / 部门 {assignedDepartments.length}
-              </div>
-              {(selectedChannelDetail?.staff_members || []).length > 0 ||
-              assignedUsers.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {Array.from(
-                    new Set([
-                      ...(selectedChannelDetail?.staff_members || []),
-                      ...assignedUsers,
-                    ]),
-                  ).map((staff) => (
-                    <Badge
-                      key={staff}
-                      variant="secondary"
-                      className="bg-gray-100 text-gray-700 border-transparent"
-                    >
-                      <WecomOpenDataName
-                        userid={staff}
-                        corpId={orgCorpID}
-                        fallback={staff}
-                        className="text-xs font-medium text-gray-700"
-                      />
-                    </Badge>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">
-                  当前规则尚未配置明确接待人员
-                </div>
-              )}
-              {assignedDepartments.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {Array.from(new Set(assignedDepartments)).map(
-                    (departmentID) => (
-                      <Badge
-                        key={departmentID}
-                        variant="secondary"
-                        className="bg-blue-50 text-blue-700 border-transparent"
-                      >
-                        <WecomOpenDataDepartment
-                          departmentId={departmentID}
-                          corpId={orgCorpID}
-                          fallback={
-                            (orgDepartmentMap.get(departmentID)?.name || "").trim() ||
-                            `部门 #${departmentID}`
-                          }
-                          className="text-xs font-medium text-blue-700"
-                          hintClassName="text-[10px] text-blue-300"
-                        />
-                      </Badge>
-                    ),
-                  )}
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">
-                  当前未配置按部门维度接待人员分配
-                </div>
-              )}
-              <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-semibold text-gray-800">
-                        接待池写入
-                      </div>
-                      <div className="text-[11px] text-gray-500">
-                        先配置真实企业微信接待池，再配置兜底路由。成员通过 open-data 回显，目标按组织树分组展示。
-                      </div>
+              <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold text-gray-900">当前接待池摘要</div>
+                    <div className="text-xs text-gray-500">
+                      先查看当前已配置的接待对象，需要调整时再进入编辑。
                     </div>
-                  <select
-                    value={servicerOp}
-                    onChange={(event) =>
-                      setServicerOp(
-                        event.target.value === "del" ? "del" : "add",
-                      )
-                    }
-                    className="h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="add">添加接待人员</option>
-                    <option value="del">移除接待人员</option>
-                  </select>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  <DirectoryTreeSelect
-                    label="统一企业通讯录树选择"
-                    placeholder={
-                      isOrgOptionsLoading
-                        ? "正在加载组织树..."
-                        : "请选择要写入接待池的成员或部门"
-                    }
-                    searchPlaceholder="搜索部门 / 成员 / 角色"
-                    corpId={orgCorpID}
-                    treeRoots={treeRoots}
-                    ungroupedUsers={ungroupedUserIDs}
-                    memberMap={orgMemberMap}
-                    departmentMap={orgDepartmentMap}
-                    selectedItems={selectedServicerTargetsDeduped}
-                    onChange={setSelectedServicerTargets}
-                    emptyText="当前没有可选成员或部门"
-                    disabled={isOrgOptionsLoading}
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-[11px] text-gray-500">
-                    成员名称优先通过 open-data 回显；成员可在多个部门节点下出现，但最终结果会按成员唯一 ID 去重。部门级可操作与成员级可见分离校验。
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary" className="bg-gray-100 text-gray-700">
+                        成员 {assignedUsers.length}
+                      </Badge>
+                      <Badge variant="secondary" className="bg-blue-50 text-blue-700">
+                        部门 {assignedDepartments.length}
+                      </Badge>
+                    </div>
                   </div>
                   <Button
                     size="sm"
                     className="bg-blue-600 hover:bg-blue-700"
-                    disabled={isUpsertingServicers}
-                    onClick={() => void handleServicerUpsert()}
+                    onClick={openPoolEditor}
                   >
-                    {isUpsertingServicers ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : null}
-                    提交写入
+                    编辑接待池
                   </Button>
                 </div>
+                {renderSelectionSummary(currentPoolSelection, {
+                  emptyText: "当前接待池为空，保存后才会开始承接人工对象。",
+                })}
                 {servicerUpsertResult?.summary ? (
-                  <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700 space-y-1">
-                    <div className="font-medium text-gray-800">
-                      结果：{servicerUpsertResult.summary.overall_status || "-"}
+                  <div
+                    className={`rounded-lg border px-3 py-3 text-xs ${
+                      (servicerUpsertResult.summary.overall_status || "").trim() === "succeeded"
+                        ? "border-green-200 bg-green-50 text-green-800"
+                        : (servicerUpsertResult.summary.overall_status || "").trim() === "partial"
+                          ? "border-orange-200 bg-orange-50 text-orange-800"
+                          : "border-red-200 bg-red-50 text-red-800"
+                    }`}
+                  >
+                    <div className="font-medium">
+                      {(servicerUpsertResult.summary.overall_status || "").trim() === "succeeded"
+                        ? "接待池已更新"
+                        : (servicerUpsertResult.summary.overall_status || "").trim() === "partial"
+                          ? "部分对象未保存成功"
+                          : "接待池保存失败"}
                     </div>
-                    <div>
-                      共 {Number(servicerUpsertResult.summary.total_count || 0)}{" "}
-                      项，成功{" "}
-                      {Number(servicerUpsertResult.summary.success_count || 0)}{" "}
-                      项，失败{" "}
-                      {Number(servicerUpsertResult.summary.failure_count || 0)}{" "}
-                      项
+                    <div className="mt-1">
+                      共 {Number(servicerUpsertResult.summary.total_count || 0)} 项，成功{" "}
+                      {Number(servicerUpsertResult.summary.success_count || 0)} 项，失败{" "}
+                      {Number(servicerUpsertResult.summary.failure_count || 0)} 项。
                     </div>
                   </div>
                 ) : null}
-                {(servicerUpsertResult?.result_list || []).length > 0 ? (
+                {(servicerUpsertResult?.result_list || []).length > 0 &&
+                (servicerUpsertResult.summary?.overall_status || "").trim() !== "succeeded" ? (
                   <div className="space-y-2">
-                    {(servicerUpsertResult?.result_list || []).map(
-                      (item, index) => (
-                        <div
-                          key={`${item.target_type || "unknown"}-${item.target_id || index}-${item.reason_code || item.status || "result"}`}
-                          className={`rounded border px-3 py-2 text-xs ${
-                            item.status === "succeeded"
-                              ? "border-green-200 bg-green-50 text-green-800"
-                              : "border-orange-200 bg-orange-50 text-orange-800"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="font-medium">
-                              {item.target_type === "department" ? (
-                                <WecomOpenDataDepartment
-                                  departmentId={Number(item.department_id || item.target_id || 0)}
-                                  corpId={orgCorpID}
-                                  fallback={
-                                    (orgDepartmentMap.get(
-                                      Number(item.department_id || item.target_id || 0),
-                                    )?.name || "").trim() ||
-                                    `部门 #${item.department_id || item.target_id || "-"}`
-                                  }
-                                  className="text-xs font-medium text-inherit"
-                                  hintClassName="text-[10px] opacity-70"
-                                />
-                              ) : (
-                                <WecomOpenDataName
-                                  userid={(item.userid || item.target_id || "").trim()}
-                                  corpId={orgCorpID}
-                                  fallback={(item.userid || item.target_id || "").trim()}
-                                  className="text-xs font-medium text-inherit"
-                                />
-                              )}
-                            </span>
-                            <Badge
-                              variant="secondary"
-                              className={
-                                item.status === "succeeded"
-                                  ? "bg-green-100 text-green-700 border-transparent"
-                                  : "bg-orange-100 text-orange-700 border-transparent"
-                              }
-                            >
-                              {item.status === "succeeded" ? "成功" : "失败"}
-                            </Badge>
-                          </div>
-                          <div className="mt-1">
-                            {formatServicerReason(item)}
-                          </div>
-                          <div className="mt-1 text-[11px] opacity-80">
-                            来源：
-                            {item.source === "precheck"
-                              ? "前置校验"
-                              : "企业微信写入"}
-                            {(item.reason_code || "").trim()
-                              ? ` · 原因码：${(item.reason_code || "").trim()}`
-                              : ""}
-                            {Number(item.errcode || 0) > 0
-                              ? ` · errcode=${Number(item.errcode || 0)}`
-                              : ""}
-                          </div>
+                    {(servicerUpsertResult?.result_list || []).map((item, index) => (
+                      <div
+                        key={`${item.target_type || "unknown"}-${item.target_id || index}-${item.reason_code || item.status || "result"}`}
+                        className={`rounded-lg border px-3 py-2 text-xs ${
+                          item.status === "succeeded"
+                            ? "border-green-200 bg-green-50 text-green-800"
+                            : "border-orange-200 bg-orange-50 text-orange-800"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium">
+                            {item.target_type === "department" ? (
+                              <WecomOpenDataDepartment
+                                departmentId={Number(item.department_id || item.target_id || 0)}
+                                corpId={orgCorpID}
+                                fallback={
+                                  (orgDepartmentMap.get(
+                                    Number(item.department_id || item.target_id || 0),
+                                  )?.name || "").trim() ||
+                                  `部门 #${item.department_id || item.target_id || "-"}`
+                                }
+                                className="text-xs font-medium text-inherit"
+                                hintClassName="text-[10px] opacity-70"
+                              />
+                            ) : (
+                              <WecomOpenDataName
+                                userid={(item.userid || item.target_id || "").trim()}
+                                corpId={orgCorpID}
+                                fallback={(item.userid || item.target_id || "").trim()}
+                                className="text-xs font-medium text-inherit"
+                              />
+                            )}
+                          </span>
+                          <Badge
+                            variant={item.status === "succeeded" ? "success" : "warning"}
+                            className={
+                              item.status === "succeeded"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-orange-100 text-orange-700"
+                            }
+                          >
+                            {item.status === "succeeded" ? "已保存" : "未保存"}
+                          </Badge>
                         </div>
-                      ),
-                    )}
+                        <div className="mt-1">{formatServicerReason(item)}</div>
+                        {item.status !== "succeeded" &&
+                        (((item.reason_code || "").trim() !== "") || Number(item.errcode || 0) > 0) ? (
+                          <details className="mt-2 text-[11px] opacity-80">
+                            <summary className="cursor-pointer select-none text-gray-600">
+                              查看详细信息
+                            </summary>
+                            <div className="mt-1">
+                              {item.source === "precheck" ? "前置校验" : "企业微信写入"}
+                              {(item.reason_code || "").trim()
+                                ? ` · 原因码：${(item.reason_code || "").trim()}`
+                                : ""}
+                              {Number(item.errcode || 0) > 0
+                                ? ` · errcode=${Number(item.errcode || 0)}`
+                                : ""}
+                            </div>
+                          </details>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
                 ) : null}
               </div>
@@ -1851,72 +2098,41 @@ export default function ReceptionChannels() {
                 兜底路由配置
               </h4>
               <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
-                <div>
-                  <div className="text-xs font-semibold text-gray-800">
-                    最小兜底路由配置
-                  </div>
-                  <div className="text-[11px] text-gray-500">
-                    当前只承接兜底模式和人工目标有效性，不扩展成完整规则编辑器。涉及人工时，目标必须来自接待池。
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-medium text-gray-700">
-                    兜底模式
-                  </label>
-                  <select
-                    value={fallbackModeInput}
-                    onChange={(event) => setFallbackModeInput(event.target.value)}
-                    className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="ai_only">仅智能接待（ai_only）</option>
-                    <option value="ai_then_human">智能接待后转人工</option>
-                    <option value="ai_then_queue_then_human">
-                      智能接待后进入排队池再转人工
-                    </option>
-                  </select>
-                </div>
-                {fallbackModeInput !== "ai_only" ? (
-                  <div className="grid grid-cols-1 gap-3">
-                    <DirectoryTreeSelect
-                      label="统一企业通讯录树目标"
-                      placeholder={
-                        isOrgOptionsLoading
-                          ? "正在加载组织树..."
-                          : "按部门树选择人工成员或部门（留空表示默认接待池）"
-                      }
-                      searchPlaceholder="搜索部门 / 成员 / 角色"
-                      corpId={orgCorpID}
-                      treeRoots={treeRoots}
-                      ungroupedUsers={ungroupedUserIDs}
-                      memberMap={orgMemberMap}
-                      departmentMap={orgDepartmentMap}
-                      selectedItems={selectedFallbackTargetsDeduped}
-                      onChange={setSelectedFallbackTargets}
-                      emptyText="当前没有可选成员或部门"
-                      disabled={isOrgOptionsLoading}
-                    />
-                    {selectedFallbackTargetsDeduped.length === 0 ? (
-                      <div className="text-[11px] text-gray-500">
-                        留空表示使用默认接待池中的人工目标。
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-[11px] text-gray-500">
-                    排队池是系统内状态承接，不代表企业微信原生接待池。最终转人工目标仍必须来自接待池。
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold text-gray-900">当前兜底摘要</div>
+                    <div className="text-xs text-gray-500">
+                      先查看当前兜底方式，需要调整时再进入编辑。
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary" className="bg-gray-100 text-gray-700">
+                        {fallbackModeLabel(fallbackRoute?.mode)}
+                      </Badge>
+                      {fallbackRoute?.human_target_valid === false ? (
+                        <Badge variant="warning" className="bg-orange-100 text-orange-700">
+                          人工目标待修复
+                        </Badge>
+                      ) : null}
+                    </div>
                   </div>
                   <Button
                     size="sm"
                     className="bg-blue-600 hover:bg-blue-700"
-                    disabled={isSavingFallbackRoute}
-                    onClick={() => void handleFallbackRouteSave()}
+                    onClick={openFallbackEditor}
                   >
-                    {isSavingFallbackRoute ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : null}
-                    保存兜底模式
+                    编辑兜底配置
                   </Button>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-[11px] font-medium text-gray-700">当前人工目标</div>
+                  {renderSelectionSummary(selectedFallbackTargetsDeduped, {
+                    emptyText: "当前未单独指定人工目标，系统会沿用接待池。",
+                  })}
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  {isPoolEmpty
+                    ? "当前接待池为空，只能使用“仅智能接待”。"
+                    : "涉及人工承接时，系统会从当前接待池中寻找可用对象。"}
                 </div>
               </div>
             </div>
@@ -1958,6 +2174,128 @@ export default function ReceptionChannels() {
             </div>
           </div>
         )}
+      </Dialog>
+
+      <Dialog
+        isOpen={isPoolEditorOpen}
+        onClose={closePoolEditor}
+        title="编辑接待池"
+        className="max-w-[960px]"
+        footer={
+          <>
+            <Button variant="outline" onClick={closePoolEditor}>
+              取消
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={isUpsertingServicers || isOrgOptionsLoading || !poolSelectionChanged}
+              onClick={() => void handleServicerPoolSave()}
+            >
+              {isUpsertingServicers ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              保存接待池
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-gray-900">选择当前渠道可接待的成员或部门</div>
+            <div className="text-xs text-gray-500">
+              勾选即可加入，取消勾选即可移除；右侧会实时显示当前已选对象。
+            </div>
+          </div>
+          <ServicerUpsertResultPanel
+            result={servicerUpsertResult}
+            formatReason={formatServicerReason}
+            orgCorpID={orgCorpID}
+            orgDepartmentMap={orgDepartmentMap}
+          />
+          <DirectoryTreeSelect
+            label="选择成员或部门"
+            placeholder={isOrgOptionsLoading ? "正在加载组织树..." : "从通讯录中选择"}
+            searchPlaceholder="搜索部门 / 成员 / 角色"
+            corpId={orgCorpID}
+            treeRoots={treeRoots}
+            ungroupedUsers={ungroupedUserIDs}
+            memberMap={orgMemberMap}
+            departmentMap={orgDepartmentMap}
+            selectedItems={selectedServicerTargetsDeduped}
+            onChange={setSelectedServicerTargets}
+            emptyText="当前没有可选成员或部门"
+            disabled={isOrgOptionsLoading}
+          />
+          <div className="text-[11px] text-gray-500">成员在多个部门下出现时，最终只会保存一次。</div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={isFallbackEditorOpen}
+        onClose={closeFallbackEditor}
+        title="编辑兜底配置"
+        className="max-w-[960px]"
+        footer={
+          <>
+            <Button variant="outline" onClick={closeFallbackEditor}>
+              取消
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={isSavingFallbackRoute}
+              onClick={() => void handleFallbackRouteSave()}
+            >
+              {isSavingFallbackRoute ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              保存兜底配置
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="text-sm font-semibold text-gray-900">设置兜底方式</div>
+            <div className="text-xs text-gray-500">
+              先选择兜底方式；需要人工承接时，再从通讯录中指定目标。
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-medium text-gray-700">兜底模式</label>
+            <select
+              value={fallbackModeInput}
+              onChange={(event) => setFallbackModeInput(event.target.value)}
+              className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="ai_only">仅智能接待</option>
+              <option value="ai_then_human">智能接待后转人工</option>
+              <option value="ai_then_queue_then_human">智能接待后进入排队再转人工</option>
+            </select>
+          </div>
+          {fallbackModeInput !== "ai_only" ? (
+            <>
+              {isPoolEmpty ? (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  当前没有可用接待对象，请先维护接待池，再配置人工承接目标。
+                </div>
+              ) : null}
+              <DirectoryTreeSelect
+                label="选择人工目标"
+                placeholder={isOrgOptionsLoading ? "正在加载组织树..." : "按部门树选择人工成员或部门"}
+                searchPlaceholder="搜索部门 / 成员 / 角色"
+                corpId={orgCorpID}
+                treeRoots={treeRoots}
+                ungroupedUsers={ungroupedUserIDs}
+                memberMap={orgMemberMap}
+                departmentMap={orgDepartmentMap}
+                selectedItems={selectedFallbackTargetsDeduped}
+                onChange={setSelectedFallbackTargets}
+                emptyText="当前没有可选成员或部门"
+                disabled={isOrgOptionsLoading || isPoolEmpty}
+              />
+            </>
+          ) : null}
+        </div>
       </Dialog>
 
       <Dialog
