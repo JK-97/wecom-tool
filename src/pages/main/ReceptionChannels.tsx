@@ -650,13 +650,17 @@ export default function ReceptionChannels() {
     setIsSyncing(true);
     const target = selectedChannel?.open_kfid || channels[0]?.open_kfid;
     if (!target) {
-      setNotice("当前没有可同步的渠道");
+      setNotice("当前没有可刷新的接待渠道");
       setIsSyncing(false);
       return;
     }
     try {
       const accepted = await triggerReceptionChannelSync(target);
-      setNotice(accepted ? "已提交同步任务" : "同步任务未被接受");
+      setNotice(
+        accepted
+          ? "已提交接待渠道刷新任务。成员树和部门树如需更新，请前往“组织与设置”同步组织架构。"
+          : "接待渠道刷新任务未被接受",
+      );
       await loadChannels(keyword);
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
@@ -1541,7 +1545,7 @@ export default function ReceptionChannels() {
               ) : (
                 <RefreshCw className="h-4 w-4 mr-2" />
               )}
-              同步企微后台
+              刷新接待渠道
             </Button>
           </div>
           <div className="flex items-center gap-2">
@@ -1975,7 +1979,7 @@ export default function ReceptionChannels() {
                   <div className="space-y-2">
                     <div className="text-sm font-semibold text-gray-900">当前接待池摘要</div>
                     <div className="text-xs text-gray-500">
-                      先查看当前已配置的接待对象，需要调整时再进入编辑。
+                      先查看当前已配置的接待对象，需要调整时再进入编辑。成员和部门列表依赖最近一次组织架构同步。
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="secondary" className="bg-gray-100 text-gray-700">
@@ -1997,6 +2001,12 @@ export default function ReceptionChannels() {
                 {renderSelectionSummary(currentPoolSelection, {
                   emptyText: "当前接待池为空，保存后才会开始承接人工对象。",
                 })}
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                  <span>如果成员或部门没有及时出现，请先同步组织架构。</span>
+                  <Link to="/main/settings" className="text-blue-600 hover:text-blue-700">
+                    去同步组织架构
+                  </Link>
+                </div>
                 {servicerUpsertResult?.summary ? (
                   <div
                     className={`rounded-lg border px-3 py-3 text-xs ${
@@ -2101,9 +2111,9 @@ export default function ReceptionChannels() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-2">
                     <div className="text-sm font-semibold text-gray-900">当前兜底摘要</div>
-                    <div className="text-xs text-gray-500">
-                      先查看当前兜底方式，需要调整时再进入编辑。
-                    </div>
+                  <div className="text-xs text-gray-500">
+                    先查看当前兜底方式，需要调整时再进入编辑。人工目标仍然来自当前组织架构与接待池。
+                  </div>
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="secondary" className="bg-gray-100 text-gray-700">
                         {fallbackModeLabel(fallbackRoute?.mode)}
@@ -2132,7 +2142,7 @@ export default function ReceptionChannels() {
                 <div className="text-[11px] text-gray-500">
                   {isPoolEmpty
                     ? "当前接待池为空，只能使用“仅智能接待”。"
-                    : "涉及人工承接时，系统会从当前接待池中寻找可用对象。"}
+                    : "涉及人工承接时，系统会从当前接待池中寻找可用对象。成员树如有缺项，请先同步组织架构。"}
                 </div>
               </div>
             </div>
@@ -2169,7 +2179,7 @@ export default function ReceptionChannels() {
                   void retrySync(openKFID);
                 }}
               >
-                重新同步
+                刷新接待渠道
               </Button>
             </div>
           </div>
@@ -2203,7 +2213,12 @@ export default function ReceptionChannels() {
           <div className="space-y-2">
             <div className="text-sm font-semibold text-gray-900">选择当前渠道可接待的成员或部门</div>
             <div className="text-xs text-gray-500">
-              勾选即可加入，取消勾选即可移除；右侧会实时显示当前已选对象。
+              勾选即可加入，取消勾选即可移除；右侧会实时显示当前已选对象。若成员树不完整，请先同步组织架构。
+            </div>
+            <div className="text-[11px] text-gray-500">
+              <Link to="/main/settings" className="text-blue-600 hover:text-blue-700">
+                去同步组织架构
+              </Link>
             </div>
           </div>
           <ServicerUpsertResultPanel
@@ -2258,6 +2273,13 @@ export default function ReceptionChannels() {
             <div className="text-sm font-semibold text-gray-900">设置兜底方式</div>
             <div className="text-xs text-gray-500">
               先选择兜底方式；需要人工承接时，再从通讯录中指定目标。
+            </div>
+            <div className="text-[11px] text-gray-500">
+              人工目标来自当前组织架构与接待池。如成员树不完整，请先
+              <Link to="/main/settings" className="ml-1 text-blue-600 hover:text-blue-700">
+                同步组织架构
+              </Link>
+              。
             </div>
           </div>
           <div className="space-y-1.5">
