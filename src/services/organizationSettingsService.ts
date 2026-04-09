@@ -92,6 +92,18 @@ export type OrganizationSettingsView = {
     userid?: string
     role?: string
     is_app_admin?: boolean
+    departments?: Array<{
+      department_id?: number
+      name?: string
+      parent_id?: number
+      order?: number
+    }>
+  }>
+  departments?: Array<{
+    department_id?: number
+    name?: string
+    parent_id?: number
+    order?: number
   }>
   permission_catalog?: string[]
   debug_switches?: Array<{
@@ -150,6 +162,24 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
   }
 
   const integration = asRecord(view.integration)
+  const members = readArray(view.members ?? view.Members).map((row) => ({
+    userid: readString(row.userid, row.UserID),
+    role: readString(row.role, row.Role),
+    is_app_admin: readBool(row.is_app_admin, row.IsAppAdmin),
+    departments: readArray(row.departments ?? row.Departments).map((department) => ({
+      department_id: readNumber(department.department_id, department.DepartmentID),
+      name: readString(department.name, department.Name),
+      parent_id: readNumber(department.parent_id, department.ParentID),
+      order: readNumber(department.order, department.Order),
+    })),
+  }))
+  const topLevelDepartments = readArray(view.departments ?? view.Departments).map((row) => ({
+    department_id: readNumber(row.department_id, row.DepartmentID),
+    name: readString(row.name, row.Name),
+    parent_id: readNumber(row.parent_id, row.ParentID),
+    order: readNumber(row.order, row.Order),
+  }))
+  const departments = mergeOrganizationDepartments(topLevelDepartments, members)
   return {
     integration: integration ? {
       corp_id: readString(integration.corp_id, integration.CorpID),
@@ -240,11 +270,8 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
       member_count: readNumber(row.member_count, row.MemberCount),
       permissions: readStringArray(row.permissions, row.Permissions),
     })),
-    members: readArray(view.members).map((row) => ({
-      userid: readString(row.userid, row.UserID),
-      role: readString(row.role, row.Role),
-      is_app_admin: readBool(row.is_app_admin, row.IsAppAdmin),
-    })),
+    members,
+    departments,
     permission_catalog: readStringArray(view.permission_catalog),
     debug_switches: readArray(view.debug_switches).map((row) => ({
       key: readString(row.key, row.Key),
@@ -320,4 +347,44 @@ function readStringArray(...values: unknown[]): string[] {
     if (value.length === 0) return []
   }
   return []
+}
+
+function mergeOrganizationDepartments(
+  topLevelDepartments: NonNullable<OrganizationSettingsView["departments"]>,
+  members: NonNullable<OrganizationSettingsView["members"]>,
+): NonNullable<OrganizationSettingsView["departments"]> {
+  const byID = new Map<number, NonNullable<OrganizationSettingsView["departments"]>[number]>()
+
+  const upsert = (
+    row: NonNullable<OrganizationSettingsView["departments"]>[number] | undefined,
+  ) => {
+    const departmentID = Number(row?.department_id || 0)
+    if (!Number.isInteger(departmentID) || departmentID <= 0) return
+    const existing = byID.get(departmentID)
+    const next = {
+      department_id: departmentID,
+      name: readString(row?.name, existing?.name) || "",
+      parent_id: readNumber(row?.parent_id, existing?.parent_id) || 0,
+      order: readNumber(row?.order, existing?.order) || 0,
+    }
+    byID.set(departmentID, next)
+  }
+
+  topLevelDepartments.forEach((department) => upsert(department))
+  members.forEach((member) => {
+    ;(member.departments || []).forEach((department) => upsert(department))
+  })
+
+  return Array.from(byID.values()).sort((a, b) => {
+    const aParent = Number(a.parent_id || 0)
+    const bParent = Number(b.parent_id || 0)
+    if (aParent !== bParent) return aParent - bParent
+    const aOrder = Number(a.order || 0)
+    const bOrder = Number(b.order || 0)
+    if (aOrder !== bOrder) return aOrder - bOrder
+    const aName = (a.name || "").trim()
+    const bName = (b.name || "").trim()
+    if (aName !== bName) return aName.localeCompare(bName, "zh-CN")
+    return Number(a.department_id || 0) - Number(b.department_id || 0)
+  })
 }

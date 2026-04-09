@@ -13,8 +13,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createReceptionChannel,
@@ -31,6 +33,403 @@ import {
   type ReceptionOverview,
 } from "@/services/receptionService";
 import { normalizeErrorMessage } from "@/services/http";
+import { executeRoutingRulesCommand } from "@/services/routingService";
+import {
+  getOrganizationSettingsView,
+  type OrganizationSettingsView,
+} from "@/services/organizationSettingsService";
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
+import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment";
+
+type DirectoryDepartment = NonNullable<
+  OrganizationSettingsView["departments"]
+>[number];
+type DirectoryMember = NonNullable<OrganizationSettingsView["members"]>[number];
+type DirectorySelectionItem = {
+  type: "user" | "department";
+  id: string;
+};
+
+type DirectoryTreeNode = {
+  department: DirectoryDepartment;
+  children: DirectoryTreeNode[];
+  memberIDs: string[];
+};
+
+type DirectoryTreeSelectProps = {
+  label: string;
+  placeholder: string;
+  searchPlaceholder: string;
+  corpId: string;
+  treeRoots: DirectoryTreeNode[];
+  ungroupedUsers: string[];
+  memberMap: Map<string, DirectoryMember>;
+  departmentMap: Map<number, DirectoryDepartment>;
+  selectedItems: DirectorySelectionItem[];
+  onChange: (next: DirectorySelectionItem[]) => void;
+  disabled?: boolean;
+  emptyText: string;
+};
+
+const selectionKey = (item: DirectorySelectionItem): string =>
+  `${item.type}:${item.id.trim()}`;
+
+const normalizeSelectionItems = (
+  items: DirectorySelectionItem[],
+): DirectorySelectionItem[] => {
+  const seen = new Set<string>();
+  const out: DirectorySelectionItem[] = [];
+  items.forEach((item) => {
+    const type = item.type === "department" ? "department" : "user";
+    const id = item.id.trim();
+    if (!id) return;
+    const key = `${type}:${id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ type, id });
+  });
+  return out;
+};
+
+function DirectoryTreeSelect({
+  label,
+  placeholder,
+  searchPlaceholder,
+  corpId,
+  treeRoots,
+  ungroupedUsers,
+  memberMap,
+  departmentMap,
+  selectedItems,
+  onChange,
+  disabled = false,
+  emptyText,
+}: DirectoryTreeSelectProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [expandedDepartments, setExpandedDepartments] = useState<Set<number>>(
+    () => new Set(treeRoots.map((item) => Number(item.department.department_id || 0))),
+  );
+
+  useEffect(() => {
+    setExpandedDepartments(
+      new Set(treeRoots.map((item) => Number(item.department.department_id || 0))),
+    );
+  }, [treeRoots]);
+
+  const selectedKeys = useMemo(
+    () => new Set(selectedItems.map((item) => selectionKey(item))),
+    [selectedItems],
+  );
+
+  const keyword = query.trim().toLowerCase();
+  const toggleSelection = (item: DirectorySelectionItem) => {
+    if (disabled) return;
+    const key = selectionKey(item);
+    if (selectedKeys.has(key)) {
+      onChange(selectedItems.filter((current) => selectionKey(current) !== key));
+      return;
+    }
+    onChange(normalizeSelectionItems([...selectedItems, item]));
+  };
+
+  const toggleExpanded = (departmentID: number) => {
+    setExpandedDepartments((prev) => {
+      const next = new Set(prev);
+      if (next.has(departmentID)) {
+        next.delete(departmentID);
+      } else {
+        next.add(departmentID);
+      }
+      return next;
+    });
+  };
+
+  const matchesMember = (userID: string): boolean => {
+    if (!keyword) return true;
+    const member = memberMap.get(userID);
+    const role = (member?.role || "").trim();
+    const adminText = member?.is_app_admin ? "企微应用管理员" : "";
+    return `${userID} ${role} ${adminText}`.trim().toLowerCase().includes(keyword);
+  };
+
+  const matchesDepartment = (department: DirectoryDepartment): boolean => {
+    if (!keyword) return true;
+    const departmentID = Number(department.department_id || 0);
+    const name = (department.name || "").trim();
+    return `${departmentID} ${name}`.trim().toLowerCase().includes(keyword);
+  };
+
+  const filterTree = (nodes: DirectoryTreeNode[]): DirectoryTreeNode[] => {
+    if (!keyword) return nodes;
+    const walk = (node: DirectoryTreeNode): DirectoryTreeNode | null => {
+      const filteredChildren = node.children
+        .map(walk)
+        .filter(Boolean) as DirectoryTreeNode[];
+      const filteredMembers = node.memberIDs.filter(matchesMember);
+      if (
+        matchesDepartment(node.department) ||
+        filteredChildren.length > 0 ||
+        filteredMembers.length > 0
+      ) {
+        return {
+          department: node.department,
+          children: filteredChildren,
+          memberIDs: filteredMembers,
+        };
+      }
+      return null;
+    };
+    return nodes.map(walk).filter(Boolean) as DirectoryTreeNode[];
+  };
+
+  const filteredRoots = filterTree(treeRoots);
+  const filteredUngroupedUsers = ungroupedUsers.filter(matchesMember);
+
+  const renderMember = (userID: string, depth: number) => {
+    const member = memberMap.get(userID);
+    const role = (member?.role || "").trim();
+    const adminText = member?.is_app_admin ? "企微应用管理员" : "";
+    const checked = selectedKeys.has(`user:${userID}`);
+    return (
+      <label
+        key={`user-${userID}-${depth}`}
+        className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+        style={{ paddingLeft: `${12 + depth * 16}px` }}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => toggleSelection({ type: "user", id: userID })}
+          disabled={disabled}
+          className="mt-0.5 h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        <span className="min-w-0 flex-1">
+          <WecomOpenDataName
+            userid={userID}
+            corpId={corpId}
+            fallback={userID}
+            className="block truncate text-xs font-medium text-gray-800"
+            hintClassName="text-[10px] text-gray-400"
+          />
+          <span className="block truncate text-[10px] text-gray-500">
+            {role ? role : "成员"}
+            {adminText ? ` · ${adminText}` : ""}
+          </span>
+        </span>
+      </label>
+    );
+  };
+
+  const renderDepartment = (node: DirectoryTreeNode, depth: number): ReactNode => {
+    const departmentID = Number(node.department.department_id || 0);
+    const expanded = expandedDepartments.has(departmentID);
+    const checked = selectedKeys.has(`department:${departmentID}`);
+    const childrenVisible = expanded || Boolean(keyword);
+    const fallbackName =
+      (node.department.name || "").trim() || `部门 #${departmentID || "-"}`;
+    return (
+      <div key={`department-${departmentID}`}>
+        <div
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
+          style={{ paddingLeft: `${8 + depth * 16}px` }}
+        >
+          <button
+            type="button"
+            className="flex h-5 w-5 items-center justify-center rounded text-gray-400 hover:bg-gray-100"
+            onClick={() => toggleExpanded(departmentID)}
+          >
+            {childrenVisible ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={() =>
+              toggleSelection({ type: "department", id: String(departmentID) })
+            }
+            disabled={disabled}
+            className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="min-w-0 flex-1">
+            <WecomOpenDataDepartment
+              departmentId={departmentID}
+              corpId={corpId}
+              fallback={fallbackName}
+              className="block truncate text-xs font-medium text-gray-800"
+              hintClassName="text-[10px] text-gray-400"
+            />
+            <span className="block truncate text-[10px] text-gray-500">
+              部门 #{departmentID}
+            </span>
+          </span>
+        </div>
+        {childrenVisible ? (
+          <div>
+            {node.children.map((child) => renderDepartment(child, depth + 1))}
+            {node.memberIDs.map((userID) => renderMember(userID, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const hasContent = filteredRoots.length > 0 || filteredUngroupedUsers.length > 0;
+  const selectedDepartmentIDs = selectedItems
+    .filter((item) => item.type === "department")
+    .map((item) => Number(item.id))
+    .filter((item) => Number.isInteger(item) && item > 0);
+  const selectedUserIDs = selectedItems
+    .filter((item) => item.type === "user")
+    .map((item) => item.id.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-medium text-gray-700">{label}</label>
+      <div className="relative">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setIsOpen((prev) => !prev)}
+          className="flex h-10 w-full items-center justify-between rounded-md border border-gray-200 bg-white px-3 text-left text-xs text-gray-700 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
+        >
+          <span className="truncate">
+            {selectedItems.length > 0
+              ? `已选择 ${selectedItems.length} 项`
+              : placeholder}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+        {isOpen ? (
+          <div className="absolute left-0 top-[calc(100%+6px)] z-30 w-[min(1080px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] rounded-lg border border-gray-200 bg-white shadow-lg">
+            <div className="border-b border-gray-100 p-2">
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={searchPlaceholder}
+                className="h-8 w-full rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-0 md:grid-cols-[minmax(0,1.65fr)_340px] xl:grid-cols-[minmax(0,1.8fr)_360px]">
+              <div className="max-h-[32rem] overflow-y-auto p-3">
+                {hasContent ? (
+                  <div className="space-y-1">
+                    {filteredRoots.map((node) => renderDepartment(node, 0))}
+                    {filteredUngroupedUsers.length > 0 ? (
+                      <div className="pt-2">
+                        <div className="px-2 py-1 text-[11px] font-semibold text-gray-500">
+                          未绑定部门成员（少量异常兜底）
+                        </div>
+                        {filteredUngroupedUsers.map((userID) => renderMember(userID, 1))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="px-2 py-3 text-center text-xs text-gray-400">
+                    {emptyText}
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-gray-100 bg-gray-50 p-3 md:max-h-[32rem] md:overflow-y-auto md:border-l md:border-t-0">
+                <div className="mb-2 text-[11px] font-semibold text-gray-600">
+                  已选结果
+                </div>
+                {selectedItems.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedDepartmentIDs.map((departmentID) => (
+                      <div
+                        key={`selected-department-${departmentID}`}
+                        className="rounded-md border border-blue-100 bg-white px-2 py-1.5 text-xs text-blue-800"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">
+                            <WecomOpenDataDepartment
+                              departmentId={departmentID}
+                              corpId={corpId}
+                              fallback={
+                                (departmentMap.get(departmentID)?.name || "").trim() ||
+                                `部门 #${departmentID}`
+                              }
+                              className="truncate text-xs font-medium text-blue-800"
+                              hintClassName="text-[10px] text-blue-400"
+                            />
+                          </span>
+                          <button
+                            type="button"
+                            className="text-[11px] text-blue-500 hover:text-blue-700"
+                            onClick={() =>
+                              toggleSelection({
+                                type: "department",
+                                id: String(departmentID),
+                              })
+                            }
+                          >
+                            移除
+                          </button>
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-blue-600">
+                          部门
+                        </div>
+                      </div>
+                    ))}
+                    {selectedUserIDs.map((userID) => (
+                      <div
+                        key={`selected-user-${userID}`}
+                        className="rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <WecomOpenDataName
+                            userid={userID}
+                            corpId={corpId}
+                            fallback={userID}
+                            className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800"
+                            hintClassName="text-[10px] text-gray-400"
+                          />
+                          <button
+                            type="button"
+                            className="text-[11px] text-gray-500 hover:text-gray-700"
+                            onClick={() =>
+                              toggleSelection({ type: "user", id: userID })
+                            }
+                          >
+                            移除
+                          </button>
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-gray-500">
+                          成员
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-gray-200 bg-white px-2 py-3 text-center text-[11px] text-gray-400">
+                    暂无已选成员或部门
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center justify-between border-t border-gray-100 px-2 py-2 text-[11px] text-gray-500">
+              <span>已选 {selectedItems.length} 项</span>
+              <button
+                type="button"
+                className="text-blue-600 hover:text-blue-700"
+                onClick={() => setIsOpen(false)}
+              >
+                完成
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export default function ReceptionChannels() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -51,16 +450,25 @@ export default function ReceptionChannels() {
   const [isUpsertingServicers, setIsUpsertingServicers] = useState(false);
   const [notice, setNotice] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [organizationView, setOrganizationView] =
+    useState<OrganizationSettingsView | null>(null);
+  const [isOrgOptionsLoading, setIsOrgOptionsLoading] = useState(false);
   const [createOpenKFID, setCreateOpenKFID] = useState("");
   const [createName, setCreateName] = useState("");
   const [createSource, setCreateSource] = useState("");
   const [createSceneValue, setCreateSceneValue] = useState("");
   const [selectedSceneValue, setSelectedSceneValue] = useState("");
   const [servicerOp, setServicerOp] = useState<"add" | "del">("add");
-  const [servicerUserInput, setServicerUserInput] = useState("");
-  const [servicerDepartmentInput, setServicerDepartmentInput] = useState("");
+  const [selectedServicerTargets, setSelectedServicerTargets] = useState<
+    DirectorySelectionItem[]
+  >([]);
   const [servicerUpsertResult, setServicerUpsertResult] =
     useState<KFServicerUpsertResponse | null>(null);
+  const [fallbackModeInput, setFallbackModeInput] = useState("ai_only");
+  const [selectedFallbackTargets, setSelectedFallbackTargets] = useState<
+    DirectorySelectionItem[]
+  >([]);
+  const [isSavingFallbackRoute, setIsSavingFallbackRoute] = useState(false);
 
   const loadChannels = async (query?: string) => {
     try {
@@ -82,12 +490,30 @@ export default function ReceptionChannels() {
     void loadChannels();
   }, []);
 
+  const loadOrganizationOptions = async () => {
+    if (isOrgOptionsLoading) return;
+    try {
+      setIsOrgOptionsLoading(true);
+      const view = await getOrganizationSettingsView();
+      setOrganizationView(view);
+    } catch (error) {
+      setNotice(normalizeErrorMessage(error));
+    } finally {
+      setIsOrgOptionsLoading(false);
+    }
+  };
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadChannels(keyword);
     }, 260);
     return () => window.clearTimeout(timer);
   }, [keyword]);
+
+  useEffect(() => {
+    if (!isDetailOpen || organizationView) return;
+    void loadOrganizationOptions();
+  }, [isDetailOpen, organizationView]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -112,6 +538,7 @@ export default function ReceptionChannels() {
     setSelectedChannel(channel);
     setSelectedChannelDetail(null);
     setServicerUpsertResult(null);
+    setSelectedServicerTargets([]);
     setIsDetailLoading(true);
     setIsDetailOpen(true);
     if (!channel.open_kfid) {
@@ -121,6 +548,23 @@ export default function ReceptionChannels() {
     try {
       const detail = await getReceptionChannelDetail(channel.open_kfid);
       setSelectedChannelDetail(detail);
+      setFallbackModeInput(
+        (detail?.fallback_route?.mode || "ai_only").trim() || "ai_only",
+      );
+      setSelectedFallbackTargets(
+        normalizeSelectionItems([
+          ...(detail?.fallback_route?.human_user_ids || []).map((userID) => ({
+            type: "user" as const,
+            id: userID,
+          })),
+          ...(detail?.fallback_route?.human_department_ids || []).map(
+            (departmentID) => ({
+              type: "department" as const,
+              id: String(departmentID),
+            }),
+          ),
+        ]),
+      );
       const assignments = await listKFServicerAssignments(channel.open_kfid);
       setServicerAssignments(assignments);
     } catch (error) {
@@ -234,25 +678,189 @@ export default function ReceptionChannels() {
     [servicerAssignments],
   );
 
-  const parseUserIDs = (value: string): string[] =>
-    Array.from(
-      new Set(
-        value
-          .split(/[\n,，\s]+/)
-          .map((item) => item.trim())
-          .filter(Boolean),
-      ),
-    );
+  const orgCorpID = (organizationView?.integration?.corp_id || "").trim();
+  const orgDepartmentMap = useMemo(() => {
+    const next = new Map<number, NonNullable<OrganizationSettingsView["departments"]>[number]>();
+    (organizationView?.departments || []).forEach((department) => {
+      const departmentID = Number(department.department_id || 0);
+      if (departmentID > 0) {
+        next.set(departmentID, department);
+      }
+    });
+    return next;
+  }, [organizationView?.departments]);
 
-  const parseDepartmentIDs = (value: string): number[] =>
-    Array.from(
-      new Set(
-        value
-          .split(/[\n,，\s]+/)
-          .map((item) => Number(item.trim()))
-          .filter((item) => Number.isInteger(item) && item > 0),
-      ),
+  const orgMemberMap = useMemo(() => {
+    const next = new Map<string, NonNullable<OrganizationSettingsView["members"]>[number]>();
+    (organizationView?.members || []).forEach((member) => {
+      const userID = (member.userid || "").trim();
+      if (userID) next.set(userID, member);
+    });
+    return next;
+  }, [organizationView?.members]);
+
+  const orderedDepartments = useMemo(() => {
+    const rows = [...(organizationView?.departments || [])];
+    rows.sort((a, b) => {
+      const aParent = Number(a.parent_id || 0);
+      const bParent = Number(b.parent_id || 0);
+      if (aParent !== bParent) return aParent - bParent;
+      const aOrder = Number(a.order || 0);
+      const bOrder = Number(b.order || 0);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      const aName = (a.name || "").trim();
+      const bName = (b.name || "").trim();
+      if (aName !== bName) return aName.localeCompare(bName, "zh-CN");
+      return Number(a.department_id || 0) - Number(b.department_id || 0);
+    });
+    return rows;
+  }, [organizationView?.departments]);
+
+  const departmentChildrenMap = useMemo(() => {
+    const next = new Map<number, typeof orderedDepartments>();
+    orderedDepartments.forEach((department) => {
+      const parentID = Number(department.parent_id || 0);
+      const bucket = next.get(parentID) || [];
+      bucket.push(department);
+      next.set(parentID, bucket);
+    });
+    return next;
+  }, [orderedDepartments]);
+
+  const departmentMembersMap = useMemo(() => {
+    const next = new Map<number, string[]>();
+    (organizationView?.members || []).forEach((member) => {
+      const userID = (member.userid || "").trim();
+      if (!userID) return;
+      (member.departments || []).forEach((department) => {
+        const departmentID = Number(department.department_id || 0);
+        if (departmentID <= 0) return;
+        const bucket = next.get(departmentID) || [];
+        if (!bucket.includes(userID)) bucket.push(userID);
+        next.set(departmentID, bucket);
+      });
+    });
+    return next;
+  }, [organizationView?.members]);
+
+  const treeRoots = useMemo(() => {
+    const departmentIDs = new Set(
+      orderedDepartments
+        .map((department) => Number(department.department_id || 0))
+        .filter((departmentID) => departmentID > 0),
     );
+    const walk = (parentID: number): DirectoryTreeNode[] => {
+      const children = departmentChildrenMap.get(parentID) || [];
+      return children.map((department) => {
+        const departmentID = Number(department.department_id || 0);
+        return {
+          department,
+          children: walk(departmentID),
+          memberIDs: [...(departmentMembersMap.get(departmentID) || [])].sort(
+            (left, right) => left.localeCompare(right, "zh-CN"),
+          ),
+        };
+      });
+    };
+    const rootParentIDs = Array.from(
+      new Set(
+        orderedDepartments
+          .filter((department) => {
+            const parentID = Number(department.parent_id || 0);
+            return parentID <= 0 || !departmentIDs.has(parentID);
+          })
+          .map((department) => Number(department.parent_id || 0)),
+      ),
+    ).sort((left, right) => left - right);
+    return rootParentIDs.flatMap((parentID) => walk(parentID));
+  }, [departmentChildrenMap, departmentMembersMap, orderedDepartments]);
+
+  const userHasDepartment = (userID: string): boolean => {
+    const member = orgMemberMap.get(userID);
+    return Boolean(member && (member.departments || []).length > 0);
+  };
+
+  const ungroupedUserIDs = useMemo(
+    () =>
+      (organizationView?.members || [])
+        .map((member) => (member.userid || "").trim())
+        .filter((userID) => userID && !userHasDepartment(userID))
+        .sort((left, right) => left.localeCompare(right, "zh-CN")),
+    [organizationView?.members],
+  );
+
+  const selectedServicerTargetsDeduped = useMemo(
+    () => normalizeSelectionItems(selectedServicerTargets),
+    [selectedServicerTargets],
+  );
+  const selectedServicerUsersDeduped = useMemo(
+    () =>
+      selectedServicerTargetsDeduped
+        .filter((item) => item.type === "user")
+        .map((item) => item.id.trim())
+        .filter(Boolean),
+    [selectedServicerTargetsDeduped],
+  );
+  const selectedServicerDepartmentsDeduped = useMemo(
+    () =>
+      selectedServicerTargetsDeduped
+        .filter((item) => item.type === "department")
+        .map((item) => Number(item.id))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    [selectedServicerTargetsDeduped],
+  );
+  const selectedFallbackTargetsDeduped = useMemo(
+    () => normalizeSelectionItems(selectedFallbackTargets),
+    [selectedFallbackTargets],
+  );
+  const selectedFallbackUsersDeduped = useMemo(
+    () =>
+      selectedFallbackTargetsDeduped
+        .filter((item) => item.type === "user")
+        .map((item) => item.id.trim())
+        .filter(Boolean),
+    [selectedFallbackTargetsDeduped],
+  );
+  const selectedFallbackDepartmentsDeduped = useMemo(
+    () =>
+      selectedFallbackTargetsDeduped
+        .filter((item) => item.type === "department")
+        .map((item) => Number(item.id))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    [selectedFallbackTargetsDeduped],
+  );
+
+  const receptionPool = selectedChannelDetail?.reception_pool;
+  const fallbackRoute = selectedChannelDetail?.fallback_route;
+  const stateLayers = selectedChannelDetail?.state_layers;
+  const routeBindings = selectedChannelDetail?.route_bindings || [];
+  const invalidRouteBindings = routeBindings.filter(
+    (item) => item.target_valid === false,
+  );
+  const isPoolEmpty =
+    receptionPool?.empty === true ||
+    (Number(receptionPool?.user_count || 0) === 0 &&
+      Number(receptionPool?.department_count || 0) === 0);
+
+  const fallbackModeLabel = (mode?: string): string => {
+    switch ((mode || "").trim()) {
+      case "ai_then_human":
+        return "智能接待后转人工";
+      case "ai_then_queue_then_human":
+        return "智能接待后进入排队池再转人工";
+      case "ai_only":
+      default:
+        return "仅智能接待";
+    }
+  };
+
+  const formatPoolTargetDisplay = () => {
+    if (!fallbackRoute) return "-";
+    const display = (fallbackRoute.human_target_display || "").trim();
+    if (display) return display;
+    if (fallbackRoute.mode === "ai_only") return "不涉及人工";
+    return "默认接待池";
+  };
 
   const promotionURL =
     (selectedScene?.url || "").trim() ||
@@ -340,16 +948,30 @@ export default function ReceptionChannels() {
   };
 
   const getDisplayName = (channel?: ReceptionChannel | null): string => {
-    return (
-      (channel?.display_name || "").trim() ||
-      (channel?.name || "").trim() ||
-      (channel?.open_kfid || "").trim() ||
-      "未命名渠道"
-    );
+    const openKFID = (channel?.open_kfid || "").trim();
+    const candidates = [
+      (channel?.display_name || "").trim(),
+      (channel?.name || "").trim(),
+    ];
+    for (const candidate of candidates) {
+      if (isValidChannelDisplayName(candidate, openKFID)) {
+        return candidate;
+      }
+    }
+    return "未命名客服渠道";
   };
 
   const getAvatarURL = (channel?: ReceptionChannel | null): string => {
     return (channel?.avatar_url || "").trim();
+  };
+
+  const isValidChannelDisplayName = (value: string, openKFID: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    if (openKFID && trimmed === openKFID) return false;
+    if (openKFID && trimmed === `渠道 ${openKFID}`) return false;
+    if (/^[A-Za-z0-9_:-]+$/.test(trimmed)) return false;
+    return true;
   };
 
   const formatServicerReason = (item: KFServicerUpsertResult): string => {
@@ -385,10 +1007,10 @@ export default function ReceptionChannels() {
       setNotice("当前渠道缺少 Open KFID");
       return;
     }
-    const userIDs = parseUserIDs(servicerUserInput);
-    const departmentIDs = parseDepartmentIDs(servicerDepartmentInput);
+    const userIDs = selectedServicerUsersDeduped;
+    const departmentIDs = selectedServicerDepartmentsDeduped;
     if (userIDs.length === 0 && departmentIDs.length === 0) {
-      setNotice("请至少输入一个成员 ID 或部门 ID");
+      setNotice("请至少勾选一个成员或部门");
       return;
     }
     try {
@@ -418,6 +1040,7 @@ export default function ReceptionChannels() {
         setServicerAssignments(refreshedAssignments);
         const refreshedDetail = await getReceptionChannelDetail(openKFID);
         setSelectedChannelDetail(refreshedDetail);
+        setSelectedServicerTargets([]);
         await loadChannels(keyword);
       }
     } catch (error) {
@@ -425,6 +1048,80 @@ export default function ReceptionChannels() {
       setServicerUpsertResult(null);
     } finally {
       setIsUpsertingServicers(false);
+    }
+  };
+
+  const handleFallbackRouteSave = async () => {
+    const openKFID = (
+      selectedChannelDetail?.channel?.open_kfid ||
+      selectedChannel?.open_kfid ||
+      ""
+    ).trim();
+    if (!openKFID) {
+      setNotice("当前渠道缺少 Open KFID");
+      return;
+    }
+    const humanUserIDs = selectedFallbackUsersDeduped;
+    const humanDepartmentIDs = selectedFallbackDepartmentsDeduped;
+    if (isPoolEmpty && fallbackModeInput !== "ai_only") {
+      setNotice("当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。");
+      return;
+    }
+    try {
+      setIsSavingFallbackRoute(true);
+      const result = await executeRoutingRulesCommand({
+        command: "configure_fallback_route",
+        open_kfid: openKFID,
+        payload: {
+          mode: fallbackModeInput,
+          human_target_type:
+            fallbackModeInput === "ai_only"
+              ? ""
+              : humanUserIDs.length > 0 && humanDepartmentIDs.length > 0
+                ? "mixed"
+                : humanDepartmentIDs.length > 0
+                  ? "department"
+                  : humanUserIDs.length > 0
+                    ? "user"
+                    : "",
+          human_user_ids:
+            fallbackModeInput === "ai_only" ? [] : humanUserIDs,
+          human_department_ids:
+            fallbackModeInput === "ai_only" ? [] : humanDepartmentIDs,
+        },
+      });
+      if (result?.success) {
+        setNotice(result.message || "兜底路由已更新");
+      } else {
+        setNotice(result?.message || "兜底路由更新失败");
+      }
+      const refreshedDetail = await getReceptionChannelDetail(openKFID);
+      setSelectedChannelDetail(refreshedDetail);
+      setFallbackModeInput(
+        (refreshedDetail?.fallback_route?.mode || "ai_only").trim() ||
+          "ai_only",
+      );
+      setSelectedFallbackTargets(
+        normalizeSelectionItems([
+          ...(refreshedDetail?.fallback_route?.human_user_ids || []).map(
+            (userID) => ({
+              type: "user" as const,
+              id: userID,
+            }),
+          ),
+          ...(refreshedDetail?.fallback_route?.human_department_ids || []).map(
+            (departmentID) => ({
+              type: "department" as const,
+              id: String(departmentID),
+            }),
+          ),
+        ]),
+      );
+      await loadChannels(keyword);
+    } catch (error) {
+      setNotice(normalizeErrorMessage(error));
+    } finally {
+      setIsSavingFallbackRoute(false);
     }
   };
 
@@ -852,13 +1549,9 @@ export default function ReceptionChannels() {
                 </div>
               </div>
               <div className="text-xs text-gray-600">
-                {(selectedChannelDetail?.staff_summary || "").trim() || "-"}
-                {(
-                  selectedChannelDetail?.routing_summary
-                    ?.latest_rule_update_at || ""
-                ).trim()
+                {(selectedChannelDetail?.routing_summary?.latest_rule_update_at || "").trim()
                   ? ` · 最近规则更新：${formatDateTime((selectedChannelDetail?.routing_summary?.latest_rule_update_at || "").trim())}`
-                  : ""}
+                  : "当前仅展示路由摘要与接待池/兜底状态，不在此处展开接待人员原始标识。"}
               </div>
               <div className="text-xs text-gray-500">
                 渠道路由规则明细请在“配置路由”中统一维护，这里仅展示摘要指标。
@@ -866,13 +1559,91 @@ export default function ReceptionChannels() {
             </div>
 
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-900">接待人员</h4>
+              <h4 className="text-sm font-semibold text-gray-900">
+                接待池摘要与当前兜底状态
+              </h4>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">接待池成员</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {Number(receptionPool?.user_count || 0)}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">接待池部门</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {Number(receptionPool?.department_count || 0)}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">当前兜底模式</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {fallbackModeLabel(fallbackRoute?.mode)}
+                  </div>
+                </div>
+                <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
+                  <div className="text-[10px] text-gray-500">系统排队状态</div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    {(stateLayers?.system_queue_state || "未启用").trim() || "未启用"}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded border border-gray-200 bg-white px-3 py-3 space-y-2 text-xs text-gray-700">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-gray-800">人工目标健康检查</span>
+                  <Badge
+                    variant="secondary"
+                    className={
+                      fallbackRoute?.human_target_valid === false
+                        ? "bg-orange-100 text-orange-700 border-transparent"
+                        : "bg-green-100 text-green-700 border-transparent"
+                    }
+                  >
+                    {fallbackRoute?.human_target_valid === false
+                      ? "当前目标已失效"
+                      : "目标有效"}
+                  </Badge>
+                </div>
+                <div>当前人工目标：{formatPoolTargetDisplay()}</div>
+                <div>
+                  企业微信原生接待状态：
+                  {(stateLayers?.wecom_native_states || []).join(" / ") ||
+                    "待通过会话状态接口与事件回调回写"}
+                </div>
+                <div>
+                  当前兜底模式：
+                  {fallbackModeLabel(stateLayers?.fallback_mode || fallbackRoute?.mode)}
+                </div>
+                {fallbackRoute?.human_target_valid === false &&
+                (fallbackRoute?.invalid_reason || "").trim() ? (
+                  <div className="rounded border border-orange-200 bg-orange-50 px-2 py-2 text-orange-700">
+                    {(fallbackRoute?.invalid_reason || "").trim()}
+                  </div>
+                ) : null}
+                {isPoolEmpty ? (
+                  <div className="rounded border border-blue-200 bg-blue-50 px-2 py-2 text-blue-700">
+                    当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。
+                  </div>
+                ) : null}
+              </div>
+              {invalidRouteBindings.length > 0 ? (
+                <div className="rounded border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-800">
+                  <div className="font-medium">历史路由健康检查</div>
+                  <div className="mt-1 space-y-1">
+                    {invalidRouteBindings.map((item) => (
+                      <div key={`${item.rule_id || item.rule_name || item.target}`}>
+                        {item.rule_name || "未命名规则"}：{(item.target_issue || "当前人工目标已失效").trim()}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-900">接待池配置</h4>
               <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-                {(selectedChannelDetail?.staff_summary || "").trim() ||
-                  "接待人员信息暂未同步"}
-                {assignedUsers.length > 0 || assignedDepartments.length > 0
-                  ? ` · 成员 ${assignedUsers.length} / 部门 ${assignedDepartments.length}`
-                  : ""}
+                已同步接待池摘要：成员 {assignedUsers.length} / 部门 {assignedDepartments.length}
               </div>
               {(selectedChannelDetail?.staff_members || []).length > 0 ||
               assignedUsers.length > 0 ? (
@@ -888,7 +1659,12 @@ export default function ReceptionChannels() {
                       variant="secondary"
                       className="bg-gray-100 text-gray-700 border-transparent"
                     >
-                      {staff}
+                      <WecomOpenDataName
+                        userid={staff}
+                        corpId={orgCorpID}
+                        fallback={staff}
+                        className="text-xs font-medium text-gray-700"
+                      />
                     </Badge>
                   ))}
                 </div>
@@ -906,7 +1682,16 @@ export default function ReceptionChannels() {
                         variant="secondary"
                         className="bg-blue-50 text-blue-700 border-transparent"
                       >
-                        部门 #{departmentID}
+                        <WecomOpenDataDepartment
+                          departmentId={departmentID}
+                          corpId={orgCorpID}
+                          fallback={
+                            (orgDepartmentMap.get(departmentID)?.name || "").trim() ||
+                            `部门 #${departmentID}`
+                          }
+                          className="text-xs font-medium text-blue-700"
+                          hintClassName="text-[10px] text-blue-300"
+                        />
                       </Badge>
                     ),
                   )}
@@ -918,15 +1703,14 @@ export default function ReceptionChannels() {
               )}
               <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold text-gray-800">
-                      最小接待分配写入
+                    <div>
+                      <div className="text-xs font-semibold text-gray-800">
+                        接待池写入
+                      </div>
+                      <div className="text-[11px] text-gray-500">
+                        先配置真实企业微信接待池，再配置兜底路由。成员通过 open-data 回显，目标按组织树分组展示。
+                      </div>
                     </div>
-                    <div className="text-[11px] text-gray-500">
-                      直接提交成员 ID / 部门
-                      ID，系统会先做应用可见范围前置校验，再调用企业微信真实写入。
-                    </div>
-                  </div>
                   <select
                     value={servicerOp}
                     onChange={(event) =>
@@ -941,38 +1725,28 @@ export default function ReceptionChannels() {
                   </select>
                 </div>
                 <div className="grid grid-cols-1 gap-3">
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-medium text-gray-700">
-                      成员 ID（逗号、空格或换行分隔）
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={servicerUserInput}
-                      onChange={(event) =>
-                        setServicerUserInput(event.target.value)
-                      }
-                      placeholder="例如：zhangsan lisi"
-                      className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-medium text-gray-700">
-                      部门 ID（逗号、空格或换行分隔）
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={servicerDepartmentInput}
-                      onChange={(event) =>
-                        setServicerDepartmentInput(event.target.value)
-                      }
-                      placeholder="例如：1001 1002"
-                      className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
+                  <DirectoryTreeSelect
+                    label="统一企业通讯录树选择"
+                    placeholder={
+                      isOrgOptionsLoading
+                        ? "正在加载组织树..."
+                        : "请选择要写入接待池的成员或部门"
+                    }
+                    searchPlaceholder="搜索部门 / 成员 / 角色"
+                    corpId={orgCorpID}
+                    treeRoots={treeRoots}
+                    ungroupedUsers={ungroupedUserIDs}
+                    memberMap={orgMemberMap}
+                    departmentMap={orgDepartmentMap}
+                    selectedItems={selectedServicerTargetsDeduped}
+                    onChange={setSelectedServicerTargets}
+                    emptyText="当前没有可选成员或部门"
+                    disabled={isOrgOptionsLoading}
+                  />
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-[11px] text-gray-500">
-                    成员级可见与部门级可操作会分离校验；成员可见不代表整部门可分配。
+                    成员名称优先通过 open-data 回显；成员可在多个部门节点下出现，但最终结果会按成员唯一 ID 去重。部门级可操作与成员级可见分离校验。
                   </div>
                   <Button
                     size="sm"
@@ -1015,9 +1789,27 @@ export default function ReceptionChannels() {
                         >
                           <div className="flex items-center justify-between gap-3">
                             <span className="font-medium">
-                              {item.target_type === "department"
-                                ? `部门 #${item.department_id || item.target_id || "-"}`
-                                : item.userid || item.target_id || "-"}
+                              {item.target_type === "department" ? (
+                                <WecomOpenDataDepartment
+                                  departmentId={Number(item.department_id || item.target_id || 0)}
+                                  corpId={orgCorpID}
+                                  fallback={
+                                    (orgDepartmentMap.get(
+                                      Number(item.department_id || item.target_id || 0),
+                                    )?.name || "").trim() ||
+                                    `部门 #${item.department_id || item.target_id || "-"}`
+                                  }
+                                  className="text-xs font-medium text-inherit"
+                                  hintClassName="text-[10px] opacity-70"
+                                />
+                              ) : (
+                                <WecomOpenDataName
+                                  userid={(item.userid || item.target_id || "").trim()}
+                                  corpId={orgCorpID}
+                                  fallback={(item.userid || item.target_id || "").trim()}
+                                  className="text-xs font-medium text-inherit"
+                                />
+                              )}
                             </span>
                             <Badge
                               variant="secondary"
@@ -1050,6 +1842,81 @@ export default function ReceptionChannels() {
                     )}
                   </div>
                 ) : null}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-900">
+                兜底路由配置
+              </h4>
+              <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
+                <div>
+                  <div className="text-xs font-semibold text-gray-800">
+                    最小兜底路由配置
+                  </div>
+                  <div className="text-[11px] text-gray-500">
+                    当前只承接兜底模式和人工目标有效性，不扩展成完整规则编辑器。涉及人工时，目标必须来自接待池。
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-gray-700">
+                    兜底模式
+                  </label>
+                  <select
+                    value={fallbackModeInput}
+                    onChange={(event) => setFallbackModeInput(event.target.value)}
+                    className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="ai_only">仅智能接待（ai_only）</option>
+                    <option value="ai_then_human">智能接待后转人工</option>
+                    <option value="ai_then_queue_then_human">
+                      智能接待后进入排队池再转人工
+                    </option>
+                  </select>
+                </div>
+                {fallbackModeInput !== "ai_only" ? (
+                  <div className="grid grid-cols-1 gap-3">
+                    <DirectoryTreeSelect
+                      label="统一企业通讯录树目标"
+                      placeholder={
+                        isOrgOptionsLoading
+                          ? "正在加载组织树..."
+                          : "按部门树选择人工成员或部门（留空表示默认接待池）"
+                      }
+                      searchPlaceholder="搜索部门 / 成员 / 角色"
+                      corpId={orgCorpID}
+                      treeRoots={treeRoots}
+                      ungroupedUsers={ungroupedUserIDs}
+                      memberMap={orgMemberMap}
+                      departmentMap={orgDepartmentMap}
+                      selectedItems={selectedFallbackTargetsDeduped}
+                      onChange={setSelectedFallbackTargets}
+                      emptyText="当前没有可选成员或部门"
+                      disabled={isOrgOptionsLoading}
+                    />
+                    {selectedFallbackTargetsDeduped.length === 0 ? (
+                      <div className="text-[11px] text-gray-500">
+                        留空表示使用默认接待池中的人工目标。
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-[11px] text-gray-500">
+                    排队池是系统内状态承接，不代表企业微信原生接待池。最终转人工目标仍必须来自接待池。
+                  </div>
+                  <Button
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700"
+                    disabled={isSavingFallbackRoute}
+                    onClick={() => void handleFallbackRouteSave()}
+                  >
+                    {isSavingFallbackRoute ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : null}
+                    保存兜底模式
+                  </Button>
+                </div>
               </div>
             </div>
 

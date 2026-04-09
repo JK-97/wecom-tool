@@ -40,12 +40,41 @@ export type ReceptionChannelDetail = {
   channel?: ReceptionChannel;
   scenes?: Array<{ name?: string; scene_value?: string; url?: string }>;
   warnings?: string[];
+  reception_pool?: {
+    user_count?: number;
+    department_count?: number;
+    user_ids?: string[];
+    department_ids?: number[];
+    empty?: boolean;
+  };
+  fallback_route?: {
+    mode?: string;
+    human_target_type?: string;
+    human_user_ids?: string[];
+    human_department_ids?: number[];
+    human_target_display?: string;
+    human_target_valid?: boolean;
+    invalid_reason_code?: string;
+    invalid_reason?: string;
+    queue_enabled?: boolean;
+    requires_human?: boolean;
+    uses_default_pool?: boolean;
+  };
+  state_layers?: {
+    wecom_native_states?: string[];
+    system_queue_enabled?: boolean;
+    system_queue_state?: string;
+    fallback_mode?: string;
+    pending_human_target_display?: string;
+  };
   route_bindings?: Array<{
     rule_id?: number;
     rule_name?: string;
     scene?: string;
     mode?: string;
     target?: string;
+    target_valid?: boolean;
+    target_issue?: string;
     priority?: number;
     is_default?: boolean;
     enabled?: boolean;
