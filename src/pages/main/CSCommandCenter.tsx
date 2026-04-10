@@ -19,7 +19,7 @@ import {
   ChevronRight,
   Star,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import {
@@ -31,11 +31,11 @@ import {
   type CommandCenterSessionDetail,
   type CommandCenterViewModel,
 } from "@/services/commandCenterService";
-import { getOrganizationSettingsView, type OrganizationSettingsView } from "@/services/organizationSettingsService";
 import { listKFServicerAssignments, type KFServicerAssignment } from "@/services/receptionService";
 import { resolveServicerIdentityView } from "@/services/servicerIdentity";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
+import { useAuth } from "@/context/AuthContext";
 
 type SessionTab = "queue" | "active" | "closed";
 const COMMAND_CENTER_POLL_INTERVAL_MS = 5000;
@@ -93,6 +93,7 @@ function resolveAssignedDisplay(session?: CommandCenterSession) {
 }
 
 export default function CSCommandCenter() {
+  const auth = useAuth();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [isEndModalOpen, setIsEndModalOpen] = useState(false);
@@ -106,11 +107,11 @@ export default function CSCommandCenter() {
   const [keyword, setKeyword] = useState("");
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [orgView, setOrgView] = useState<OrganizationSettingsView | null>(null);
   const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
   const [transferSearch, setTransferSearch] = useState("");
   const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
+  const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
   const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
@@ -122,6 +123,8 @@ export default function CSCommandCenter() {
     const params = new URLSearchParams(window.location.search);
     return (params.get("open_kfid") || "").trim();
   }, []);
+
+  const corpID = (auth.corp?.id || "").trim();
 
   const loadView = async () => {
     const data = await getCSCommandCenterView({
@@ -198,23 +201,6 @@ export default function CSCommandCenter() {
   }, [queryOpenKFID, selectedExternalUserID]);
 
   useEffect(() => {
-    let alive = true;
-    if (orgView) return;
-    void getOrganizationSettingsView()
-      .then((data) => {
-        if (!alive) return;
-        setOrgView(data);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setOrgView(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [orgView]);
-
-  useEffect(() => {
     if (typeof window === "undefined") return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
@@ -238,25 +224,30 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     const openKFID = (selectedSession?.open_kfid || "").trim();
+    if (!isTransferModalOpen) return;
     if (!openKFID) {
       setTransferCandidates([]);
       setSelectedTransferServicerID("");
       return;
     }
-    let alive = true;
-    if (isTransferModalOpen) {
-      setIsLoadingTransferCandidates(true);
-    }
-    void Promise.all([
-      orgView ? Promise.resolve(orgView) : getOrganizationSettingsView(),
-      listKFServicerAssignments(openKFID),
-    ])
-      .then(([organization, assignments]) => {
-        if (!alive) return;
-        if (!orgView) {
-          setOrgView(organization);
+    const cached = transferCandidatesCacheRef.current.get(openKFID);
+    if (cached) {
+      setTransferCandidates(cached);
+      setSelectedTransferServicerID((prev) => {
+        if (prev && cached.some((item) => item.servicerUserID === prev)) {
+          return prev;
         }
+        return cached[0]?.servicerUserID || "";
+      });
+      return;
+    }
+    let alive = true;
+    setIsLoadingTransferCandidates(true);
+    void listKFServicerAssignments(openKFID)
+      .then((assignments) => {
+        if (!alive) return;
         const nextCandidates = buildTransferCandidates(assignments);
+        transferCandidatesCacheRef.current.set(openKFID, nextCandidates);
         setTransferCandidates(nextCandidates);
         setSelectedTransferServicerID((prev) => {
           if (prev && nextCandidates.some((item) => item.servicerUserID === prev)) {
@@ -278,7 +269,7 @@ export default function CSCommandCenter() {
     return () => {
       alive = false;
     };
-  }, [isTransferModalOpen, orgView, selectedSession?.open_kfid]);
+  }, [isTransferModalOpen, selectedSession?.open_kfid]);
 
   const transferCandidatesFiltered = useMemo(() => {
     const query = transferSearch.trim().toLowerCase();
@@ -296,8 +287,9 @@ export default function CSCommandCenter() {
       } satisfies SessionActionPanel;
     }
     const state = Number(selectedSession.session_state || 0);
-    return buildSessionActionPanel(state, transferCandidates.length);
-  }, [selectedSession?.session_state, transferCandidates.length]);
+    const poolCandidateCount = isTransferModalOpen ? transferCandidates.length : null;
+    return buildSessionActionPanel(state, poolCandidateCount);
+  }, [isTransferModalOpen, selectedSession?.session_state, transferCandidates.length]);
 
   const poolCandidateCount = transferCandidates.length;
 
@@ -361,8 +353,10 @@ export default function CSCommandCenter() {
         servicer_userid: input.servicerUserID,
       });
       setNotice(input.successMessage);
-      await loadView();
-      await loadDetail(selectedSession.external_userid || "");
+      await Promise.all([
+        loadView(),
+        loadDetail(selectedSession.external_userid || ""),
+      ]);
       return true;
     } catch (error) {
       setNotice(describeSessionActionError(error));
@@ -567,12 +561,12 @@ export default function CSCommandCenter() {
                       <GitBranch className="w-3 h-3" />{" "}
                       {assignedDisplay.displayUserID ? (
                         <span title={assignedDisplay.rawID || assignedDisplay.displayFallback}>
-                          <WecomOpenDataName
-                            userid={assignedDisplay.displayUserID}
-                            corpId={(orgView?.integration?.corp_id || "").trim()}
-                            fallback={assignedDisplay.displayFallback}
-                            className="truncate text-[10px] text-gray-700"
-                          />
+                            <WecomOpenDataName
+                              userid={assignedDisplay.displayUserID}
+                              corpId={corpID}
+                              fallback={assignedDisplay.displayFallback}
+                              className="truncate text-[10px] text-gray-700"
+                            />
                         </span>
                       ) : assignedDisplay.displayFallback ? (
                         <span
@@ -617,7 +611,7 @@ export default function CSCommandCenter() {
                   <span className="inline-flex items-center gap-2">
                     <WecomOpenDataName
                       userid={assignedDisplayForHeader.displayUserID}
-                      corpId={(orgView?.integration?.corp_id || "").trim()}
+                      corpId={corpID}
                       fallback={assignedDisplayForHeader.displayFallback}
                       className="text-sm text-gray-700"
                     />
@@ -1186,7 +1180,7 @@ export default function CSCommandCenter() {
                         <div className="min-w-0 flex-1">
                           <WecomOpenDataName
                             userid={candidate.displayUserID}
-                            corpId={(orgView?.integration?.corp_id || "").trim()}
+                            corpId={corpID}
                             fallback={candidate.displayFallback}
                             className="truncate text-sm font-medium text-gray-900"
                           />
@@ -1342,16 +1336,18 @@ function buildTransferCandidates(assignments: KFServicerAssignment[]): TransferC
 
 function buildSessionActionPanel(
   sessionState: number,
-  poolCandidateCount: number,
+  poolCandidateCount: number | null,
 ): SessionActionPanel {
-  const hasHumanCandidates = poolCandidateCount > 0;
+  const hasKnownCandidates = poolCandidateCount !== null;
+  const hasHumanCandidates = poolCandidateCount === null || poolCandidateCount > 0;
   const transferAction: SessionActionDescriptor = {
     key: "transfer_to_human",
     label: "转给指定人工",
     description: "从当前接待池中选择一个人工接待人员",
     tone: "primary",
     disabled: !hasHumanCandidates,
-    disabledReason: hasHumanCandidates ? "" : "当前接待池没有可转接人工",
+    disabledReason:
+      hasHumanCandidates || !hasKnownCandidates ? "" : "当前接待池没有可转接人工",
   };
   const queueAction: SessionActionDescriptor = {
     key: "send_to_queue",
@@ -1373,7 +1369,7 @@ function buildSessionActionPanel(
         description: "可以先送入待接入池，也可以直接转给当前接待池中的人工。",
         primaryAction: queueAction,
         secondaryActions: [transferAction],
-        emptyHint: hasHumanCandidates
+        emptyHint: !hasKnownCandidates || hasHumanCandidates
           ? ""
           : "当前接待池没有可选人工，建议先送入待接入池。",
       };
@@ -1383,7 +1379,7 @@ function buildSessionActionPanel(
         description: "需要人工介入时，可直接转给指定人工，或先送入待接入池。",
         primaryAction: transferAction,
         secondaryActions: [queueAction],
-        emptyHint: hasHumanCandidates
+        emptyHint: !hasKnownCandidates || hasHumanCandidates
           ? ""
           : "当前接待池没有可选人工，只能先送入待接入池。",
       };
@@ -1393,7 +1389,10 @@ function buildSessionActionPanel(
         description: "可从当前接待池中指定人工，立即转入人工接待。",
         primaryAction: transferAction,
         secondaryActions: [],
-        emptyHint: hasHumanCandidates ? "" : "当前接待池没有可转接人工。",
+        emptyHint:
+          !hasKnownCandidates || hasHumanCandidates
+            ? ""
+            : "当前接待池没有可转接人工。",
       };
     case 3:
       return {
@@ -1401,7 +1400,10 @@ function buildSessionActionPanel(
         description: "可继续转给其他人工，或送回待接入池、直接结束会话。",
         primaryAction: transferAction,
         secondaryActions: [queueAction, endAction],
-        emptyHint: hasHumanCandidates ? "" : "当前接待池没有其他可转接人工。",
+        emptyHint:
+          !hasKnownCandidates || hasHumanCandidates
+            ? ""
+            : "当前接待池没有其他可转接人工。",
       };
     case 4:
       return {

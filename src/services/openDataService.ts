@@ -21,6 +21,11 @@ type SignatureReply = {
   data?: Partial<SignatureBundle>
 }
 
+type SignatureCacheEntry = {
+  bundle: SignatureBundle
+  expiresAt: number
+}
+
 export type OpenDataAvailability =
   | "ready"
   | "initializing"
@@ -44,8 +49,11 @@ type WWOpenDataGlobal = {
 const JWEIXIN_SDK_URL = "https://res.wx.qq.com/open/js/jweixin-1.2.0.js"
 const JWXWORK_SDK_URL = "https://open.work.weixin.qq.com/wwopen/js/jwxwork-1.0.0.js"
 const OPEN_DATA_REGISTER_API_LIST = ["checkJsApi"]
+const SIGNATURE_CACHE_TTL_MS = 30 * 1000
 
 let openDataReadyPromise: Promise<OpenDataRuntime> | null = null
+const signatureCache = new Map<string, SignatureCacheEntry>()
+const signaturePromiseCache = new Map<string, Promise<SignatureBundle>>()
 
 declare global {
   interface Window {
@@ -131,46 +139,69 @@ async function ensureOpenDataScripts(): Promise<void> {
 }
 
 async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle> {
-  const payload = await requestJSON<SignatureReply>("/api/v1/wecom/js-sdk/signature", {
+  const cacheKey = targetURL.trim()
+  const cached = signatureCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.bundle
+  }
+
+  const inflight = signaturePromiseCache.get(cacheKey)
+  if (inflight) {
+    return inflight
+  }
+
+  const request = requestJSON<SignatureReply>("/api/v1/wecom/js-sdk/signature", {
     method: "POST",
     body: JSON.stringify({ url: targetURL }),
     skipAuthRedirect: true,
   })
-  const data = payload?.data
-  if (!data) {
-    throw new Error("签名接口返回为空")
-  }
+    .then((payload) => {
+      const data = payload?.data
+      if (!data) {
+        throw new Error("签名接口返回为空")
+      }
 
-  const bundle: SignatureBundle = {
-    corp_id: readString(data.corp_id),
-    suite_id: readString(data.suite_id),
-    agent_id: readInt(data.agent_id),
-    config_signature: {
-      timestamp: readInt(data.config_signature?.timestamp),
-      nonce_str: readString(data.config_signature?.nonce_str),
-      signature: readString(data.config_signature?.signature),
-    },
-    agent_config_signature: {
-      timestamp: readInt(data.agent_config_signature?.timestamp),
-      nonce_str: readString(data.agent_config_signature?.nonce_str),
-      signature: readString(data.agent_config_signature?.signature),
-    },
-  }
+      const bundle: SignatureBundle = {
+        corp_id: readString(data.corp_id),
+        suite_id: readString(data.suite_id),
+        agent_id: readInt(data.agent_id),
+        config_signature: {
+          timestamp: readInt(data.config_signature?.timestamp),
+          nonce_str: readString(data.config_signature?.nonce_str),
+          signature: readString(data.config_signature?.signature),
+        },
+        agent_config_signature: {
+          timestamp: readInt(data.agent_config_signature?.timestamp),
+          nonce_str: readString(data.agent_config_signature?.nonce_str),
+          signature: readString(data.agent_config_signature?.signature),
+        },
+      }
 
-  if (
-    !bundle.corp_id ||
-    bundle.agent_id <= 0 ||
-    bundle.config_signature.timestamp <= 0 ||
-    !bundle.config_signature.nonce_str ||
-    !bundle.config_signature.signature ||
-    bundle.agent_config_signature.timestamp <= 0 ||
-    !bundle.agent_config_signature.nonce_str ||
-    !bundle.agent_config_signature.signature
-  ) {
-    throw new Error("签名接口返回字段不完整")
-  }
+      if (
+        !bundle.corp_id ||
+        bundle.agent_id <= 0 ||
+        bundle.config_signature.timestamp <= 0 ||
+        !bundle.config_signature.nonce_str ||
+        !bundle.config_signature.signature ||
+        bundle.agent_config_signature.timestamp <= 0 ||
+        !bundle.agent_config_signature.nonce_str ||
+        !bundle.agent_config_signature.signature
+      ) {
+        throw new Error("签名接口返回字段不完整")
+      }
 
-  return bundle
+      signatureCache.set(cacheKey, {
+        bundle,
+        expiresAt: Date.now() + SIGNATURE_CACHE_TTL_MS,
+      })
+      return bundle
+    })
+    .finally(() => {
+      signaturePromiseCache.delete(cacheKey)
+    })
+
+  signaturePromiseCache.set(cacheKey, request)
+  return request
 }
 
 async function registerOpenDataIdentity(pageURL: string): Promise<void> {
