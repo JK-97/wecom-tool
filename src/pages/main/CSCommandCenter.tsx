@@ -63,7 +63,9 @@ type TransferCandidate = {
   openUserID: string;
   role: string;
   searchText: string;
-  fallbackName: string;
+  displayUserID: string;
+  displayFallback: string;
+  rawID: string;
 };
 
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
@@ -75,6 +77,17 @@ function resolveSessionBucket(session: CommandCenterSession): SessionTab {
   if (state === 3) return "active";
   if (state === 4) return "closed";
   return "queue";
+}
+
+function resolveAssignedDisplay(session?: CommandCenterSession) {
+  const rawID = (session?.assigned_userid || "").trim();
+  const displayUserID = (session?.assigned_display_userid || "").trim();
+  const displayFallback = (session?.assigned_display_fallback || rawID || "待分配").trim();
+  return {
+    rawID,
+    displayUserID,
+    displayFallback,
+  };
 }
 
 export default function CSCommandCenter() {
@@ -430,6 +443,7 @@ export default function CSCommandCenter() {
   const complianceRisk =
     (activeMonitor?.compliance?.status || "").trim().toLowerCase() === "risk" ||
     activeMonitor?.compliance_pass === false;
+  const assignedDisplayForHeader = resolveAssignedDisplay(selectedSession || undefined);
 
   return (
     <div className="flex h-full gap-6">
@@ -491,6 +505,7 @@ export default function CSCommandCenter() {
               const slaStatus = (session.reply_sla_status || "")
                 .trim()
                 .toLowerCase();
+              const assignedDisplay = resolveAssignedDisplay(session);
               return (
                 <div
                   key={(
@@ -548,7 +563,25 @@ export default function CSCommandCenter() {
                   <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span className="flex items-center gap-1">
                       <GitBranch className="w-3 h-3" />{" "}
-                      {(session.assigned_userid || "待分配").trim()}
+                      {assignedDisplay.displayUserID ? (
+                        <span title={assignedDisplay.rawID || assignedDisplay.displayFallback}>
+                          <WecomOpenDataName
+                            userid={assignedDisplay.displayUserID}
+                            corpId={(orgView?.integration?.corp_id || "").trim()}
+                            fallback={assignedDisplay.displayFallback}
+                            className="truncate text-[10px] text-gray-700"
+                          />
+                        </span>
+                      ) : assignedDisplay.displayFallback ? (
+                        <span
+                          className="truncate text-[10px] text-gray-700"
+                          title={assignedDisplay.rawID || assignedDisplay.displayFallback}
+                        >
+                          {assignedDisplay.displayFallback}
+                        </span>
+                      ) : (
+                        "待分配"
+                      )}
                     </span>
                     <span>
                       {(session.last_active || "")
@@ -577,7 +610,41 @@ export default function CSCommandCenter() {
                 {(selectedSession?.session_label || "-").trim()}
               </Badge>
               <span className="text-sm text-gray-500 border-l border-gray-200 pl-4">
-                接待人：{(selectedSession?.assigned_userid || "待分配").trim()}
+                接待人：
+                {assignedDisplayForHeader.displayUserID ? (
+                  <span className="inline-flex items-center gap-2">
+                    <WecomOpenDataName
+                      userid={assignedDisplayForHeader.displayUserID}
+                      corpId={(orgView?.integration?.corp_id || "").trim()}
+                      fallback={assignedDisplayForHeader.displayFallback}
+                      className="text-sm text-gray-700"
+                    />
+                    {assignedDisplayForHeader.rawID ? (
+                      <span
+                        className="text-[11px] text-gray-400"
+                        title={assignedDisplayForHeader.rawID}
+                      >
+                        ID:{assignedDisplayForHeader.rawID}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : assignedDisplayForHeader.displayFallback ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="text-sm text-gray-700">
+                      {assignedDisplayForHeader.displayFallback}
+                    </span>
+                    {assignedDisplayForHeader.rawID ? (
+                      <span
+                        className="text-[11px] text-gray-400"
+                        title={assignedDisplayForHeader.rawID}
+                      >
+                        ID:{assignedDisplayForHeader.rawID}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : (
+                  "待分配"
+                )}
               </span>
             </div>
             <div className="text-right">
@@ -1116,14 +1183,22 @@ export default function CSCommandCenter() {
                         <div className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"}`} />
                         <div className="min-w-0 flex-1">
                           <WecomOpenDataName
-                            userid={candidate.openUserID || candidate.servicerUserID || candidate.userid}
+                            userid={candidate.displayUserID}
                             corpId={(orgView?.integration?.corp_id || "").trim()}
-                            fallback={candidate.fallbackName}
+                            fallback={candidate.displayFallback}
                             className="truncate text-sm font-medium text-gray-900"
                           />
                           <div className="mt-1 text-xs text-gray-500">
                             {(candidate.role || "接待池成员").trim()}
                           </div>
+                          {candidate.rawID ? (
+                            <div
+                              className="mt-1 text-[11px] text-gray-400"
+                              title={candidate.rawID}
+                            >
+                              ID:{candidate.rawID}
+                            </div>
+                          ) : null}
                         </div>
                       </button>
                     );
@@ -1257,20 +1332,23 @@ function buildTransferCandidates(
     const member = aliasToMember.get(servicerUserID);
     const userid = (member?.userid || "").trim();
     const openUserID = (member?.open_userid || "").trim();
-    const role = (member?.role || "").trim();
-    const fallbackName = userid || openUserID || servicerUserID;
-    const searchText = `${fallbackName} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
+    const role = (assignment.role || member?.role || "").trim();
+    const displayUserID = (assignment.display_userid || openUserID || userid || servicerUserID).trim();
+    const displayFallback = (assignment.display_fallback || userid || servicerUserID).trim();
+    const searchText = `${displayFallback} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
     deduped.set(servicerUserID, {
       servicerUserID,
       userid,
       openUserID,
       role,
-      fallbackName,
+      displayUserID,
+      displayFallback,
+      rawID: servicerUserID,
       searchText,
     });
   }
   return Array.from(deduped.values()).sort((left, right) =>
-    left.fallbackName.localeCompare(right.fallbackName, "zh-CN"),
+    left.displayFallback.localeCompare(right.displayFallback, "zh-CN"),
   );
 }
 

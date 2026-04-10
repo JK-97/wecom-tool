@@ -16,6 +16,8 @@ export type CommandCenterSession = {
   session_label?: string;
   state_bucket?: string;
   assigned_userid?: string;
+  assigned_display_userid?: string;
+  assigned_display_fallback?: string;
   last_active?: string;
   last_message?: string;
   unread_count?: number;
