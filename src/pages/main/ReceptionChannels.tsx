@@ -28,12 +28,14 @@ import {
   upsertKFServicerAssignments,
   type ReceptionChannel,
   type ReceptionChannelDetail,
+  type KFServicerAssignment,
   type KFServicerUpsertResponse,
   type KFServicerUpsertResult,
   type ReceptionOverview,
 } from "@/services/receptionService";
 import { normalizeErrorMessage } from "@/services/http";
 import { executeRoutingRulesCommand } from "@/services/routingService";
+import { resolveServicerIdentityView } from "@/services/servicerIdentity";
 import {
   getOrganizationSettingsView,
   type OrganizationSettingsView,
@@ -92,16 +94,11 @@ const normalizeSelectionItems = (
 };
 
 const selectionItemsFromAssignments = (
-  assignments: Array<{ userid?: string; department_id?: number; status?: number }>,
-  memberUserIDByAlias?: Map<string, string>,
+  assignments: KFServicerAssignment[],
 ): DirectorySelectionItem[] =>
   normalizeSelectionItems([
     ...assignments
-      .map((item) => {
-        const rawID = (item.userid || "").trim();
-        if (!rawID) return "";
-        return memberUserIDByAlias?.get(rawID) || rawID;
-      })
+      .map((item) => resolveServicerIdentityView(item).stableIdentity)
       .filter(Boolean)
       .map((userID) => ({ type: "user" as const, id: userID })),
     ...assignments
@@ -699,7 +696,7 @@ export default function ReceptionChannels() {
       const assignments = await listKFServicerAssignments(channel.open_kfid);
       setServicerAssignments(assignments);
       setSelectedServicerTargets(
-        selectionItemsFromAssignments(assignments, orgMemberUserIDByAlias),
+        selectionItemsFromAssignments(assignments),
       );
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
@@ -850,17 +847,6 @@ export default function ReceptionChannels() {
     return next;
   }, [organizationView?.members]);
 
-  const orgMemberUserIDByAlias = useMemo(() => {
-    const next = new Map<string, string>();
-    (organizationView?.members || []).forEach((member) => {
-      const userID = (member.userid || "").trim();
-      const openUserID = (member.open_userid || "").trim();
-      if (userID) next.set(userID, userID);
-      if (openUserID && userID) next.set(openUserID, userID);
-    });
-    return next;
-  }, [organizationView?.members]);
-
   useEffect(() => {
     if (isPoolEditorOpen) return;
     if (servicerAssignments.length === 0) {
@@ -868,23 +854,9 @@ export default function ReceptionChannels() {
       return;
     }
     setSelectedServicerTargets(
-      selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+      selectionItemsFromAssignments(servicerAssignments),
     );
-  }, [isPoolEditorOpen, orgMemberUserIDByAlias, servicerAssignments]);
-
-  useEffect(() => {
-    if (orgMemberUserIDByAlias.size === 0) return;
-    setSelectedServicerTargets((prev) => {
-      const normalized = normalizeSelectionItems(
-        prev.map((item) => {
-          if (item.type !== "user") return item;
-          const normalizedID = orgMemberUserIDByAlias.get(item.id.trim()) || item.id.trim();
-          return normalizedID === item.id ? item : { ...item, id: normalizedID };
-        }),
-      );
-      return isSameSelection(prev, normalized) ? prev : normalized;
-    });
-  }, [orgMemberUserIDByAlias]);
+  }, [isPoolEditorOpen, servicerAssignments]);
 
   const orderedDepartments = useMemo(() => {
     const rows = [...(organizationView?.departments || [])];
@@ -1017,21 +989,22 @@ export default function ReceptionChannels() {
     [selectedFallbackTargetsDeduped],
   );
   const currentPoolSelection = useMemo(
-    () => selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
-    [orgMemberUserIDByAlias, servicerAssignments],
+    () => selectionItemsFromAssignments(servicerAssignments),
+    [servicerAssignments],
   );
   const currentPoolRawUsersByNormalizedID = useMemo(() => {
     const next = new Map<string, string[]>();
     servicerAssignments.forEach((item) => {
-      const rawID = (item.userid || "").trim();
+      const identity = resolveServicerIdentityView(item);
+      const rawID = identity.rawServicerUserID;
       if (!rawID) return;
-      const normalizedID = orgMemberUserIDByAlias.get(rawID) || rawID;
+      const normalizedID = identity.stableIdentity || rawID;
       const bucket = next.get(normalizedID) || [];
       if (!bucket.includes(rawID)) bucket.push(rawID);
       next.set(normalizedID, bucket);
     });
     return next;
-  }, [orgMemberUserIDByAlias, servicerAssignments]);
+  }, [servicerAssignments]);
   const poolSelectionChanged = useMemo(
     () => !isSameSelection(currentPoolSelection, selectedServicerTargetsDeduped),
     [currentPoolSelection, selectedServicerTargetsDeduped],
@@ -1215,10 +1188,7 @@ export default function ReceptionChannels() {
       setNotice("当前渠道缺少 Open KFID");
       return;
     }
-    const currentSelection = selectionItemsFromAssignments(
-      servicerAssignments,
-      orgMemberUserIDByAlias,
-    );
+    const currentSelection = selectionItemsFromAssignments(servicerAssignments);
     const desiredSelection = selectedServicerTargetsDeduped;
     if (desiredSelection.length === 0) {
       setNotice("当前未选择任何接待对象，请至少保留一个成员或部门。");
@@ -1297,7 +1267,7 @@ export default function ReceptionChannels() {
         const refreshedDetail = await getReceptionChannelDetail(openKFID);
         setSelectedChannelDetail(refreshedDetail);
         setSelectedServicerTargets(
-          selectionItemsFromAssignments(refreshedAssignments, orgMemberUserIDByAlias),
+          selectionItemsFromAssignments(refreshedAssignments),
         );
         if (overallStatus === "succeeded" || (successCount > 0 && failureCount === 0)) {
           setIsPoolEditorOpen(false);
@@ -1370,7 +1340,7 @@ export default function ReceptionChannels() {
 
   const openPoolEditor = () => {
     setSelectedServicerTargets(
-      selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+      selectionItemsFromAssignments(servicerAssignments),
     );
     setServicerUpsertResult(null);
     setIsPoolEditorOpen(true);
@@ -1378,7 +1348,7 @@ export default function ReceptionChannels() {
 
   const closePoolEditor = () => {
     setSelectedServicerTargets(
-      selectionItemsFromAssignments(servicerAssignments, orgMemberUserIDByAlias),
+      selectionItemsFromAssignments(servicerAssignments),
     );
     setServicerUpsertResult(null);
     setIsPoolEditorOpen(false);

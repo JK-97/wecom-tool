@@ -111,8 +111,13 @@ export type ReceptionChannelDetail = {
 
 export type KFServicerAssignment = {
   userid?: string;
-  display_userid?: string;
+  raw_servicer_userid?: string;
+  resolved_userid?: string;
+  resolved_open_userid?: string;
+  display_identity?: string;
   display_fallback?: string;
+  display_userid?: string;
+  resolution_status?: string;
   role?: string;
   department_id?: number;
   status?: number;

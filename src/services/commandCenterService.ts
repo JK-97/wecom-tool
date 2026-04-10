@@ -18,6 +18,10 @@ export type CommandCenterSession = {
   assigned_userid?: string;
   assigned_display_userid?: string;
   assigned_display_fallback?: string;
+  assigned_raw_servicer_userid?: string;
+  assigned_resolved_userid?: string;
+  assigned_resolved_open_userid?: string;
+  assigned_resolution_status?: string;
   last_active?: string;
   last_message?: string;
   unread_count?: number;

@@ -33,6 +33,7 @@ import {
 } from "@/services/commandCenterService";
 import { getOrganizationSettingsView, type OrganizationSettingsView } from "@/services/organizationSettingsService";
 import { listKFServicerAssignments, type KFServicerAssignment } from "@/services/receptionService";
+import { resolveServicerIdentityView } from "@/services/servicerIdentity";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 
@@ -80,9 +81,10 @@ function resolveSessionBucket(session: CommandCenterSession): SessionTab {
 }
 
 function resolveAssignedDisplay(session?: CommandCenterSession) {
-  const rawID = (session?.assigned_userid || "").trim();
-  const displayUserID = (session?.assigned_display_userid || "").trim();
-  const displayFallback = (session?.assigned_display_fallback || rawID || "待分配").trim();
+  const identity = resolveServicerIdentityView(session);
+  const rawID = identity.rawServicerUserID;
+  const displayUserID = identity.displayIdentity;
+  const displayFallback = (identity.displayFallback || "待分配").trim();
   return {
     rawID,
     displayUserID,
@@ -254,7 +256,7 @@ export default function CSCommandCenter() {
         if (!orgView) {
           setOrgView(organization);
         }
-        const nextCandidates = buildTransferCandidates(assignments, organization);
+        const nextCandidates = buildTransferCandidates(assignments);
         setTransferCandidates(nextCandidates);
         setSelectedTransferServicerID((prev) => {
           if (prev && nextCandidates.some((item) => item.servicerUserID === prev)) {
@@ -1310,31 +1312,17 @@ function normalizeEmotionCode(value?: string):
   }
 }
 
-function buildTransferCandidates(
-  assignments: KFServicerAssignment[],
-  orgView: OrganizationSettingsView | null,
-): TransferCandidate[] {
-  const aliasToMember = new Map<
-    string,
-    NonNullable<OrganizationSettingsView["members"]>[number]
-  >();
-  for (const member of orgView?.members || []) {
-    const userid = (member.userid || "").trim();
-    const openUserID = (member.open_userid || "").trim();
-    if (userid) aliasToMember.set(userid, member);
-    if (openUserID) aliasToMember.set(openUserID, member);
-  }
-
+function buildTransferCandidates(assignments: KFServicerAssignment[]): TransferCandidate[] {
   const deduped = new Map<string, TransferCandidate>();
   for (const assignment of assignments || []) {
-    const servicerUserID = (assignment.userid || "").trim();
+    const identity = resolveServicerIdentityView(assignment);
+    const servicerUserID = identity.rawServicerUserID;
     if (!servicerUserID) continue;
-    const member = aliasToMember.get(servicerUserID);
-    const userid = (member?.userid || "").trim();
-    const openUserID = (member?.open_userid || "").trim();
-    const role = (assignment.role || member?.role || "").trim();
-    const displayUserID = (assignment.display_userid || openUserID || userid || servicerUserID).trim();
-    const displayFallback = (assignment.display_fallback || userid || servicerUserID).trim();
+    const userid = identity.resolvedUserID;
+    const openUserID = identity.resolvedOpenUserID;
+    const role = (assignment.role || "").trim();
+    const displayUserID = identity.displayIdentity;
+    const displayFallback = identity.displayFallback;
     const searchText = `${displayFallback} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
     deduped.set(servicerUserID, {
       servicerUserID,
