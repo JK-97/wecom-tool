@@ -751,6 +751,30 @@ export default function CSCommandCenter() {
 
             <div>
               <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <Info className="w-4 h-4 text-blue-600" /> 进入会话来源
+              </h4>
+              <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-2">
+                <SessionEntryContextRow
+                  label="场景"
+                  value={(detail?.entry_context?.scene || "").trim()}
+                />
+                <SessionEntryContextRow
+                  label="场景参数"
+                  value={(detail?.entry_context?.scene_param || "").trim()}
+                />
+                <SessionEntryContextRow
+                  label="来源昵称"
+                  value={(detail?.entry_context?.wechat_channels_nickname || "").trim()}
+                />
+                <SessionEntryContextRow
+                  label="欢迎码"
+                  value={(detail?.entry_context?.welcome_code || "").trim()}
+                />
+              </div>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <GitBranch className="w-4 h-4 text-blue-600" /> 路由信息
               </h4>
               <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-3">
@@ -1344,6 +1368,17 @@ function readActionDisabledMessage(panel: SessionActionPanel): string {
   if (panel.primaryAction?.disabledReason) return panel.primaryAction.disabledReason;
   const disabledSecondary = panel.secondaryActions.find((item) => item.disabledReason);
   return disabledSecondary?.disabledReason || "";
+}
+
+function SessionEntryContextRow(props: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <span className="text-xs text-gray-500 shrink-0">{props.label}</span>
+      <span className="text-xs text-right text-gray-900 break-all">
+        {props.value || "-"}
+      </span>
+    </div>
+  );
 }
 
 function describeSessionActionError(error: unknown): string {

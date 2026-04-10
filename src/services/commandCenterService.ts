@@ -86,6 +86,12 @@ export type CommandCenterMessage = {
 
 export type CommandCenterSessionDetail = {
   session?: CommandCenterSession;
+  entry_context?: {
+    scene?: string;
+    scene_param?: string;
+    wechat_channels_nickname?: string;
+    welcome_code?: string;
+  };
   messages?: CommandCenterMessage[];
   route_rule_name?: string;
   route_pool_name?: string;
