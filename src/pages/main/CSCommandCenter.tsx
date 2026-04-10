@@ -38,7 +38,8 @@ import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
 
 type SessionTab = "queue" | "active" | "closed";
-const COMMAND_CENTER_POLL_INTERVAL_MS = 5000;
+const COMMAND_CENTER_SESSION_POLL_INTERVAL_MS = 5000;
+const COMMAND_CENTER_VIEW_POLL_INTERVAL_MS = 15000;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
 
 type SessionActionDescriptor = {
@@ -112,6 +113,7 @@ export default function CSCommandCenter() {
   const [transferSearch, setTransferSearch] = useState("");
   const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
   const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
+  const selectedExternalUserIDRef = useRef("");
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
   const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
@@ -125,6 +127,10 @@ export default function CSCommandCenter() {
   }, []);
 
   const corpID = (auth.corp?.id || "").trim();
+
+  useEffect(() => {
+    selectedExternalUserIDRef.current = selectedExternalUserID.trim();
+  }, [selectedExternalUserID]);
 
   const loadView = async () => {
     const data = await getCSCommandCenterView({
@@ -205,12 +211,37 @@ export default function CSCommandCenter() {
     const timer = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
       void loadView();
-      if (selectedExternalUserID.trim() !== "") {
-        void loadDetail(selectedExternalUserID);
-      }
-    }, COMMAND_CENTER_POLL_INTERVAL_MS);
+    }, COMMAND_CENTER_VIEW_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [queryOpenKFID, selectedExternalUserID]);
+  }, [queryOpenKFID]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      const currentExternalUserID = selectedExternalUserIDRef.current;
+      if (currentExternalUserID !== "") {
+        void loadDetail(currentExternalUserID);
+      }
+    }, COMMAND_CENTER_SESSION_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [queryOpenKFID]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadView();
+      const currentExternalUserID = selectedExternalUserIDRef.current;
+      if (currentExternalUserID !== "") {
+        void loadDetail(currentExternalUserID);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [queryOpenKFID]);
 
   const sessions = useMemo(() => view?.sessions || [], [view?.sessions]);
   const selectedSession = useMemo(() => {
