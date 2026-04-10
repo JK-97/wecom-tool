@@ -15,6 +15,19 @@ import {
 } from "@/services/sidebarService"
 import { normalizeErrorMessage } from "@/services/http"
 import { sendTextToCurrentSession, toJSSDKErrorMessage } from "@/services/jssdkService"
+import {
+  sidebarBody,
+  sidebarBodyText,
+  sidebarCard,
+  sidebarFooter,
+  sidebarHeader,
+  sidebarNotice,
+  sidebarPageShell,
+  sidebarPrimaryButton,
+  sidebarSectionLabel,
+  sidebarSecondaryButton,
+  sidebarTitle,
+} from "./sidebarChrome"
 
 function parseTagList(raw: string): string[] {
   const text = raw.trim()
@@ -287,21 +300,21 @@ export default function ContactSidebar() {
   const recommendedTags = ["决策人", "价格敏感", "竞品对比中", "需高管介入"]
 
   return (
-    <div className="flex h-full flex-col bg-[#F5F7FA]">
-      <div className="bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <Avatar src={(context?.contact?.avatar || "").trim()} fallback="客" />
+    <div className={sidebarPageShell}>
+      <div className={sidebarHeader}>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Avatar src={(context?.contact?.avatar || "").trim()} fallback="客" size="sm" className="wecom-sidebar-avatar" />
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-900 text-sm">{(context?.contact?.name || "未识别客户").trim()}</span>
-                <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">@微信</span>
+              <div className="flex items-center gap-1.5">
+                <span className={sidebarTitle}>{(context?.contact?.name || "未识别客户").trim()}</span>
+                <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-600">@微信</span>
               </div>
               <div className="mt-1 flex items-center gap-1">
                 <select
                   value={stage}
                   onChange={(event) => void updateStage(event.target.value)}
-                  className="text-xs bg-gray-50 border border-gray-200 rounded px-1 py-0.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[11px] text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option>意向沟通中</option>
                   <option>已报价待签</option>
@@ -313,7 +326,7 @@ export default function ContactSidebar() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1.5 mt-2 items-center">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {tags.slice(0, 3).map((tag) => (
             <Badge key={tag} variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">
               {tag}
@@ -326,14 +339,12 @@ export default function ContactSidebar() {
             +
           </button>
         </div>
-        {context?.warnings && context.warnings.length > 0 ? (
-          <div className="mt-2 text-[11px] text-orange-600">{context.warnings.join("；")}</div>
-        ) : null}
-        {notice ? <div className="mt-2 text-[11px] text-blue-600">{notice}</div> : null}
+        {context?.warnings && context.warnings.length > 0 ? <div className={`${sidebarNotice} text-orange-600`}>{context.warnings.join("；")}</div> : null}
+        {notice ? <div className={`${sidebarNotice} text-blue-600`}>{notice}</div> : null}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 shadow-sm">
+      <div className={sidebarBody}>
+        <div className="rounded-lg border border-red-200 bg-red-50 p-2.5">
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
             <div className="flex-1">
@@ -349,8 +360,8 @@ export default function ContactSidebar() {
           </div>
         </div>
 
-        <div className="space-y-2 pt-2">
-          <div className="text-xs font-medium text-gray-500 px-1 flex items-center justify-between">
+        <div className="space-y-2 pt-1.5">
+          <div className={`${sidebarSectionLabel} flex items-center justify-between`}>
             <span>跟进建议 / 破冰话术</span>
             <span
               className="text-[10px] text-blue-600 cursor-pointer hover:underline"
@@ -360,37 +371,37 @@ export default function ContactSidebar() {
             </span>
           </div>
 
-          <Card className="p-3 shadow-sm border-transparent hover:border-blue-200 transition-colors">
-            <p className="text-sm text-gray-800 leading-relaxed mb-3">{suggestionText || "暂无建议话术"}</p>
+          <Card className={`${sidebarCard} border-transparent shadow-sm transition-colors hover:border-blue-200`}>
+            <p className={`mb-2 ${sidebarBodyText}`}>{suggestionText || "暂无建议话术"}</p>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => void handleCopySuggestion()}>
+              <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => void handleCopySuggestion()}>
                 <Copy className="w-3 h-3 mr-1" /> 复制
               </Button>
-              <Button size="sm" className="h-7 text-xs px-2 bg-blue-600" disabled={isSubmitting} onClick={() => void handleFillSuggestion()}>
+              <Button size="sm" className="h-7 bg-blue-600 px-2 text-[11px]" disabled={isSubmitting} onClick={() => void handleFillSuggestion()}>
                 <Send className="w-3 h-3 mr-1" /> 填入
               </Button>
             </div>
           </Card>
         </div>
 
-        <div className="space-y-2 pt-2">
-          <div className="text-xs font-medium text-gray-500 px-1">营销素材推荐</div>
+        <div className="space-y-2 pt-1.5">
+          <div className={sidebarSectionLabel}>营销素材推荐</div>
           {materials.length === 0 ? (
-            <Card className="p-3 text-sm text-gray-500">暂无素材推荐</Card>
+            <Card className={`${sidebarCard} text-gray-500`}>暂无素材推荐</Card>
           ) : (
             materials.map((material) => (
-              <div key={material.id} className="bg-white rounded-md border border-gray-200 p-3 flex items-center gap-3">
-                <div className="w-12 h-12 bg-blue-100 rounded flex items-center justify-center shrink-0">
-                  <MessageSquarePlus className="w-6 h-6 text-blue-600" />
+              <div key={material.id} className={`flex items-center gap-2.5 ${sidebarCard}`}>
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-blue-100">
+                  <MessageSquarePlus className="h-5 w-5 text-blue-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-gray-900 truncate">{material.title}</div>
-                  <div className="text-xs text-gray-500 truncate">{material.subtitle}</div>
+                  <div className={`truncate ${sidebarBodyText} font-medium`}>{material.title}</div>
+                  <div className="truncate text-[11px] text-gray-500">{material.subtitle}</div>
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-7 px-2 text-xs shrink-0"
+                  className="h-7 shrink-0 px-2 text-[11px]"
                   disabled={isSubmitting}
                   onClick={() => void handleShareMaterial(material)}
                 >
@@ -402,16 +413,16 @@ export default function ContactSidebar() {
         </div>
       </div>
 
-      <div className="bg-white p-3 border-t border-gray-200 space-y-2 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-        <Button className="w-full bg-blue-600 hover:bg-blue-700 font-medium" onClick={() => setIsFollowUpDrawerOpen(true)}>
+      <div className={sidebarFooter}>
+        <Button className={`${sidebarPrimaryButton} bg-blue-600 hover:bg-blue-700`} onClick={() => setIsFollowUpDrawerOpen(true)}>
           <CheckCircle2 className="w-4 h-4 mr-2" />
           写跟进 / 记录结果
         </Button>
         <div className="flex gap-2">
-          <Button variant="secondary" className="flex-1 text-gray-600 bg-gray-100 hover:bg-gray-200" onClick={() => setIsTagModalOpen(true)}>
+          <Button variant="secondary" className={sidebarSecondaryButton} onClick={() => setIsTagModalOpen(true)}>
             <Tag className="w-4 h-4 mr-1" /> 打标签
           </Button>
-          <Button variant="secondary" className="flex-1 text-gray-600 bg-gray-100 hover:bg-gray-200" onClick={() => setIsTaskModalOpen(true)}>
+          <Button variant="secondary" className={sidebarSecondaryButton} onClick={() => setIsTaskModalOpen(true)}>
             <Calendar className="w-4 h-4 mr-1" /> 建任务
           </Button>
         </div>

@@ -1,1 +1,150 @@
 @import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #eef1f5;
+}
+
+.wecom-sidebar-shell {
+  background: #eef1f5;
+  --wecom-sidebar-max-width: 392px;
+  --wecom-sidebar-header-px: 10px;
+  --wecom-sidebar-header-py: 7px;
+  --wecom-sidebar-body-px: 10px;
+  --wecom-sidebar-body-pt: 8px;
+  --wecom-sidebar-body-pb: 10px;
+  --wecom-sidebar-footer-px: 10px;
+  --wecom-sidebar-footer-pt: 8px;
+  --wecom-sidebar-footer-pb: 10px;
+  --wecom-sidebar-title-size: 14px;
+  --wecom-sidebar-text-size: 13px;
+  --wecom-sidebar-meta-size: 11px;
+  --wecom-sidebar-section-size: 11px;
+  --wecom-sidebar-card-padding: 10px;
+  --wecom-sidebar-primary-height: 34px;
+  --wecom-sidebar-secondary-height: 32px;
+  --wecom-sidebar-avatar-size: 32px;
+}
+
+@media (max-width: 370px), (max-height: 760px) {
+  .wecom-sidebar-shell {
+    --wecom-sidebar-max-width: 372px;
+    --wecom-sidebar-header-px: 9px;
+    --wecom-sidebar-header-py: 6px;
+    --wecom-sidebar-body-px: 9px;
+    --wecom-sidebar-body-pt: 7px;
+    --wecom-sidebar-body-pb: 8px;
+    --wecom-sidebar-footer-px: 9px;
+    --wecom-sidebar-footer-pt: 7px;
+    --wecom-sidebar-footer-pb: 8px;
+    --wecom-sidebar-title-size: 13px;
+    --wecom-sidebar-text-size: 12px;
+    --wecom-sidebar-meta-size: 10px;
+    --wecom-sidebar-section-size: 10px;
+    --wecom-sidebar-card-padding: 9px;
+    --wecom-sidebar-primary-height: 32px;
+    --wecom-sidebar-secondary-height: 30px;
+    --wecom-sidebar-avatar-size: 30px;
+  }
+}
+
+@media (min-width: 390px) and (min-height: 900px) {
+  .wecom-sidebar-shell {
+    --wecom-sidebar-max-width: 404px;
+    --wecom-sidebar-header-px: 11px;
+    --wecom-sidebar-header-py: 8px;
+    --wecom-sidebar-body-px: 11px;
+    --wecom-sidebar-body-pt: 9px;
+    --wecom-sidebar-body-pb: 11px;
+    --wecom-sidebar-footer-px: 11px;
+    --wecom-sidebar-footer-pt: 9px;
+    --wecom-sidebar-footer-pb: 11px;
+    --wecom-sidebar-title-size: 14.5px;
+    --wecom-sidebar-card-padding: 11px;
+    --wecom-sidebar-primary-height: 35px;
+    --wecom-sidebar-secondary-height: 32px;
+  }
+}
+
+.wecom-sidebar-frame {
+  width: min(100%, var(--wecom-sidebar-max-width));
+  min-height: 100dvh;
+  margin: 0 auto;
+  overflow: hidden;
+}
+
+.wecom-sidebar-page {
+  min-height: 100dvh;
+  width: 100%;
+  font-size: var(--wecom-sidebar-text-size);
+}
+
+.wecom-sidebar-header {
+  padding: var(--wecom-sidebar-header-py) var(--wecom-sidebar-header-px);
+}
+
+.wecom-sidebar-body {
+  padding: var(--wecom-sidebar-body-pt) var(--wecom-sidebar-body-px) var(--wecom-sidebar-body-pb);
+  overflow: visible;
+}
+
+.wecom-sidebar-footer {
+  padding: var(--wecom-sidebar-footer-pt) var(--wecom-sidebar-footer-px) var(--wecom-sidebar-footer-pb);
+}
+
+.wecom-sidebar-title {
+  font-size: var(--wecom-sidebar-title-size);
+  line-height: 1.25;
+}
+
+.wecom-sidebar-text {
+  font-size: var(--wecom-sidebar-text-size);
+  line-height: 1.55;
+}
+
+.wecom-sidebar-meta {
+  font-size: var(--wecom-sidebar-meta-size);
+  line-height: 1.4;
+}
+
+.wecom-sidebar-section-label {
+  font-size: var(--wecom-sidebar-section-size);
+}
+
+.wecom-sidebar-card {
+  padding: var(--wecom-sidebar-card-padding);
+}
+
+.wecom-sidebar-primary-btn {
+  min-height: var(--wecom-sidebar-primary-height);
+  font-size: var(--wecom-sidebar-text-size);
+}
+
+.wecom-sidebar-secondary-btn {
+  min-height: var(--wecom-sidebar-secondary-height);
+  font-size: calc(var(--wecom-sidebar-text-size) - 1px);
+}
+
+.wecom-sidebar-avatar {
+  width: var(--wecom-sidebar-avatar-size);
+  height: var(--wecom-sidebar-avatar-size);
+}
+
+.wecom-sidebar-scroll {
+  scrollbar-width: none;
+}
+
+.wecom-sidebar-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}

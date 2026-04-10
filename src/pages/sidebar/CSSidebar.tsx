@@ -14,6 +14,20 @@ import {
 } from "@/services/sidebarService"
 import { normalizeErrorMessage } from "@/services/http"
 import { sendTextToCurrentSession, toJSSDKErrorMessage } from "@/services/jssdkService"
+import {
+  sidebarBody,
+  sidebarBodyText,
+  sidebarCard,
+  sidebarFooter,
+  sidebarHeader,
+  sidebarMeta,
+  sidebarNotice,
+  sidebarPageShell,
+  sidebarPrimaryButton,
+  sidebarSectionLabel,
+  sidebarSecondaryButton,
+  sidebarTitle,
+} from "./sidebarChrome"
 
 export default function CSSidebar() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false)
@@ -184,19 +198,19 @@ export default function CSSidebar() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-[#F2F3F5]">
-      <div className="bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <Avatar src={(context?.contact_avatar || "").trim()} fallback="客" />
+    <div className={sidebarPageShell}>
+      <div className={sidebarHeader}>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Avatar src={(context?.contact_avatar || "").trim()} fallback="客" size="sm" className="wecom-sidebar-avatar" />
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-900 text-sm">{(context?.contact_name || "未识别客户").trim()}</span>
+              <div className="flex items-center gap-1.5">
+                <span className={sidebarTitle}>{(context?.contact_name || "未识别客户").trim()}</span>
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                   {(context?.entry || "客服会话").trim()}
                 </Badge>
               </div>
-              <span className="text-xs text-gray-500">{(context?.external_userid || "").trim()}</span>
+              <span className={sidebarMeta}>{(context?.external_userid || "").trim()}</span>
             </div>
           </div>
           <div className="flex flex-col items-end">
@@ -210,35 +224,33 @@ export default function CSSidebar() {
           </div>
         </div>
 
-        <div className="rounded-md bg-blue-50 p-2.5 border border-blue-100 flex items-start gap-2">
+        <div className="flex items-start gap-2 rounded-md border border-blue-100 bg-blue-50 p-2.5">
           <Lightbulb className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-          <div className="text-xs text-blue-800">
+          <div className="wecom-sidebar-text text-blue-800">
             <span className="font-semibold">客户意图：</span>
             {(context?.last_message || "暂无会话摘要").trim()}
           </div>
         </div>
-        {context?.warnings && context.warnings.length > 0 ? (
-          <div className="mt-2 text-[11px] text-orange-600">{context.warnings.join("；")}</div>
-        ) : null}
-        {notice ? <div className="mt-2 text-[11px] text-blue-600">{notice}</div> : null}
+        {context?.warnings && context.warnings.length > 0 ? <div className={`${sidebarNotice} text-orange-600`}>{context.warnings.join("；")}</div> : null}
+        {notice ? <div className={`${sidebarNotice} text-blue-600`}>{notice}</div> : null}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div className={sidebarBody}>
         <div className="space-y-2">
-          <div className="text-xs font-medium text-gray-500 px-1">AI 建议回复</div>
+          <div className={sidebarSectionLabel}>AI 建议回复</div>
           {suggestionTexts.length === 0 ? (
-            <Card className="p-3 text-sm text-gray-500">暂无建议回复</Card>
+            <Card className={`${sidebarCard} ${sidebarMeta}`}>暂无建议回复</Card>
           ) : (
             suggestionTexts.map((text, idx) => (
-              <Card key={idx} className="p-3 shadow-sm border-transparent hover:border-blue-200 transition-colors">
-                <p className="text-sm text-gray-800 leading-relaxed mb-3">{text}</p>
+              <Card key={idx} className={`${sidebarCard} border-transparent shadow-sm transition-colors hover:border-blue-200`}>
+                <p className={`mb-2 ${sidebarBodyText}`}>{text}</p>
                 <div className="flex justify-end gap-2">
-                  <Button variant="outline" size="sm" className="h-7 text-xs px-2" onClick={() => void handleCopySuggestion(text)}>
+                  <Button variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => void handleCopySuggestion(text)}>
                     <Copy className="w-3 h-3 mr-1" /> 复制
                   </Button>
                   <Button
                     size="sm"
-                    className="h-7 text-xs px-2 bg-blue-600"
+                    className="h-7 bg-blue-600 px-2 text-[11px]"
                     disabled={isSubmitting}
                     onClick={() => void handleFillSuggestion(text)}
                   >
@@ -250,23 +262,23 @@ export default function CSSidebar() {
           )}
         </div>
 
-        <div className="space-y-2 pt-2">
-          <div className="text-xs font-medium text-gray-500 px-1">知识库推荐</div>
-          <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
+        <div className="space-y-2 pt-1.5">
+          <div className={sidebarSectionLabel}>知识库推荐</div>
+          <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
             {sopItems.length === 0 ? (
-              <div className="p-3 text-sm text-gray-500">暂无知识库推荐</div>
+              <div className={`${sidebarCard} ${sidebarMeta}`}>暂无知识库推荐</div>
             ) : (
               sopItems.map((item, idx) => (
                 <button
                   key={item.id || idx}
-                  className={`w-full flex items-center justify-between p-3 hover:bg-gray-50 text-left ${
+                  className={`flex w-full items-center justify-between p-2.5 text-left hover:bg-gray-50 ${
                     idx < sopItems.length - 1 ? "border-b border-gray-100" : ""
                   }`}
                   onClick={() => void handleMarkSOP(item)}
                 >
                   <div className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-700">{item.title}</span>
+                    <span className={sidebarBodyText}>{item.title}</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-gray-400" />
                 </button>
@@ -276,9 +288,9 @@ export default function CSSidebar() {
         </div>
       </div>
 
-      <div className="bg-white p-3 border-t border-gray-200 space-y-2 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+      <div className={sidebarFooter}>
         <Button
-          className={`w-full font-medium ${isUpgraded ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}
+          className={`${sidebarPrimaryButton} ${isUpgraded ? "cursor-not-allowed bg-gray-100 text-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}
           disabled={isUpgraded || isSubmitting}
           onClick={() => setIsUpgradeModalOpen(true)}
         >
@@ -293,10 +305,10 @@ export default function CSSidebar() {
           )}
         </Button>
         <div className="flex gap-2">
-          <Button variant="secondary" className="flex-1 text-gray-600 bg-gray-100 hover:bg-gray-200" disabled={isSubmitting} onClick={() => void handleTransfer()}>
+          <Button variant="secondary" className={sidebarSecondaryButton} disabled={isSubmitting} onClick={() => void handleTransfer()}>
             转交
           </Button>
-          <Button variant="secondary" className="flex-1 text-gray-600 bg-gray-100 hover:bg-gray-200" disabled={isSubmitting} onClick={() => void handleCloseSession()}>
+          <Button variant="secondary" className={sidebarSecondaryButton} disabled={isSubmitting} onClick={() => void handleCloseSession()}>
             结束会话
           </Button>
         </div>
