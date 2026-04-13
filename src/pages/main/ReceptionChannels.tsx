@@ -47,6 +47,7 @@ import {
 import {
   buildDirectoryMaps,
   buildDirectoryTree,
+  buildScopedDirectoryTree,
   normalizeSelectionItems,
   OrganizationDirectorySelect,
   selectionKey,
@@ -106,6 +107,7 @@ const mergeServicerUpsertResponses = (
     result_list: resultList,
   };
 };
+
 
 
 function ServicerUpsertResultPanel({
@@ -203,9 +205,7 @@ export default function ReceptionChannels() {
     useState<ReceptionChannel | null>(null);
   const [selectedChannelDetail, setSelectedChannelDetail] =
     useState<ReceptionChannelDetail | null>(null);
-  const [servicerAssignments, setServicerAssignments] = useState<
-    Array<{ userid?: string; department_id?: number; status?: number }>
-  >([]);
+  const [servicerAssignments, setServicerAssignments] = useState<KFServicerAssignment[]>([]);
   const [overview, setOverview] = useState<ReceptionOverview | null>(null);
   const [channels, setChannels] = useState<ReceptionChannel[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -610,6 +610,18 @@ export default function ReceptionChannels() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [currentPoolSelection],
   );
+  const {
+    treeRoots: fallbackTreeRoots,
+    ungroupedUsers: fallbackUngroupedUserIDs,
+  } = useMemo(
+    () =>
+      buildScopedDirectoryTree(
+        organizationView,
+        currentPoolAllowedUserIDs,
+        currentPoolAllowedDepartmentIDs,
+      ),
+    [organizationView, currentPoolAllowedDepartmentIDs, currentPoolAllowedUserIDs],
+  );
   const currentPoolRawUsersByNormalizedID = useMemo(
     () => buildRawServicerIDsByStableIdentity(servicerAssignments),
     [servicerAssignments],
@@ -622,10 +634,6 @@ export default function ReceptionChannels() {
   const receptionPool = selectedChannelDetail?.reception_pool;
   const fallbackRoute = selectedChannelDetail?.fallback_route;
   const stateLayers = selectedChannelDetail?.state_layers;
-  const routeBindings = selectedChannelDetail?.route_bindings || [];
-  const invalidRouteBindings = routeBindings.filter(
-    (item) => item.target_valid === false,
-  );
   const isPoolEmpty =
     receptionPool?.empty === true ||
     (Number(receptionPool?.user_count || 0) === 0 &&
@@ -641,14 +649,6 @@ export default function ReceptionChannels() {
       default:
         return "仅智能接待";
     }
-  };
-
-  const formatPoolTargetDisplay = () => {
-    if (!fallbackRoute) return "-";
-    const display = (fallbackRoute.human_target_display || "").trim();
-    if (display) return display;
-    if (fallbackRoute.mode === "ai_only") return "不涉及人工";
-    return "默认接待池";
   };
 
   const promotionURL = (selectedScene?.url || "").trim();
@@ -900,13 +900,10 @@ export default function ReceptionChannels() {
       const overallStatus = (summary?.overall_status || "").trim();
       if (overallStatus === "succeeded") {
         setPoolEditorNotice("接待池配置已更新。");
-        setDetailNotice("接待池配置已更新。");
       } else if (overallStatus === "partial") {
         setPoolEditorNotice(`部分对象保存成功：成功 ${successCount} 项，失败 ${failureCount} 项。`);
-        setDetailNotice("");
       } else {
         setPoolEditorNotice(`接待池保存未完成：失败 ${failureCount} 项。`);
-        setDetailNotice("");
       }
       if (successCount > 0) {
         const refreshedAssignments = await listKFServicerAssignments(openKFID);
@@ -923,7 +920,6 @@ export default function ReceptionChannels() {
       }
     } catch (error) {
       setPoolEditorNotice(normalizeErrorMessage(error));
-      setDetailNotice("");
       setServicerUpsertResult(null);
     } finally {
       setIsUpsertingServicers(false);
@@ -986,10 +982,8 @@ export default function ReceptionChannels() {
       });
       if (result?.success) {
         setFallbackEditorNotice(result.message || "兜底路由已更新");
-        setDetailNotice(result.message || "兜底路由已更新");
       } else {
         setFallbackEditorNotice(result?.message || "兜底路由更新失败");
-        setDetailNotice("");
       }
       const refreshedDetail = await getReceptionChannelDetail(openKFID);
       setSelectedChannelDetail(refreshedDetail);
@@ -998,7 +992,6 @@ export default function ReceptionChannels() {
       await loadChannels(keyword);
     } catch (error) {
       setFallbackEditorNotice(normalizeErrorMessage(error));
-      setDetailNotice("");
     } finally {
       setIsSavingFallbackRoute(false);
     }
@@ -1276,10 +1269,23 @@ export default function ReceptionChannels() {
                         {getStatusBadge(channel.status || "")}
                       </td>
                       <td className="px-6 py-4">
-                        <span className="font-medium text-gray-900">
-                          {channel.staff_count}
-                        </span>
-                        <span className="text-gray-400 ml-1">人</span>
+                        <div className="space-y-0.5">
+                          <div>
+                            <span className="font-medium text-gray-900">
+                              {Number(channel.pool_user_count ?? channel.staff_count ?? 0)}
+                            </span>
+                            <span className="text-gray-400 ml-1">人</span>
+                          </div>
+                          {Number(channel.pool_empty ? 1 : 0) > 0 ? (
+                            <div className="text-[11px] text-amber-600">
+                              建议先配置接待池
+                            </div>
+                          ) : Number(channel.pool_department_count || 0) > 0 ? (
+                            <div className="text-[11px] text-gray-500">
+                              另含 {Number(channel.pool_department_count || 0)} 个部门
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-blue-600">
                         {(channel.open_kfid || "").trim() ? (
@@ -1372,11 +1378,6 @@ export default function ReceptionChannels() {
       >
         {(selectedChannel || selectedChannelDetail?.channel) && (
           <div className="space-y-6">
-            {detailNotice ? (
-              <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                {detailNotice}
-              </div>
-            ) : null}
             {isDetailLoading ? (
               <div className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500">
                 加载渠道详情中...
@@ -1479,6 +1480,11 @@ export default function ReceptionChannels() {
                   </Button>
                 </div>
               </div>
+              {detailNotice ? (
+                <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  {detailNotice}
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-3">
@@ -1586,78 +1592,9 @@ export default function ReceptionChannels() {
                   </div>
                 </div>
               </div>
-              <div className="rounded border border-gray-200 bg-white px-3 py-3 space-y-2 text-xs text-gray-700">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-gray-800">人工候选范围健康检查</span>
-                  <Badge
-                    variant="secondary"
-                    className={
-                      fallbackRoute?.human_target_valid === false
-                        ? "bg-orange-100 text-orange-700 border-transparent"
-                        : "bg-green-100 text-green-700 border-transparent"
-                    }
-                  >
-                    {fallbackRoute?.human_target_valid === false
-                      ? "当前目标已失效"
-                      : "目标有效"}
-                  </Badge>
-                </div>
-                <div>当前人工候选范围：{formatPoolTargetDisplay()}</div>
-                <div>
-                  企业微信原生接待状态：
-                  {(stateLayers?.wecom_native_states || []).join(" / ") ||
-                    "待通过会话状态接口与事件回调回写"}
-                </div>
-                <div>
-                  系统内路由状态：
-                  {(stateLayers?.routing_state || "尚无最近路由决策").trim()}
-                </div>
-                <div>
-                  当前兜底模式：
-                  {fallbackModeLabel(stateLayers?.fallback_mode || fallbackRoute?.mode)}
-                </div>
-                <div>
-                  当前待转人工目标：
-                  {(stateLayers?.pending_human_target_display || formatPoolTargetDisplay()).trim()}
-                </div>
-                {(stateLayers?.effective_human_target_display || "").trim() ? (
-                  <div>
-                    当前人工接待目标：
-                    {(stateLayers?.effective_human_target_display || "").trim()}
-                  </div>
-                ) : null}
-                {stateLayers?.waiting_human_accept ? (
-                  <div className="rounded border border-blue-200 bg-blue-50 px-2 py-2 text-blue-700">
-                    当前会话已进入系统排队，等待人工接入。
-                  </div>
-                ) : null}
-                {(stateLayers?.state_hint || "").trim() ? (
-                  <div className="rounded border border-gray-200 bg-gray-50 px-2 py-2 text-gray-600">
-                    {(stateLayers?.state_hint || "").trim()}
-                  </div>
-                ) : null}
-                {fallbackRoute?.human_target_valid === false &&
-                (fallbackRoute?.invalid_reason || "").trim() ? (
-                  <div className="rounded border border-orange-200 bg-orange-50 px-2 py-2 text-orange-700">
-                    {(fallbackRoute?.invalid_reason || "").trim()}
-                  </div>
-                ) : null}
-                {isPoolEmpty ? (
-                  <div className="rounded border border-blue-200 bg-blue-50 px-2 py-2 text-blue-700">
-                    当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。
-                  </div>
-                ) : null}
-              </div>
-              {invalidRouteBindings.length > 0 ? (
-                <div className="rounded border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-800">
-                  <div className="font-medium">历史路由健康检查</div>
-                  <div className="mt-1 space-y-1">
-                    {invalidRouteBindings.map((item) => (
-                      <div key={`${item.rule_id || item.rule_name || item.target}`}>
-                        {item.rule_name || "未命名规则"}：{(item.target_issue || "当前人工目标已失效").trim()}
-                      </div>
-                    ))}
-                  </div>
+              {isPoolEmpty ? (
+                <div className="rounded border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-700">
+                  当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。
                 </div>
               ) : null}
             </div>
@@ -1697,6 +1634,11 @@ export default function ReceptionChannels() {
                     去同步组织架构
                   </Link>
                 </div>
+                {poolEditorNotice ? (
+                  <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                    {poolEditorNotice}
+                  </div>
+                ) : null}
                 {servicerUpsertResult?.summary ? (
                   <div
                     className={`rounded-lg border px-3 py-3 text-xs ${
@@ -1808,11 +1750,9 @@ export default function ReceptionChannels() {
                       <Badge variant="secondary" className="bg-gray-100 text-gray-700">
                         {fallbackModeLabel(fallbackRoute?.mode)}
                       </Badge>
-                      {fallbackRoute?.human_target_valid === false ? (
-                        <Badge variant="warning" className="bg-orange-100 text-orange-700">
-                          人工目标待修复
-                        </Badge>
-                      ) : null}
+                      <Badge variant="secondary" className="bg-blue-50 text-blue-700">
+                        {fallbackRoute?.use_full_pool ? "使用整个接待池" : "使用池内子集"}
+                      </Badge>
                     </div>
                   </div>
                   <Button
@@ -1842,15 +1782,13 @@ export default function ReceptionChannels() {
                       ? "当前默认兜底规则会直接使用整个接待池。只有显式切到“自定义候选范围”时，才会收缩为池内子集。"
                       : "当前默认兜底规则只使用接待池中的一个子集作为人工候选范围。成员树如有缺项，请先同步组织架构。"}
                 </div>
+                {fallbackEditorNotice ? (
+                  <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                    {fallbackEditorNotice}
+                  </div>
+                ) : null}
               </div>
             </div>
-
-            {selectedChannelDetail?.warnings &&
-              selectedChannelDetail.warnings.length > 0 && (
-                <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-xs text-orange-700">
-                  {selectedChannelDetail.warnings.join("；")}
-                </div>
-              )}
 
             <div className="pt-4 border-t border-gray-100 flex justify-between items-center">
               <span className="text-xs text-gray-500">
@@ -2037,8 +1975,8 @@ export default function ReceptionChannels() {
                   placeholder={isOrgOptionsLoading ? "正在加载接待池..." : "只显示当前接待池中的成员或部门"}
                   searchPlaceholder="搜索池内部门 / 成员 / 角色"
                   corpId={orgCorpID}
-                  treeRoots={treeRoots}
-                  ungroupedUsers={ungroupedUserIDs}
+                  treeRoots={fallbackTreeRoots}
+                  ungroupedUsers={fallbackUngroupedUserIDs}
                   memberMap={orgMemberMap}
                   departmentMap={orgDepartmentMap}
                   selectedItems={selectedFallbackTargetsDeduped}
