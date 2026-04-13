@@ -25,6 +25,7 @@ import {
   listKFServicerAssignments,
   retryReceptionChannelSync,
   triggerReceptionChannelSync,
+  uploadReceptionChannelAvatar,
   upsertKFServicerAssignments,
   type ReceptionChannel,
   type ReceptionChannelDetail,
@@ -580,10 +581,8 @@ export default function ReceptionChannels() {
   const [organizationView, setOrganizationView] =
     useState<OrganizationSettingsView | null>(null);
   const [isOrgOptionsLoading, setIsOrgOptionsLoading] = useState(false);
-  const [createOpenKFID, setCreateOpenKFID] = useState("");
   const [createName, setCreateName] = useState("");
-  const [createSource, setCreateSource] = useState("");
-  const [createSceneValue, setCreateSceneValue] = useState("");
+  const [createAvatarFile, setCreateAvatarFile] = useState<File | null>(null);
   const [selectedSceneValue, setSelectedSceneValue] = useState("");
   const [selectedServicerTargets, setSelectedServicerTargets] = useState<
     DirectorySelectionItem[]
@@ -749,25 +748,40 @@ export default function ReceptionChannels() {
   };
 
   const handleCreateChannel = async () => {
-    const openKFID = createOpenKFID.trim();
-    if (!openKFID) {
-      setNotice("请输入 Open KFID");
+    const name = createName.trim();
+    if (!name) {
+      setNotice("请输入客服账号名称");
       return;
+    }
+    if (createAvatarFile) {
+      const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+      if (!allowedTypes.has(createAvatarFile.type)) {
+        setNotice("请上传 PNG/JPG/JPEG/WEBP 图片");
+        return;
+      }
+      if (createAvatarFile.size > 2 * 1024 * 1024) {
+        setNotice("头像图片不能超过 2MB");
+        return;
+      }
     }
     try {
       setIsCreating(true);
+      let mediaID = "";
+      if (createAvatarFile) {
+        const uploaded = await uploadReceptionChannelAvatar(createAvatarFile);
+        mediaID = (uploaded?.media_id || "").trim();
+        if (!mediaID) {
+          throw new Error("头像上传失败，请重试");
+        }
+      }
       const created = await createReceptionChannel({
-        open_kfid: openKFID,
-        name: createName.trim(),
-        source: createSource.trim(),
-        scene_value: createSceneValue.trim(),
+        name,
+        media_id: mediaID,
       });
-      setNotice(created?.open_kfid ? "接待渠道已创建" : "接待渠道创建完成");
+      setNotice(created?.open_kfid ? "客服账号已创建" : "客服账号创建完成");
       setIsCreateOpen(false);
-      setCreateOpenKFID("");
       setCreateName("");
-      setCreateSource("");
-      setCreateSceneValue("");
+      setCreateAvatarFile(null);
       await loadChannels(keyword);
       if (created?.open_kfid) {
         await loadDetail(created);
@@ -777,6 +791,12 @@ export default function ReceptionChannels() {
     } finally {
       setIsCreating(false);
     }
+  };
+
+  const closeCreateDialog = () => {
+    setIsCreateOpen(false);
+    setCreateName("");
+    setCreateAvatarFile(null);
   };
 
   const primaryScene = useMemo(() => {
@@ -1529,7 +1549,7 @@ export default function ReceptionChannels() {
               className="bg-blue-600 hover:bg-blue-700"
               onClick={() => setIsCreateOpen(true)}
             >
-              + 新建接待渠道
+              + 创建客服账号
             </Button>
           </div>
         </div>
@@ -1545,7 +1565,7 @@ export default function ReceptionChannels() {
               <tr>
                 <th className="px-6 py-3 font-semibold">渠道信息</th>
                 <th className="px-6 py-3 font-semibold">Open KFID</th>
-                <th className="px-6 py-3 font-semibold">来源说明</th>
+                <th className="px-6 py-3 font-semibold">渠道来源</th>
                 <th className="px-6 py-3 font-semibold">状态</th>
                 <th className="px-6 py-3 font-semibold">接待人员</th>
                 <th className="px-6 py-3 font-semibold">默认路由规则</th>
@@ -2328,12 +2348,12 @@ export default function ReceptionChannels() {
 
       <Dialog
         isOpen={isCreateOpen}
-        onClose={() => setIsCreateOpen(false)}
-        title="新建接待渠道"
+        onClose={closeCreateDialog}
+        title="创建客服账号"
         className="max-w-[520px]"
         footer={
           <div className="flex justify-end gap-3 w-full">
-            <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
+            <Button variant="outline" onClick={closeCreateDialog}>
               取消
             </Button>
             <Button
@@ -2341,26 +2361,15 @@ export default function ReceptionChannels() {
               disabled={isCreating}
               onClick={() => void handleCreateChannel()}
             >
-              {isCreating ? "创建中..." : "创建渠道"}
+              {isCreating ? "创建中..." : "创建客服账号"}
             </Button>
           </div>
         }
       >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4">
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-gray-700">
-              Open KFID
-            </label>
-            <input
-              value={createOpenKFID}
-              onChange={(event) => setCreateOpenKFID(event.target.value)}
-              className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="wkxxxxxx"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-700">
-              渠道名称
+              客服账号名称
             </label>
             <input
               value={createName}
@@ -2371,26 +2380,28 @@ export default function ReceptionChannels() {
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-gray-700">
-              来源说明
+              客服头像（可选）
             </label>
             <input
-              value={createSource}
-              onChange={(event) => setCreateSource(event.target.value)}
-              className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="如：官网 H5"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) =>
+                setCreateAvatarFile(event.target.files?.[0] || null)
+              }
+              className="block w-full text-sm text-gray-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100"
             />
+            <p className="text-[11px] text-gray-500">
+              支持 PNG/JPG/JPEG/WEBP，大小不超过 2MB。
+            </p>
+            {createAvatarFile ? (
+              <p className="text-[11px] text-gray-600">
+                已选择：{createAvatarFile.name}
+              </p>
+            ) : null}
           </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-700">
-              默认 Scene
-            </label>
-            <input
-              value={createSceneValue}
-              onChange={(event) => setCreateSceneValue(event.target.value)}
-              className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="如：OFFICIAL_WEBSITE"
-            />
-          </div>
+          <p className="text-xs leading-5 text-gray-500">
+            创建阶段只创建企业微信客服账号。scene 由 routing 侧定义，并在渠道详情中只读展示与生成链接。
+          </p>
         </div>
       </Dialog>
     </div>

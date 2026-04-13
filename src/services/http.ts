@@ -45,6 +45,33 @@ export async function requestJSON<T>(path: string, init?: JSONRequestOptions): P
   }
 }
 
+export async function requestFormData<T>(path: string, body: FormData, init?: JSONRequestOptions): Promise<T> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: "include",
+      ...init,
+      body,
+      headers: {
+        ...(init?.headers || {}),
+      },
+      signal: controller.signal,
+    })
+    const raw = await response.text()
+    const payload = raw ? tryParseJSON(raw) : null
+    if (!response.ok) {
+      if (response.status === 401 && !init?.skipAuthRedirect) {
+        redirectToLogin()
+      }
+      throw new APIRequestError(readErrorMessage(payload) || `Request failed with status ${response.status}`, response.status, payload)
+    }
+    return (payload as T) ?? ({} as T)
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
 export function normalizeErrorMessage(error: unknown): string {
   if (error instanceof APIRequestError) {
     return error.message

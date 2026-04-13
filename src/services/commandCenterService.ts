@@ -98,6 +98,21 @@ export type CommandCenterSessionDetail = {
     wechat_channels_nickname?: string;
     welcome_code?: string;
   };
+  routing_explanation?: {
+    action_type?: string;
+    action_label?: string;
+    decision_source?: string;
+    decision_source_label?: string;
+    execution_status?: string;
+    execution_status_label?: string;
+    reason?: string;
+    target?: string;
+    target_pool?: string;
+    target_userid?: string;
+    target_raw_servicer_userid?: string;
+    is_automatic?: boolean;
+    is_manual_override?: boolean;
+  };
   messages?: CommandCenterMessage[];
   route_rule_name?: string;
   route_pool_name?: string;

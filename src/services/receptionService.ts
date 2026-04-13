@@ -1,4 +1,4 @@
-import { requestJSON } from "./http";
+import { requestFormData, requestJSON } from "./http";
 
 type APIReply<T> = {
   code?: number;
@@ -153,6 +153,12 @@ export type ReceptionChannelsView = {
   channels?: ReceptionChannel[];
 };
 
+export type UploadedMedia = {
+  media_id?: string;
+  type?: string;
+  created_at?: number;
+};
+
 export async function getReceptionOverview(): Promise<ReceptionOverview | null> {
   const payload = await requestJSON<APIReply<ReceptionOverview>>(
     "/api/v1/reception/overview",
@@ -189,24 +195,35 @@ export async function getReceptionChannelsView(params?: {
 }
 
 export async function createReceptionChannel(input: {
-  open_kfid: string;
-  name?: string;
-  source?: string;
-  scene_value?: string;
+  name: string;
+  media_id?: string;
 }): Promise<ReceptionChannel | null> {
   const payload = await requestJSON<APIReply<{ channel?: ReceptionChannel }>>(
     "/api/v1/reception/channels",
     {
       method: "POST",
       body: JSON.stringify({
-        open_kfid: input.open_kfid,
-        name: input.name || "",
-        source: input.source || "",
-        scene_value: input.scene_value || "",
+        name: input.name,
+        media_id: input.media_id || "",
       }),
     },
   );
   return payload?.data?.channel || null;
+}
+
+export async function uploadReceptionChannelAvatar(
+  file: File,
+): Promise<UploadedMedia | null> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const payload = await requestFormData<APIReply<{ media?: UploadedMedia }>>(
+    "/api/v1/reception/channels/avatar/upload",
+    formData,
+    {
+      method: "POST",
+    },
+  );
+  return payload?.data?.media || null;
 }
 
 export async function getReceptionChannelDetail(

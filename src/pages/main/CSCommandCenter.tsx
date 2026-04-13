@@ -869,27 +869,55 @@ export default function CSCommandCenter() {
 
             <div>
               <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <GitBranch className="w-4 h-4 text-blue-600" /> 路由信息
+                <GitBranch className="w-4 h-4 text-blue-600" /> 最近一次 routing 结果
               </h4>
               <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500">命中渠道</span>
-                  <span className="text-xs font-medium">
-                    {(selectedSession?.source || "-").trim()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500">匹配规则</span>
-                  <span className="text-xs font-medium text-blue-600">
-                    {(detail?.route_rule_name || "-").trim()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-gray-500">接待池</span>
-                  <span className="text-xs font-medium">
-                    {(detail?.route_pool_name || "-").trim()}
-                  </span>
-                </div>
+                <SessionEntryContextRow
+                  label="系统动作"
+                  value={(detail?.routing_explanation?.action_label || "-").trim()}
+                />
+                <SessionEntryContextRow
+                  label="动作来源"
+                  value={(detail?.routing_explanation?.decision_source_label || "-").trim()}
+                />
+                <SessionEntryContextRow
+                  label="执行结果"
+                  value={(detail?.routing_explanation?.execution_status_label || "-").trim()}
+                />
+                <SessionEntryContextRow
+                  label="目标对象"
+                  value={(detail?.routing_explanation?.target || detail?.route_pool_name || "-").trim()}
+                />
+                <SessionEntryContextRow
+                  label="命中规则"
+                  value={(detail?.route_rule_name || "-").trim()}
+                />
+                <SessionEntryContextRow
+                  label="接待池"
+                  value={(detail?.route_pool_name || "-").trim()}
+                />
+                <SessionEntryContextRow
+                  label="动作边界"
+                  value={
+                    detail?.routing_explanation
+                      ? detail.routing_explanation.is_manual_override
+                        ? "人工覆盖"
+                        : detail.routing_explanation.is_automatic === false
+                          ? "人工动作"
+                          : "系统自动处理"
+                      : "-"
+                  }
+                />
+                <SessionEntryContextRow
+                  label="结果原因"
+                  value={(detail?.routing_explanation?.reason || "-").trim()}
+                />
+                {(detail?.routing_explanation?.target_raw_servicer_userid || "").trim() ? (
+                  <SessionEntryContextRow
+                    label="追踪 ID"
+                    value={(detail?.routing_explanation?.target_raw_servicer_userid || "").trim()}
+                  />
+                ) : null}
                 <div className="pt-2 border-t border-gray-100">
                   <Link
                     to="/main/routing-rules"
