@@ -82,6 +82,40 @@ function fallbackModeLabel(mode?: string): string {
   }
 }
 
+function parseJSONRecord(raw?: string): Record<string, unknown> {
+  const text = String(raw || "").trim()
+  if (!text) return {}
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function regularActionLabel(actionSemantic?: string): string {
+  switch ((actionSemantic || "").trim()) {
+    case "send_to_pool":
+      return "送入待接入池"
+    case "assign_human":
+      return "转给指定人工"
+    case "queue_then_human":
+      return "排队后待人工接入"
+    default:
+      return "仅 AI"
+  }
+}
+
+function firstSceneValueFromConditions(raw?: string): string {
+  const payload = parseJSONRecord(raw)
+  const values = Array.isArray(payload.scene_values) ? payload.scene_values : []
+  for (const item of values) {
+    const text = String(item || "").trim()
+    if (text) return text
+  }
+  return ""
+}
+
 export default function RoutingRules() {
   const [searchParams] = useSearchParams()
   const [view, setView] = useState<RoutingRulesViewModel>(initialRoutingRulesView)
@@ -116,15 +150,20 @@ export default function RoutingRules() {
   const [selectedFallbackTargets, setSelectedFallbackTargets] = useState<
     DirectorySelectionItem[]
   >([])
+  const [regularActionSemanticInput, setRegularActionSemanticInput] = useState("ai_only")
+  const [regularUseFullPoolInput, setRegularUseFullPoolInput] = useState(true)
+  const [selectedRegularTargets, setSelectedRegularTargets] = useState<
+    DirectorySelectionItem[]
+  >([])
+  const [formSceneParamValue, setFormSceneParamValue] = useState("")
+  const [formSceneParamNonEmpty, setFormSceneParamNonEmpty] = useState(false)
+  const [regularDetail, setRegularDetail] = useState<ReceptionChannelDetail | null>(null)
+  const [regularPoolAssignments, setRegularPoolAssignments] = useState<KFServicerAssignment[]>([])
 
   const [formName, setFormName] = useState("")
   const [formChannelID, setFormChannelID] = useState("")
   const [formScene, setFormScene] = useState("ANY")
-  const [formMode, setFormMode] = useState("人工接待")
-  const [formTarget, setFormTarget] = useState("")
   const [formPriority, setFormPriority] = useState(100)
-  const [formIsDefault, setFormIsDefault] = useState(false)
-  const [formTagFilter, setFormTagFilter] = useState("")
   const requestedEditRuleID = Number(searchParams.get("edit_rule_id") || 0)
   const [hasAutoOpenedEditRule, setHasAutoOpenedEditRule] = useState(false)
 
@@ -142,6 +181,10 @@ export default function RoutingRules() {
   const fallbackPoolRawUsersByStableIdentity = useMemo(
     () => buildRawServicerIDsByStableIdentity(fallbackPoolAssignments),
     [fallbackPoolAssignments],
+  )
+  const regularPoolRawUsersByStableIdentity = useMemo(
+    () => buildRawServicerIDsByStableIdentity(regularPoolAssignments),
+    [regularPoolAssignments],
   )
 
   const syncFallbackDraftFromDetail = (
@@ -240,6 +283,56 @@ export default function RoutingRules() {
     fallbackDetail?.reception_pool?.empty === true ||
     (Number(fallbackDetail?.reception_pool?.user_count || 0) === 0 &&
       Number(fallbackDetail?.reception_pool?.department_count || 0) === 0)
+  const currentRegularPoolAllowedUserIDs = useMemo(
+    () =>
+      regularPoolAssignments
+        .map((item) => resolveServicerIdentityView(item).stableIdentity)
+        .filter(Boolean),
+    [regularPoolAssignments],
+  )
+  const currentRegularPoolAllowedDepartmentIDs = useMemo(
+    () =>
+      regularPoolAssignments
+        .map((item) => Number(item.department_id || 0))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    [regularPoolAssignments],
+  )
+  const {
+    treeRoots: regularTreeRoots,
+    ungroupedUsers: regularUngroupedUserIDs,
+  } = useMemo(
+    () =>
+      buildSelectedObjectDirectoryTree(
+        organizationView,
+        currentRegularPoolAllowedUserIDs,
+        currentRegularPoolAllowedDepartmentIDs,
+      ),
+    [organizationView, currentRegularPoolAllowedDepartmentIDs, currentRegularPoolAllowedUserIDs],
+  )
+  const selectedRegularTargetsDeduped = useMemo(
+    () => normalizeSelectionItems(selectedRegularTargets),
+    [selectedRegularTargets],
+  )
+  const selectedRegularUsersDeduped = useMemo(
+    () =>
+      selectedRegularTargetsDeduped
+        .filter((item) => item.type === "user")
+        .map((item) => item.id.trim())
+        .filter(Boolean),
+    [selectedRegularTargetsDeduped],
+  )
+  const selectedRegularDepartmentsDeduped = useMemo(
+    () =>
+      selectedRegularTargetsDeduped
+        .filter((item) => item.type === "department")
+        .map((item) => Number(item.id))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    [selectedRegularTargetsDeduped],
+  )
+  const regularPoolEmpty =
+    regularDetail?.reception_pool?.empty === true ||
+    (Number(regularDetail?.reception_pool?.user_count || 0) === 0 &&
+      Number(regularDetail?.reception_pool?.department_count || 0) === 0)
 
   const loadView = async (
     channel: string,
@@ -318,6 +411,66 @@ export default function RoutingRules() {
   }, [isDrawerOpen, isEditingDefaultRule, selectedRule?.channelId])
 
   useEffect(() => {
+    if (!isDrawerOpen || isEditingDefaultRule) return
+    const channelID = formChannelID.trim()
+    if (!channelID) return
+    let active = true
+    void (async () => {
+      try {
+        setIsOrgOptionsLoading(true)
+        const [detail, orgView, assignments] = await Promise.all([
+          getReceptionChannelDetail(channelID),
+          organizationView ? Promise.resolve(organizationView) : getOrganizationSettingsView(),
+          listKFServicerAssignments(channelID),
+        ])
+        if (!active) return
+        setRegularDetail(detail)
+        setRegularPoolAssignments(assignments)
+        if (selectedRule && !selectedRule.isDefault) {
+          const stableIdentityByRaw = new Map<string, string>()
+          assignments.forEach((assignment) => {
+            const identity = resolveServicerIdentityView(assignment)
+            const rawID = identity.rawServicerUserID.trim()
+            const stableID = (identity.stableIdentity || rawID).trim()
+            if (!rawID || !stableID) return
+            stableIdentityByRaw.set(rawID, stableID)
+          })
+          const action = parseJSONRecord(selectedRule.actionJson)
+          setSelectedRegularTargets(
+            normalizeSelectionItems([
+              ...(Array.isArray(action.assigned_staff_ids)
+                ? action.assigned_staff_ids.map((userID) => ({
+                    type: "user" as const,
+                    id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
+                  }))
+                : []),
+              ...(Array.isArray(action.assigned_department_ids)
+                ? action.assigned_department_ids.map((departmentID) => ({
+                    type: "department" as const,
+                    id: String(Number(departmentID || 0)),
+                  }))
+                : []),
+            ]),
+          )
+        }
+        if (!organizationView) {
+          setOrganizationView(orgView)
+        }
+      } catch (error) {
+        if (!active) return
+        setDrawerNotice(normalizeErrorMessage(error))
+      } finally {
+        if (active) {
+          setIsOrgOptionsLoading(false)
+        }
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [isDrawerOpen, isEditingDefaultRule, formChannelID])
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadView(
         filterChannel,
@@ -341,13 +494,16 @@ export default function RoutingRules() {
     setDrawerNotice("")
     setSelectedRule(null)
     syncFallbackDraftFromDetail(null)
+    setRegularDetail(null)
+    setRegularPoolAssignments([])
     setFormName("")
     setFormScene("ANY")
-    setFormMode("人工接待")
-    setFormTarget(view.targetOptions[0] || "默认接待池")
+    setFormSceneParamValue("")
+    setFormSceneParamNonEmpty(false)
+    setRegularActionSemanticInput("ai_only")
+    setRegularUseFullPoolInput(true)
+    setSelectedRegularTargets([])
     setFormPriority(100)
-    setFormIsDefault(false)
-    setFormTagFilter("")
     setFormChannelID(filterChannel !== "all" ? filterChannel : (view.channelOptions[0]?.channelId || "").trim())
     setIsDrawerOpen(true)
   }
@@ -357,13 +513,38 @@ export default function RoutingRules() {
     setSelectedRule(rule)
     setFormName((rule.name || "").trim())
     setFormChannelID((rule.channelId || "").trim())
-    setFormScene((rule.scene || "ANY").trim())
-    setFormMode((rule.mode || "人工接待").trim())
-    setFormTarget((rule.target || "默认接待池").trim())
     setFormPriority(Number(rule.priority || 100))
-    setFormIsDefault(rule.isDefault === true)
-    setFormTagFilter("")
-    if (!rule.isDefault) {
+    if (rule.isDefault) {
+      setFormScene("ANY")
+      setFormSceneParamValue("")
+      setFormSceneParamNonEmpty(false)
+      setRegularActionSemanticInput("ai_only")
+      setRegularUseFullPoolInput(true)
+      setSelectedRegularTargets([])
+    } else {
+      const conditions = parseJSONRecord(rule.conditionsJson)
+      const action = parseJSONRecord(rule.actionJson)
+      setFormScene(firstSceneValueFromConditions(rule.conditionsJson) || "ANY")
+      setFormSceneParamValue(String(conditions.scene_param_value || "").trim())
+      setFormSceneParamNonEmpty(conditions.scene_param_non_empty === true)
+      setRegularActionSemanticInput(String(action.action_semantic || "ai_only").trim() || "ai_only")
+      setRegularUseFullPoolInput(action.use_full_pool === true)
+      setSelectedRegularTargets(
+        normalizeSelectionItems([
+          ...(Array.isArray(action.assigned_staff_ids)
+            ? action.assigned_staff_ids.map((userID) => ({
+                type: "user" as const,
+                id: String(userID || "").trim(),
+              }))
+            : []),
+          ...(Array.isArray(action.assigned_department_ids)
+            ? action.assigned_department_ids.map((departmentID) => ({
+                type: "department" as const,
+                id: String(Number(departmentID || 0)),
+              }))
+            : []),
+        ]),
+      )
       syncFallbackDraftFromDetail(null)
     }
     setIsDrawerOpen(true)
@@ -490,7 +671,6 @@ export default function RoutingRules() {
 
     const name = formName.trim()
     const scene = formScene.trim() || "ANY"
-    const target = formTarget.trim() || "默认接待池"
     if (!name) {
       setDrawerNotice("请输入规则名称")
       return
@@ -499,16 +679,45 @@ export default function RoutingRules() {
       setDrawerNotice("请选择应用渠道")
       return
     }
+    const useFullPool =
+      regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human"
+        ? regularUseFullPoolInput
+        : false
+    const humanUserIDs = mapSelectedUserIDsToPoolRaw(
+      selectedRegularUsersDeduped,
+      regularPoolRawUsersByStableIdentity,
+    )
+    if ((regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human") && regularPoolEmpty) {
+      setDrawerNotice("当前接待池为空，普通人工路由无法生效。请先配置接待池，或改为“仅 AI”。")
+      return
+    }
+    if (
+      (regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human") &&
+      !useFullPool &&
+      humanUserIDs.length === 0 &&
+      selectedRegularDepartmentsDeduped.length === 0
+    ) {
+      setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
+      return
+    }
 
     const payload = {
       name,
       channel_id: channelID,
       scene,
-      mode: formMode,
-      target,
+      scene_param_value: formSceneParamValue.trim(),
+      scene_param_non_empty: formSceneParamNonEmpty,
+      action_semantic: regularActionSemanticInput,
+      use_full_pool: useFullPool,
+      human_user_ids:
+        regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human"
+          ? humanUserIDs
+          : [],
+      human_department_ids:
+        regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human"
+          ? selectedRegularDepartmentsDeduped
+          : [],
       priority: formPriority,
-      is_default: formIsDefault,
-      tag_filter: formTagFilter.trim(),
     }
 
     const command = selectedRule ? "update_rule" : "create_rule"
@@ -781,9 +990,9 @@ export default function RoutingRules() {
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">优先级</th>
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">规则名称</th>
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">应用渠道</th>
-                  <th className="px-6 py-3 font-semibold border-b border-gray-200">场景值 (Scene)</th>
-                  <th className="px-6 py-3 font-semibold border-b border-gray-200">接待模式</th>
-                  <th className="px-6 py-3 font-semibold border-b border-gray-200">分配目标</th>
+                  <th className="px-6 py-3 font-semibold border-b border-gray-200">命中条件</th>
+                  <th className="px-6 py-3 font-semibold border-b border-gray-200">动作</th>
+                  <th className="px-6 py-3 font-semibold border-b border-gray-200">人工范围</th>
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">状态</th>
                   <th className="px-6 py-3 font-semibold text-right border-b border-gray-200">操作</th>
                 </tr>
@@ -1221,12 +1430,12 @@ export default function RoutingRules() {
                 </h4>
                 <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">场景值 (Scene)</label>
+                    <label className="text-xs font-medium text-gray-700">Scene 精确匹配</label>
                     <div className="flex gap-2">
                       <input
                         type="text"
                         className="flex-1 h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="输入场景值，支持通配符 *"
+                        placeholder="留空或 ANY 表示不限制 scene"
                         value={formScene}
                         onChange={(event) => setFormScene(event.target.value)}
                       />
@@ -1256,18 +1465,27 @@ export default function RoutingRules() {
                         <Copy className="h-4 w-4 mr-2" /> 复制当前渠道链接
                       </Button>
                     </div>
-                    <p className="text-[10px] text-gray-400 italic">提示：留空或填写 ANY 则匹配该渠道下所有未被其他规则命中的流量。</p>
+                    <p className="text-[10px] text-gray-400 italic">提示：留空或填写 ANY 表示不限制 scene。</p>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">客户标签 (可选)</label>
+                    <label className="text-xs font-medium text-gray-700">scene_param 精确匹配（可选）</label>
                     <input
                       type="text"
                       className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="如：决策人, 高意向"
-                      value={formTagFilter}
-                      onChange={(event) => setFormTagFilter(event.target.value)}
+                      placeholder="如：campaign_2026_spring"
+                      value={formSceneParamValue}
+                      onChange={(event) => setFormSceneParamValue(event.target.value)}
                     />
                   </div>
+                  <label className="flex items-center gap-2 text-xs text-gray-600">
+                    <input
+                      type="checkbox"
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      checked={formSceneParamNonEmpty}
+                      onChange={(event) => setFormSceneParamNonEmpty(event.target.checked)}
+                    />
+                    要求 scene_param 非空
+                  </label>
                 </div>
               </div>
 
@@ -1276,40 +1494,82 @@ export default function RoutingRules() {
                   <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">3</span>
                   执行动作
                 </h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">接待模式</label>
-                    <select
-                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={formMode}
-                      onChange={(event) => setFormMode(event.target.value)}
-                    >
-                      {view.modeOptions.length > 0 ? (
-                        view.modeOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))
-                      ) : (
-                        <option value={formMode}>{formMode}</option>
-                      )}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">分配目标</label>
-                    <select
-                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={formTarget}
-                      onChange={(event) => setFormTarget(event.target.value)}
-                    >
-                      {(view.targetOptions.length > 0 ? view.targetOptions : [formTarget]).map((target) => (
-                        <option key={target} value={target}>
-                          {target}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-700">动作类型</label>
+                  <select
+                    className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={regularActionSemanticInput}
+                    onChange={(event) => {
+                      const nextValue = event.target.value
+                      setRegularActionSemanticInput(nextValue)
+                      if (nextValue === "ai_only" || nextValue === "send_to_pool") {
+                        setRegularUseFullPoolInput(true)
+                        setSelectedRegularTargets([])
+                      }
+                    }}
+                  >
+                    <option value="ai_only">仅 AI</option>
+                    <option value="send_to_pool">送入待接入池</option>
+                    <option value="assign_human">转给指定人工</option>
+                    <option value="queue_then_human">排队后待人工接入</option>
+                  </select>
                 </div>
+                {regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human" ? (
+                  <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <div className="space-y-3">
+                      <div className="text-xs font-medium text-gray-700">人工范围</div>
+                      <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                        <input
+                          type="radio"
+                          name="routing-regular-full-pool"
+                          checked={regularUseFullPoolInput}
+                          onChange={() => setRegularUseFullPoolInput(true)}
+                          disabled={regularPoolEmpty}
+                          className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">使用整个接待池</span>
+                          <span className="block text-xs text-gray-500">运行时会基于当前接待池显式对象动态展开可接待成员。</span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                        <input
+                          type="radio"
+                          name="routing-regular-full-pool"
+                          checked={!regularUseFullPoolInput}
+                          onChange={() => setRegularUseFullPoolInput(false)}
+                          disabled={regularPoolEmpty}
+                          className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">使用接待池对象子集</span>
+                          <span className="block text-xs text-gray-500">普通规则与默认兜底规则共享同一套显式对象表达式和运行时展开逻辑。</span>
+                        </span>
+                      </label>
+                    </div>
+                    {!regularUseFullPoolInput ? (
+                      <div className="space-y-2">
+                        <div className="text-[11px] text-gray-500">这里只显示当前接待池中的成员和部门。</div>
+                        <OrganizationDirectorySelect
+                          label="接待池对象子集"
+                          placeholder={isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"}
+                          searchPlaceholder="搜索接待池中的成员 / 部门"
+                          corpId={orgCorpID}
+                          treeRoots={regularTreeRoots}
+                          ungroupedUsers={regularUngroupedUserIDs}
+                          memberMap={orgMemberMap}
+                          departmentMap={orgDepartmentMap}
+                          selectedItems={selectedRegularTargetsDeduped}
+                          onChange={setSelectedRegularTargets}
+                          emptyText="当前接待池中还没有可选对象，请先配置接待池"
+                          disabled={isOrgOptionsLoading || regularPoolEmpty}
+                          allowedUserIDs={currentRegularPoolAllowedUserIDs}
+                          allowedDepartmentIDs={currentRegularPoolAllowedDepartmentIDs}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-gray-700">优先级</label>
                   <input
@@ -1322,7 +1582,7 @@ export default function RoutingRules() {
                 </div>
                 <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 flex items-center gap-2">
                   <Info className="h-3.5 w-3.5" />
-                  普通规则在这里维护；默认兜底规则请直接编辑现有“兜底”规则。
+                  普通规则在这里维护；默认兜底规则请直接编辑现有“兜底”规则。命中后会在会话详情里明确显示命中的规则名和动作。
                 </div>
               </div>
             </>

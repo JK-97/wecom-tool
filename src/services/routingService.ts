@@ -21,6 +21,8 @@ export type RoutingRuleViewModel = {
   hits7d: number
   transferRate: string
   responseTime: string
+  conditionsJson: string
+  actionJson: string
 }
 
 export type RoutingDistribution = {
@@ -78,6 +80,8 @@ type RawRoutingRuleView = {
   hits_7d?: number
   transfer_rate?: string
   response_time?: string
+  conditions_json?: string
+  action_json?: string
 }
 
 type RawRoutingDistribution = {
@@ -211,5 +215,7 @@ function mapRule(item: RawRoutingRuleView): RoutingRuleViewModel {
     hits7d: Number(item.hits_7d || 0),
     transferRate: String(item.transfer_rate || "0%").trim(),
     responseTime: String(item.response_time || "0s").trim(),
+    conditionsJson: String(item.conditions_json || "{}").trim() || "{}",
+    actionJson: String(item.action_json || "{}").trim() || "{}",
   }
 }
