@@ -512,7 +512,13 @@ export default function ReceptionChannels() {
   const selectedScene = useMemo(() => {
     const scenes = selectedChannelDetail?.scenes || [];
     const key = (selectedSceneValue || "").trim();
-    if (!key) return scenes[0] || null;
+    if (!key) {
+      return (
+        scenes.find((item) => (item.scene_value || "").trim() === "") ||
+        scenes[0] ||
+        null
+      );
+    }
     return (
       scenes.find((item) => (item.scene_value || "").trim() === key) ||
       scenes[0] ||
@@ -686,7 +692,7 @@ export default function ReceptionChannels() {
     if (currentURL) {
       return currentURL;
     }
-    if (!openKFID || !sceneValue) {
+    if (!openKFID) {
       throw new Error("当前场景不可生成正式客服链接");
     }
     setIsGeneratingSceneLink(true);
@@ -748,7 +754,7 @@ export default function ReceptionChannels() {
       const downloadURL = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = downloadURL;
-      anchor.download = `${(selectedChannel?.open_kfid || "reception_channel").trim()}-${(selectedScene?.scene_value || primaryScene?.scene_value || "scene").trim()}.png`;
+      anchor.download = `${(selectedChannel?.open_kfid || "reception_channel").trim()}-${(selectedScene?.scene_value || primaryScene?.scene_value || "无场景").trim() || "无场景"}.png`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1463,7 +1469,7 @@ export default function ReceptionChannels() {
                         }
                         value={(scene.scene_value || "").trim()}
                       >
-                        {(scene.name || scene.scene_value || "默认场景").trim()}
+                        {(scene.name || scene.scene_value || "无场景").trim()}
                       </option>
                     ))}
                   </select>

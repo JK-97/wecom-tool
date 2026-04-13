@@ -162,7 +162,7 @@ export default function RoutingRules() {
 
   const [formName, setFormName] = useState("")
   const [formChannelID, setFormChannelID] = useState("")
-  const [formScene, setFormScene] = useState("ANY")
+  const [formScene, setFormScene] = useState("")
   const [formPriority, setFormPriority] = useState(100)
   const requestedEditRuleID = Number(searchParams.get("edit_rule_id") || 0)
   const [hasAutoOpenedEditRule, setHasAutoOpenedEditRule] = useState(false)
@@ -497,7 +497,7 @@ export default function RoutingRules() {
     setRegularDetail(null)
     setRegularPoolAssignments([])
     setFormName("")
-    setFormScene("ANY")
+    setFormScene("")
     setFormSceneParamValue("")
     setFormSceneParamNonEmpty(false)
     setRegularActionSemanticInput("ai_only")
@@ -515,7 +515,7 @@ export default function RoutingRules() {
     setFormChannelID((rule.channelId || "").trim())
     setFormPriority(Number(rule.priority || 100))
     if (rule.isDefault) {
-      setFormScene("ANY")
+      setFormScene("")
       setFormSceneParamValue("")
       setFormSceneParamNonEmpty(false)
       setRegularActionSemanticInput("ai_only")
@@ -524,7 +524,7 @@ export default function RoutingRules() {
     } else {
       const conditions = parseJSONRecord(rule.conditionsJson)
       const action = parseJSONRecord(rule.actionJson)
-      setFormScene(firstSceneValueFromConditions(rule.conditionsJson) || "ANY")
+      setFormScene(firstSceneValueFromConditions(rule.conditionsJson) || "")
       setFormSceneParamValue(String(conditions.scene_param_value || "").trim())
       setFormSceneParamNonEmpty(conditions.scene_param_non_empty === true)
       setRegularActionSemanticInput(String(action.action_semantic || "ai_only").trim() || "ai_only")
@@ -670,7 +670,7 @@ export default function RoutingRules() {
     }
 
     const name = formName.trim()
-    const scene = formScene.trim() || "ANY"
+    const scene = formScene.trim()
     if (!name) {
       setDrawerNotice("请输入规则名称")
       return
@@ -1435,7 +1435,7 @@ export default function RoutingRules() {
                       <input
                         type="text"
                         className="flex-1 h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="留空或 ANY 表示不限制 scene"
+                        placeholder="留空表示不限制 scene"
                         value={formScene}
                         onChange={(event) => setFormScene(event.target.value)}
                       />
@@ -1465,7 +1465,7 @@ export default function RoutingRules() {
                         <Copy className="h-4 w-4 mr-2" /> 复制当前渠道链接
                       </Button>
                     </div>
-                    <p className="text-[10px] text-gray-400 italic">提示：留空或填写 ANY 表示不限制 scene。</p>
+                    <p className="text-[10px] text-gray-400 italic">提示：留空表示不限制 scene。</p>
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-gray-700">scene_param 精确匹配（可选）</label>

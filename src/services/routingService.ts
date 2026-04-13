@@ -205,7 +205,7 @@ function mapRule(item: RawRoutingRuleView): RoutingRuleViewModel {
     name: String(item.name || "未命名规则").trim(),
     channel: String(item.channel || "未指定渠道").trim(),
     channelId: String(item.channel_id || "").trim(),
-    scene: String(item.scene || "ANY").trim(),
+    scene: String(item.scene || "").trim() || "无场景",
     mode: String(item.mode || "机器人+人工").trim(),
     target: String(item.target || "默认接待池").trim(),
     priority: Number(item.priority || 0),
