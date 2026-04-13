@@ -20,6 +20,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createReceptionChannel,
+  generateReceptionSceneLink,
   getReceptionChannelsView,
   getReceptionChannelDetail,
   listKFServicerAssignments,
@@ -584,6 +585,7 @@ export default function ReceptionChannels() {
   const [createName, setCreateName] = useState("");
   const [createAvatarFile, setCreateAvatarFile] = useState<File | null>(null);
   const [selectedSceneValue, setSelectedSceneValue] = useState("");
+  const [isGeneratingSceneLink, setIsGeneratingSceneLink] = useState(false);
   const [selectedServicerTargets, setSelectedServicerTargets] = useState<
     DirectorySelectionItem[]
   >([]);
@@ -1062,31 +1064,65 @@ export default function ReceptionChannels() {
     return "默认接待池";
   };
 
-  const promotionURL =
-    (selectedScene?.url || "").trim() ||
-    (selectedChannelDetail?.promotion_url || "").trim() ||
-    (primaryScene?.url || "").trim();
+  const promotionURL = (selectedScene?.url || "").trim();
+
+  const ensurePromotionURL = async (): Promise<string> => {
+    const openKFID =
+      (selectedChannelDetail?.channel?.open_kfid || selectedChannel?.open_kfid || "").trim();
+    const sceneValue = (selectedScene?.scene_value || "").trim();
+    const currentURL = (selectedScene?.url || "").trim();
+    if (currentURL) {
+      return currentURL;
+    }
+    if (!openKFID || !sceneValue) {
+      throw new Error("当前场景不可生成正式客服链接");
+    }
+    setIsGeneratingSceneLink(true);
+    try {
+      const generated = await generateReceptionSceneLink({
+        open_kfid: openKFID,
+        scene_value: sceneValue,
+      });
+      const nextURL = (generated?.url || "").trim();
+      if (!nextURL) {
+        throw new Error("未生成有效的客服链接");
+      }
+      setSelectedChannelDetail((current) => {
+        if (!current) return current;
+        const nextScenes = (current.scenes || []).map((item) =>
+          (item.scene_value || "").trim() === sceneValue
+            ? { ...item, url: nextURL }
+            : item,
+        );
+        return {
+          ...current,
+          scenes: nextScenes,
+          promotion_url:
+            sceneValue === (nextScenes[0]?.scene_value || "").trim()
+              ? nextURL
+              : current.promotion_url,
+        };
+      });
+      return nextURL;
+    } finally {
+      setIsGeneratingSceneLink(false);
+    }
+  };
 
   const handleCopyLink = async () => {
-    if (!promotionURL) {
-      setNotice("当前渠道暂无可复制的推广链接");
-      return;
-    }
     try {
-      await navigator.clipboard.writeText(promotionURL);
+      const url = await ensurePromotionURL();
+      await navigator.clipboard.writeText(url);
       setNotice("推广链接已复制");
-    } catch {
-      setNotice("复制失败，请手动复制");
+    } catch (error) {
+      setNotice(normalizeErrorMessage(error) || "复制失败，请手动复制");
     }
   };
 
   const handleDownloadQRCode = async () => {
-    if (!promotionURL) {
-      setNotice("当前渠道暂无可下载二维码的链接");
-      return;
-    }
     try {
-      const query = new URLSearchParams({ text: promotionURL, size: "512" });
+      const promotionLink = await ensurePromotionURL();
+      const query = new URLSearchParams({ text: promotionLink, size: "512" });
       const response = await fetch(
         `/api/v1/routing/qrcode?${query.toString()}`,
         {
@@ -1097,14 +1133,14 @@ export default function ReceptionChannels() {
         throw new Error(`二维码下载失败(${response.status})`);
       }
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+      const downloadURL = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
-      anchor.href = url;
+      anchor.href = downloadURL;
       anchor.download = `${(selectedChannel?.open_kfid || "reception_channel").trim()}-${(selectedScene?.scene_value || primaryScene?.scene_value || "scene").trim()}.png`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(downloadURL);
       setNotice("二维码下载已开始");
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
@@ -1793,9 +1829,10 @@ export default function ReceptionChannels() {
                     variant="ghost"
                     size="sm"
                     className="text-xs text-blue-600 h-7"
+                    disabled={isGeneratingSceneLink}
                     onClick={() => void handleDownloadQRCode()}
                   >
-                    下载图片
+                    {isGeneratingSceneLink ? "生成中..." : "下载图片"}
                   </Button>
                 </div>
                 <div className="p-4 border border-gray-200 rounded-lg flex flex-col items-center gap-3 hover:border-blue-300 transition-colors cursor-pointer group">
@@ -1809,9 +1846,10 @@ export default function ReceptionChannels() {
                     variant="ghost"
                     size="sm"
                     className="text-xs text-blue-600 h-7"
+                    disabled={isGeneratingSceneLink}
                     onClick={() => void handleCopyLink()}
                   >
-                    复制链接
+                    {isGeneratingSceneLink ? "生成中..." : "复制链接"}
                   </Button>
                 </div>
               </div>

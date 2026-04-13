@@ -159,6 +159,12 @@ export type UploadedMedia = {
   created_at?: number;
 };
 
+export type ReceptionSceneLink = {
+  name?: string;
+  scene_value?: string;
+  url?: string;
+};
+
 export async function getReceptionOverview(): Promise<ReceptionOverview | null> {
   const payload = await requestJSON<APIReply<ReceptionOverview>>(
     "/api/v1/reception/overview",
@@ -224,6 +230,23 @@ export async function uploadReceptionChannelAvatar(
     },
   );
   return payload?.data?.media || null;
+}
+
+export async function generateReceptionSceneLink(input: {
+  open_kfid: string;
+  scene_value: string;
+}): Promise<ReceptionSceneLink | null> {
+  const payload = await requestJSON<APIReply<{ item?: ReceptionSceneLink }>>(
+    "/api/v1/reception/channels/contact-way",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        open_kfid: input.open_kfid,
+        scene_value: input.scene_value,
+      }),
+    },
+  );
+  return payload?.data?.item || null;
 }
 
 export async function getReceptionChannelDetail(
