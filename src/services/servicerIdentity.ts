@@ -84,6 +84,43 @@ export function resolveServicerIdentityView(
   };
 }
 
+export function buildServicerIdentityLookup(
+  sources: Array<ServicerIdentitySource | null | undefined>,
+): Map<string, ServicerIdentityView> {
+  const lookup = new Map<string, ServicerIdentityView>();
+  sources.forEach((source) => {
+    const identity = resolveServicerIdentityView(source);
+    const keys = [
+      identity.rawServicerUserID,
+      identity.resolvedUserID,
+      identity.resolvedOpenUserID,
+      identity.stableIdentity,
+    ];
+    keys.forEach((key) => {
+      const normalized = (key || "").trim();
+      if (!normalized || lookup.has(normalized)) return;
+      lookup.set(normalized, identity);
+    });
+  });
+  return lookup;
+}
+
+export function resolveServicerIdentityToken(
+  token: string,
+  lookup: Map<string, ServicerIdentityView>,
+): ServicerIdentityView | null {
+  const normalized = (token || "").trim();
+  if (!normalized) return null;
+  return lookup.get(normalized) || null;
+}
+
+export function splitIdentityTokens(value: string): string[] {
+  return (value || "")
+    .split(/[\n,，]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function buildRawServicerIDsByStableIdentity(
   sources: Array<ServicerIdentitySource | null | undefined>,
 ): Map<string, string[]> {

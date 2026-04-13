@@ -169,6 +169,58 @@ export function buildDirectoryTree(
   }
 }
 
+export function buildScopedDirectoryTree(
+  view: OrganizationSettingsView | null,
+  allowedUserIDs?: string[],
+  allowedDepartmentIDs?: number[],
+): OrganizationDirectoryTree {
+  const fullTree = buildDirectoryTree(view)
+  const allowedUserSet =
+    allowedUserIDs && allowedUserIDs.length > 0
+      ? new Set(allowedUserIDs.map((item) => item.trim()).filter(Boolean))
+      : null
+  const allowedDepartmentSet =
+    allowedDepartmentIDs && allowedDepartmentIDs.length > 0
+      ? new Set(
+          allowedDepartmentIDs
+            .map((item) => Number(item || 0))
+            .filter((item) => Number.isInteger(item) && item > 0),
+        )
+      : null
+
+  if (!allowedUserSet && !allowedDepartmentSet) {
+    return fullTree
+  }
+
+  const walk = (node: DirectoryTreeNode): DirectoryTreeNode | null => {
+    const departmentID = Number(node.department.department_id || 0)
+    const filteredChildren = node.children
+      .map(walk)
+      .filter(Boolean) as DirectoryTreeNode[]
+    const filteredMembers = node.memberIDs.filter((userID) =>
+      allowedUserSet ? allowedUserSet.has(userID) : true,
+    )
+    const departmentAllowed = allowedDepartmentSet
+      ? allowedDepartmentSet.has(departmentID)
+      : false
+    if (!departmentAllowed && filteredChildren.length === 0 && filteredMembers.length === 0) {
+      return null
+    }
+    return {
+      department: node.department,
+      children: filteredChildren,
+      memberIDs: filteredMembers,
+    }
+  }
+
+  return {
+    treeRoots: fullTree.treeRoots.map(walk).filter(Boolean) as DirectoryTreeNode[],
+    ungroupedUsers: fullTree.ungroupedUsers.filter((userID) =>
+      allowedUserSet ? allowedUserSet.has(userID) : true,
+    ),
+  }
+}
+
 export function OrganizationDirectorySelect({
   label,
   placeholder,
@@ -230,6 +282,13 @@ export function OrganizationDirectorySelect({
 
   const toggleSelection = (item: DirectorySelectionItem) => {
     if (disabled) return
+    if (item.type === "user" && allowedUserSet && !allowedUserSet.has(item.id.trim())) return
+    if (
+      item.type === "department" &&
+      allowedDepartmentSet &&
+      !allowedDepartmentSet.has(Number(item.id || 0))
+    )
+      return
     const key = selectionKey(item)
     if (selectedKeys.has(key)) {
       onChange(selectedItems.filter((current) => selectionKey(current) !== key))
@@ -304,14 +363,15 @@ export function OrganizationDirectorySelect({
     const role = (member?.role || "").trim() || "成员"
     const adminText = member?.is_app_admin ? "企微应用管理员" : ""
     const checked = selectedKeys.has(`user:${userID}`)
+    const selectable = !allowedUserSet || allowedUserSet.has(userID)
     return (
       <button
         type="button"
         key={`user-${userID}-${depth}`}
         onClick={() => toggleSelection({ type: "user", id: userID })}
-        disabled={disabled}
+        disabled={disabled || !selectable}
         className={`flex w-full items-start gap-3 rounded-lg px-2 py-1.5 text-left transition-colors ${
-          checked ? "bg-blue-50" : "hover:bg-gray-50"
+          checked ? "bg-blue-50" : selectable ? "hover:bg-gray-50" : "bg-transparent"
         } disabled:cursor-not-allowed disabled:opacity-60`}
         style={{ paddingLeft: `${14 + depth * 18}px` }}
       >
@@ -343,6 +403,8 @@ export function OrganizationDirectorySelect({
     const departmentID = Number(node.department.department_id || 0)
     const checked = selectedKeys.has(`department:${departmentID}`)
     const expanded = expandedDepartments.has(departmentID) || Boolean(keyword)
+    const selectable =
+      !allowedDepartmentSet || allowedDepartmentSet.has(departmentID)
     const fallbackName =
       (departmentMap.get(departmentID)?.name || "").trim() || `部门 #${departmentID}`
     return (
@@ -367,13 +429,21 @@ export function OrganizationDirectorySelect({
           </button>
           <button
             type="button"
-            className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-not-allowed"
+            className={`flex min-w-0 flex-1 items-start gap-3 text-left ${
+              selectable ? "" : "cursor-default"
+            } disabled:cursor-not-allowed`}
             onClick={() =>
               toggleSelection({ type: "department", id: String(departmentID) })
             }
-            disabled={disabled}
+            disabled={disabled || !selectable}
           >
-            <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded ${checked ? "bg-blue-100 text-blue-700" : "bg-blue-50 text-blue-600"}`}>
+            <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded ${
+              checked
+                ? "bg-blue-100 text-blue-700"
+                : selectable
+                  ? "bg-blue-50 text-blue-600"
+                  : "bg-gray-100 text-gray-400"
+            }`}>
               <Folder className="h-3.5 w-3.5" />
             </span>
             <span className="min-w-0 flex-1 space-y-0.5">
@@ -382,12 +452,20 @@ export function OrganizationDirectorySelect({
                   departmentId={departmentID}
                   corpId={corpId}
                   fallback={fallbackName}
-                  className={`truncate text-xs font-semibold ${checked ? "text-blue-900" : "text-gray-900"}`}
-                  hintClassName="text-[10px] text-gray-400"
+                  className={`truncate text-xs font-semibold ${
+                    checked
+                      ? "text-blue-900"
+                      : selectable
+                        ? "text-gray-900"
+                        : "text-gray-500"
+                  }`}
+                  hintClassName={`text-[10px] ${selectable ? "text-gray-400" : "text-gray-300"}`}
                 />
                 {renderSelectedFlag(checked)}
               </span>
-              <span className="truncate text-[10px] text-gray-500">部门 #{departmentID}</span>
+              <span className="truncate text-[10px] text-gray-500">
+                {selectable ? `部门 #${departmentID}` : "层级路径"}
+              </span>
             </span>
           </button>
         </div>

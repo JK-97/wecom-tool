@@ -19,7 +19,7 @@ import {
   ChevronRight,
   Star,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import {
@@ -31,8 +31,17 @@ import {
   type CommandCenterSessionDetail,
   type CommandCenterViewModel,
 } from "@/services/commandCenterService";
-import { listKFServicerAssignments, type KFServicerAssignment } from "@/services/receptionService";
-import { resolveServicerIdentityView } from "@/services/servicerIdentity";
+import {
+  listKFServicerAssignments,
+  listReceptionChannels,
+  type KFServicerAssignment,
+} from "@/services/receptionService";
+import {
+  buildServicerIdentityLookup,
+  resolveServicerIdentityToken,
+  resolveServicerIdentityView,
+  splitIdentityTokens,
+} from "@/services/servicerIdentity";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
@@ -93,6 +102,49 @@ function resolveAssignedDisplay(session?: CommandCenterSession) {
   };
 }
 
+function renderServicerValue(props: {
+  value?: string;
+  corpId: string;
+  identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
+}) {
+  const tokens = splitIdentityTokens(props.value || "");
+  if (tokens.length === 0) return "-";
+  return (
+    <span className="inline-flex flex-wrap items-center justify-end gap-2">
+      {tokens.map((token) => {
+        const identity = resolveServicerIdentityToken(token, props.identityLookup);
+        const displayIdentity = (identity?.displayIdentity || "").trim();
+        const displayFallback = (
+          identity?.displayFallback ||
+          token
+        ).trim();
+        const rawID = (identity?.rawServicerUserID || "").trim();
+        return (
+          <span
+            key={`${token}-${rawID || displayFallback}`}
+            className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-700"
+            title={rawID || displayFallback}
+          >
+            {displayIdentity ? (
+              <WecomOpenDataName
+                userid={displayIdentity}
+                corpId={props.corpId}
+                fallback={displayFallback}
+                className="text-[11px] font-medium text-gray-700"
+              />
+            ) : (
+              <span className="text-[11px] font-medium text-gray-700">
+                {displayFallback}
+              </span>
+            )}
+            {rawID ? <span className="text-[10px] text-gray-400">ID:{rawID}</span> : null}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 export default function CSCommandCenter() {
   const auth = useAuth();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -109,10 +161,14 @@ export default function CSCommandCenter() {
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
+  const [sessionServicerAssignments, setSessionServicerAssignments] = useState<KFServicerAssignment[]>([]);
+  const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
+  const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
   const [transferSearch, setTransferSearch] = useState("");
   const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
   const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
+  const servicerAssignmentsCacheRef = useRef(new Map<string, KFServicerAssignment[]>());
   const selectedExternalUserIDRef = useRef("");
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
@@ -127,10 +183,61 @@ export default function CSCommandCenter() {
   }, []);
 
   const corpID = (auth.corp?.id || "").trim();
+  const sessionServicerLookup = useMemo(
+    () => buildServicerIdentityLookup(sessionServicerAssignments),
+    [sessionServicerAssignments],
+  );
+
+  const resolveChannelPresentation = (source?: string) => {
+    const token = (source || "").trim();
+    if (!token) return { label: "-", title: "" };
+    const mapped = (channelDisplayMap[token] || "").trim();
+    if (mapped) {
+      return {
+        label: mapped,
+        title: mapped === token ? "" : token,
+      };
+    }
+    if (!hasLoadedChannelDisplayMap) {
+      return { label: "渠道", title: token };
+    }
+    return { label: "未知渠道", title: token };
+  };
 
   useEffect(() => {
     selectedExternalUserIDRef.current = selectedExternalUserID.trim();
   }, [selectedExternalUserID]);
+
+  useEffect(() => {
+    let alive = true;
+    void listReceptionChannels({ limit: 500 })
+      .then((channels) => {
+        if (!alive) return;
+        const next: Record<string, string> = {};
+        channels.forEach((channel) => {
+          const openKFID = (channel.open_kfid || "").trim();
+          if (!openKFID) return;
+          const label = (
+            channel.display_name ||
+            channel.name ||
+            channel.open_kfid ||
+            ""
+          ).trim();
+          if (!label) return;
+          next[openKFID] = label;
+        });
+        setChannelDisplayMap(next);
+        setHasLoadedChannelDisplayMap(true);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setChannelDisplayMap({});
+        setHasLoadedChannelDisplayMap(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const loadView = async () => {
     const data = await getCSCommandCenterView({
@@ -255,6 +362,33 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     const openKFID = (selectedSession?.open_kfid || "").trim();
+    if (!openKFID) {
+      setSessionServicerAssignments([]);
+      return;
+    }
+    const cached = servicerAssignmentsCacheRef.current.get(openKFID);
+    if (cached) {
+      setSessionServicerAssignments(cached);
+      return;
+    }
+    let alive = true;
+    void listKFServicerAssignments(openKFID)
+      .then((assignments) => {
+        if (!alive) return;
+        servicerAssignmentsCacheRef.current.set(openKFID, assignments);
+        setSessionServicerAssignments(assignments);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setSessionServicerAssignments([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedSession?.open_kfid]);
+
+  useEffect(() => {
+    const openKFID = (selectedSession?.open_kfid || "").trim();
     if (!isTransferModalOpen) return;
     if (!openKFID) {
       setTransferCandidates([]);
@@ -331,10 +465,10 @@ export default function CSCommandCenter() {
       if (activeTab !== bucket) return false;
       if (!q) return true;
       const joined =
-        `${item.name || ""} ${item.last_message || ""} ${item.source || ""}`.toLowerCase();
+        `${item.name || ""} ${item.last_message || ""} ${resolveChannelPresentation(item.source).label} ${item.source || ""}`.toLowerCase();
       return joined.includes(q);
     });
-  }, [activeTab, keyword, sessions]);
+  }, [activeTab, channelDisplayMap, hasLoadedChannelDisplayMap, keyword, sessions]);
 
   const orderedMessages = useMemo(() => {
     return (detail?.messages || [])
@@ -471,6 +605,7 @@ export default function CSCommandCenter() {
     (activeMonitor?.compliance?.status || "").trim().toLowerCase() === "risk" ||
     activeMonitor?.compliance_pass === false;
   const assignedDisplayForHeader = resolveAssignedDisplay(selectedSession || undefined);
+  const selectedSourcePresentation = resolveChannelPresentation(selectedSession?.source);
 
   return (
     <div className="flex h-full gap-6">
@@ -555,9 +690,17 @@ export default function CSCommandCenter() {
                           {(session.name || "未命名客户").trim()}
                         </span>
                         <div className="flex items-center gap-1 mt-0.5">
-                          <Badge className="text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none">
-                            {(session.source || "未知渠道").trim()}
+              {(() => {
+                const sourcePresentation = resolveChannelPresentation(session.source);
+                return (
+                          <Badge
+                            className="max-w-[120px] truncate text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none"
+                            title={sourcePresentation.title || sourcePresentation.label}
+                          >
+                            {sourcePresentation.label}
                           </Badge>
+                );
+              })()}
                           <Badge className="text-[9px] px-1 py-0 bg-gray-100 text-gray-500 border-none">
                             {(session.session_label || "会话中").trim()}
                           </Badge>
@@ -690,8 +833,11 @@ export default function CSCommandCenter() {
           <div className="px-6 py-2 bg-gray-50 border-t border-gray-100 flex items-center gap-6 text-[11px]">
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">来源渠道:</span>
-              <span className="text-gray-900">
-                {(selectedSession?.source || "-").trim()}
+              <span
+                className="text-gray-900"
+                title={selectedSourcePresentation.title || undefined}
+              >
+                {selectedSourcePresentation.label}
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
@@ -886,7 +1032,11 @@ export default function CSCommandCenter() {
                 />
                 <SessionEntryContextRow
                   label="目标对象"
-                  value={(detail?.routing_explanation?.target || detail?.route_pool_name || "-").trim()}
+                  value={renderServicerValue({
+                    value: (detail?.routing_explanation?.target || detail?.route_pool_name || "").trim(),
+                    corpId: corpID,
+                    identityLookup: sessionServicerLookup,
+                  })}
                 />
                 <SessionEntryContextRow
                   label="命中规则"
@@ -1497,7 +1647,7 @@ function readActionDisabledMessage(panel: SessionActionPanel): string {
   return disabledSecondary?.disabledReason || "";
 }
 
-function SessionEntryContextRow(props: { label: string; value: string }) {
+function SessionEntryContextRow(props: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <span className="text-xs text-gray-500 shrink-0">{props.label}</span>

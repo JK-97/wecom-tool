@@ -47,6 +47,7 @@ import {
 import {
   buildDirectoryMaps,
   buildDirectoryTree,
+  buildScopedDirectoryTree,
   normalizeSelectionItems,
   OrganizationDirectorySelect,
   type DirectorySelectionItem,
@@ -222,6 +223,18 @@ export default function RoutingRules() {
         .map((item) => Number(item.department_id || 0))
         .filter((item) => Number.isInteger(item) && item > 0),
     [fallbackPoolAssignments],
+  )
+  const {
+    treeRoots: fallbackTreeRoots,
+    ungroupedUsers: fallbackUngroupedUserIDs,
+  } = useMemo(
+    () =>
+      buildScopedDirectoryTree(
+        organizationView,
+        currentPoolAllowedUserIDs,
+        currentPoolAllowedDepartmentIDs,
+      ),
+    [organizationView, currentPoolAllowedDepartmentIDs, currentPoolAllowedUserIDs],
   )
   const fallbackPoolEmpty =
     fallbackDetail?.reception_pool?.empty === true ||
@@ -1133,8 +1146,8 @@ export default function RoutingRules() {
                         }
                         searchPlaceholder="搜索接待池内成员 / 部门"
                         corpId={orgCorpID}
-                        treeRoots={treeRoots}
-                        ungroupedUsers={ungroupedUserIDs}
+                        treeRoots={fallbackTreeRoots}
+                        ungroupedUsers={fallbackUngroupedUserIDs}
                         memberMap={orgMemberMap}
                         departmentMap={orgDepartmentMap}
                         selectedItems={selectedFallbackTargetsDeduped}

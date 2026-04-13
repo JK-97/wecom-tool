@@ -24,6 +24,9 @@ export type ReceptionChannel = {
   source?: string;
   staff_count?: number;
   default_rule_id?: number;
+  pool_user_count?: number;
+  pool_department_count?: number;
+  pool_empty?: boolean;
   default_rule?: string;
   status?: string;
   sync_status?: string;
@@ -53,9 +56,6 @@ export type ReceptionChannelDetail = {
     human_user_ids?: string[];
     human_department_ids?: number[];
     human_target_display?: string;
-    human_target_valid?: boolean;
-    invalid_reason_code?: string;
-    invalid_reason?: string;
     queue_enabled?: boolean;
     requires_human?: boolean;
     uses_default_pool?: boolean;
