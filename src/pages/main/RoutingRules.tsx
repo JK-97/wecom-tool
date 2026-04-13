@@ -47,7 +47,7 @@ import {
 import {
   buildDirectoryMaps,
   buildDirectoryTree,
-  buildScopedDirectoryTree,
+  buildSelectedObjectDirectoryTree,
   normalizeSelectionItems,
   OrganizationDirectorySelect,
   type DirectorySelectionItem,
@@ -229,7 +229,7 @@ export default function RoutingRules() {
     ungroupedUsers: fallbackUngroupedUserIDs,
   } = useMemo(
     () =>
-      buildScopedDirectoryTree(
+      buildSelectedObjectDirectoryTree(
         organizationView,
         currentPoolAllowedUserIDs,
         currentPoolAllowedDepartmentIDs,
@@ -450,7 +450,7 @@ export default function RoutingRules() {
         humanUserIDs.length === 0 &&
         selectedFallbackDepartmentsDeduped.length === 0
       ) {
-        setDrawerNotice("请选择池内候选范围，或切回“使用整个接待池”。")
+        setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
         return
       }
       const result = await runCommand(
@@ -1089,7 +1089,7 @@ export default function RoutingRules() {
                     <option value="ai_then_queue_then_human">智能接待后进入排队再转人工</option>
                   </select>
                   <p className="text-[11px] text-gray-500">
-                    默认使用整个接待池；如有需要，可缩小为池内子集。多选成员/部门表示人工候选范围，不表示唯一指派对象。
+                    默认使用整个接待池；如有需要，可缩小为接待池对象子集。多选成员/部门表示人工候选范围，不表示唯一指派对象。
                   </p>
                 </div>
                 {fallbackModeInput !== "ai_only" ? (
@@ -1130,21 +1130,25 @@ export default function RoutingRules() {
                         />
                         <span>
                           <span className="block font-medium text-gray-900">
-                            自定义候选范围（池内子集）
+                            自定义候选范围（接待池对象子集）
                           </span>
                           <span className="block text-xs text-gray-500">
-                            仅从当前接待池中缩小人工候选范围。
+                            仅从当前接待池中的显式对象缩小人工候选范围。
                           </span>
                         </span>
                       </label>
                     </div>
                     {!fallbackUseFullPoolInput ? (
-                      <OrganizationDirectorySelect
-                        label="池内候选范围"
+                      <div className="space-y-2">
+                        <div className="text-[11px] text-gray-500">
+                          这里只显示当前接待池中的成员和部门。
+                        </div>
+                        <OrganizationDirectorySelect
+                        label="接待池对象子集"
                         placeholder={
-                          isOrgOptionsLoading ? "正在加载池内对象..." : "从当前接待池中选择成员或部门"
+                          isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"
                         }
-                        searchPlaceholder="搜索接待池内成员 / 部门"
+                        searchPlaceholder="搜索接待池中的成员 / 部门"
                         corpId={orgCorpID}
                         treeRoots={fallbackTreeRoots}
                         ungroupedUsers={fallbackUngroupedUserIDs}
@@ -1152,11 +1156,12 @@ export default function RoutingRules() {
                         departmentMap={orgDepartmentMap}
                         selectedItems={selectedFallbackTargetsDeduped}
                         onChange={setSelectedFallbackTargets}
-                        emptyText="当前接待池内没有可选成员或部门"
+                        emptyText="当前接待池中还没有可选对象，请先配置接待池"
                         disabled={isOrgOptionsLoading || fallbackPoolEmpty}
                         allowedUserIDs={currentPoolAllowedUserIDs}
                         allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
-                      />
+                        />
+                      </div>
                     ) : null}
                   </>
                 ) : null}

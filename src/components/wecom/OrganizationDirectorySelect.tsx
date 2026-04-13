@@ -176,11 +176,11 @@ export function buildScopedDirectoryTree(
 ): OrganizationDirectoryTree {
   const fullTree = buildDirectoryTree(view)
   const allowedUserSet =
-    allowedUserIDs && allowedUserIDs.length > 0
+    allowedUserIDs !== undefined
       ? new Set(allowedUserIDs.map((item) => item.trim()).filter(Boolean))
       : null
   const allowedDepartmentSet =
-    allowedDepartmentIDs && allowedDepartmentIDs.length > 0
+    allowedDepartmentIDs !== undefined
       ? new Set(
           allowedDepartmentIDs
             .map((item) => Number(item || 0))
@@ -221,6 +221,52 @@ export function buildScopedDirectoryTree(
   }
 }
 
+export function buildSelectedObjectDirectoryTree(
+  view: OrganizationSettingsView | null,
+  selectedUserIDs?: string[],
+  selectedDepartmentIDs?: number[],
+): OrganizationDirectoryTree {
+  const fullTree = buildDirectoryTree(view)
+  const explicitUserSet = new Set(
+    (selectedUserIDs || []).map((item) => item.trim()).filter(Boolean),
+  )
+  const explicitDepartmentSet = new Set(
+    (selectedDepartmentIDs || [])
+      .map((item) => Number(item || 0))
+      .filter((item) => Number.isInteger(item) && item > 0),
+  )
+
+  if (explicitUserSet.size === 0 && explicitDepartmentSet.size === 0) {
+    return { treeRoots: [], ungroupedUsers: [] }
+  }
+
+  const walk = (node: DirectoryTreeNode): DirectoryTreeNode | null => {
+    const departmentID = Number(node.department.department_id || 0)
+    const filteredChildren = node.children
+      .map(walk)
+      .filter(Boolean) as DirectoryTreeNode[]
+    const filteredMembers = node.memberIDs.filter((userID) =>
+      explicitUserSet.has(userID),
+    )
+    const explicitDepartment = explicitDepartmentSet.has(departmentID)
+    if (!explicitDepartment && filteredChildren.length === 0 && filteredMembers.length === 0) {
+      return null
+    }
+    return {
+      department: node.department,
+      children: filteredChildren,
+      memberIDs: filteredMembers,
+    }
+  }
+
+  return {
+    treeRoots: fullTree.treeRoots.map(walk).filter(Boolean) as DirectoryTreeNode[],
+    ungroupedUsers: fullTree.ungroupedUsers.filter((userID) =>
+      explicitUserSet.has(userID),
+    ),
+  }
+}
+
 export function OrganizationDirectorySelect({
   label,
   placeholder,
@@ -257,10 +303,30 @@ export function OrganizationDirectorySelect({
     () => new Set(selectedItems.map((item) => selectionKey(item))),
     [selectedItems],
   )
+  const selectedUserSet = useMemo(
+    () =>
+      new Set(
+        selectedItems
+          .filter((item) => item.type === "user")
+          .map((item) => item.id.trim())
+          .filter(Boolean),
+      ),
+    [selectedItems],
+  )
+  const selectedDepartmentSet = useMemo(
+    () =>
+      new Set(
+        selectedItems
+          .filter((item) => item.type === "department")
+          .map((item) => Number(item.id || 0))
+          .filter((item) => Number.isInteger(item) && item > 0),
+      ),
+    [selectedItems],
+  )
 
   const allowedUserSet = useMemo(
     () =>
-      allowedUserIDs && allowedUserIDs.length > 0
+      allowedUserIDs !== undefined
         ? new Set(allowedUserIDs.map((item) => item.trim()).filter(Boolean))
         : null,
     [allowedUserIDs],
@@ -268,7 +334,7 @@ export function OrganizationDirectorySelect({
 
   const allowedDepartmentSet = useMemo(
     () =>
-      allowedDepartmentIDs && allowedDepartmentIDs.length > 0
+      allowedDepartmentIDs !== undefined
         ? new Set(
             allowedDepartmentIDs
               .map((item) => Number(item || 0))
@@ -350,19 +416,49 @@ export function OrganizationDirectorySelect({
   const filteredUngroupedUsers = ungroupedUsers.filter(matchesMember)
   const hasContent = filteredRoots.length > 0 || filteredUngroupedUsers.length > 0
 
-  const renderSelectedFlag = (checked: boolean) =>
-    checked ? (
+  const coveredUserSet = useMemo(() => {
+    if (selectedDepartmentSet.size === 0) {
+      return new Set<string>()
+    }
+    const covered = new Set<string>()
+    const walk = (node: DirectoryTreeNode, parentCovered: boolean) => {
+      const departmentID = Number(node.department.department_id || 0)
+      const departmentCovered = parentCovered || selectedDepartmentSet.has(departmentID)
+      if (departmentCovered) {
+        node.memberIDs.forEach((userID) => {
+          const normalized = userID.trim()
+          if (normalized && !selectedUserSet.has(normalized)) {
+            covered.add(normalized)
+          }
+        })
+      }
+      node.children.forEach((child) => walk(child, departmentCovered))
+    }
+    treeRoots.forEach((node) => walk(node, false))
+    return covered
+  }, [selectedDepartmentSet, selectedUserSet, treeRoots])
+
+  const renderSelectionFlag = (state: "selected" | "covered" | null) =>
+    state === "selected" ? (
       <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
         <Check className="h-3 w-3" />
         已选
       </span>
+    ) : state === "covered" ? (
+      <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">
+        部门覆盖
+      </span>
     ) : null
+
+  const getDepartmentDisabledHint = (selectable: boolean) =>
+    selectable ? "" : "仅用于组织路径展示，不属于当前接待池对象"
 
   const renderMember = (userID: string, depth: number) => {
     const member = memberMap.get(userID)
     const role = (member?.role || "").trim() || "成员"
     const adminText = member?.is_app_admin ? "企微应用管理员" : ""
     const checked = selectedKeys.has(`user:${userID}`)
+    const covered = !checked && coveredUserSet.has(userID)
     const selectable = !allowedUserSet || allowedUserSet.has(userID)
     return (
       <button
@@ -371,11 +467,23 @@ export function OrganizationDirectorySelect({
         onClick={() => toggleSelection({ type: "user", id: userID })}
         disabled={disabled || !selectable}
         className={`flex w-full items-start gap-3 rounded-lg px-2 py-1.5 text-left transition-colors ${
-          checked ? "bg-blue-50" : selectable ? "hover:bg-gray-50" : "bg-transparent"
+          checked
+            ? "bg-blue-50"
+            : covered
+              ? "bg-sky-50"
+              : selectable
+                ? "hover:bg-gray-50"
+                : "bg-transparent"
         } disabled:cursor-not-allowed disabled:opacity-60`}
         style={{ paddingLeft: `${14 + depth * 18}px` }}
       >
-        <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded ${checked ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500"}`}>
+        <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded ${
+          checked
+            ? "bg-blue-100 text-blue-700"
+            : covered
+              ? "bg-sky-100 text-sky-700"
+              : "bg-gray-100 text-gray-500"
+        }`}>
           <User className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0 flex-1 space-y-0.5">
@@ -384,10 +492,12 @@ export function OrganizationDirectorySelect({
               userid={userID}
               corpId={corpId}
               fallback={userID}
-              className={`truncate text-xs font-medium ${checked ? "text-blue-900" : "text-gray-900"}`}
+              className={`truncate text-xs font-medium ${
+                checked ? "text-blue-900" : covered ? "text-sky-900" : "text-gray-900"
+              }`}
               hintClassName="text-[10px] text-gray-400"
             />
-            {renderSelectedFlag(checked)}
+            {renderSelectionFlag(checked ? "selected" : covered ? "covered" : null)}
           </span>
           <span className="truncate text-[10px] text-gray-500">
             {role}
@@ -405,15 +515,18 @@ export function OrganizationDirectorySelect({
     const expanded = expandedDepartments.has(departmentID) || Boolean(keyword)
     const selectable =
       !allowedDepartmentSet || allowedDepartmentSet.has(departmentID)
+    const pathOnly = !selectable
     const fallbackName =
       (departmentMap.get(departmentID)?.name || "").trim() || `部门 #${departmentID}`
+    const disabledHint = getDepartmentDisabledHint(selectable)
     return (
       <div key={`department-${departmentID}`} className="space-y-1">
         <div
           className={`flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors ${
-            checked ? "bg-blue-50" : "hover:bg-gray-50"
+            checked ? "bg-blue-50" : pathOnly ? "bg-gray-50" : "hover:bg-gray-50"
           }`}
           style={{ paddingLeft: `${6 + depth * 18}px` }}
+          title={disabledHint}
         >
           <button
             type="button"
@@ -461,10 +574,15 @@ export function OrganizationDirectorySelect({
                   }`}
                   hintClassName={`text-[10px] ${selectable ? "text-gray-400" : "text-gray-300"}`}
                 />
-                {renderSelectedFlag(checked)}
+                {renderSelectionFlag(checked ? "selected" : null)}
+                {!selectable ? (
+                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+                    不可选
+                  </span>
+                ) : null}
               </span>
               <span className="truncate text-[10px] text-gray-500">
-                {selectable ? `部门 #${departmentID}` : "层级路径"}
+                {selectable ? `部门 #${departmentID}` : disabledHint}
               </span>
             </span>
           </button>

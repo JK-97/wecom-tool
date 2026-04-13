@@ -27,6 +27,9 @@ export type ReceptionChannel = {
   pool_user_count?: number;
   pool_department_count?: number;
   pool_empty?: boolean;
+  configured_user_count?: number;
+  configured_department_count?: number;
+  configured_uses_full_pool?: boolean;
   default_rule?: string;
   status?: string;
   sync_status?: string;

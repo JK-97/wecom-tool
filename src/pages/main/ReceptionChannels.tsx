@@ -47,7 +47,7 @@ import {
 import {
   buildDirectoryMaps,
   buildDirectoryTree,
-  buildScopedDirectoryTree,
+  buildSelectedObjectDirectoryTree,
   normalizeSelectionItems,
   OrganizationDirectorySelect,
   selectionKey,
@@ -106,6 +106,31 @@ const mergeServicerUpsertResponses = (
     },
     result_list: resultList,
   };
+};
+
+const formatConfiguredScopePrimary = (channel: ReceptionChannel): string => {
+  if (channel.configured_uses_full_pool) return "整个接待池";
+  const userCount = Number(channel.configured_user_count || 0);
+  const departmentCount = Number(channel.configured_department_count || 0);
+  if (userCount > 0 || departmentCount > 0) {
+    return `成员 ${userCount} / 部门 ${departmentCount}`;
+  }
+  return "仅 AI";
+};
+
+const formatConfiguredScopeSecondary = (channel: ReceptionChannel): string => {
+  if (channel.configured_uses_full_pool) {
+    return `成员 ${Number(channel.pool_user_count || 0)} / 部门 ${Number(channel.pool_department_count || 0)}`;
+  }
+  const userCount = Number(channel.configured_user_count || 0);
+  const departmentCount = Number(channel.configured_department_count || 0);
+  if (userCount > 0 || departmentCount > 0) {
+    return "已按启用中的人工路由去重汇总";
+  }
+  if (channel.pool_empty) {
+    return "建议先配置接待池";
+  }
+  return "";
 };
 
 
@@ -615,7 +640,7 @@ export default function ReceptionChannels() {
     ungroupedUsers: fallbackUngroupedUserIDs,
   } = useMemo(
     () =>
-      buildScopedDirectoryTree(
+      buildSelectedObjectDirectoryTree(
         organizationView,
         currentPoolAllowedUserIDs,
         currentPoolAllowedDepartmentIDs,
@@ -952,7 +977,9 @@ export default function ReceptionChannels() {
       humanUserIDs.length === 0 &&
       humanDepartmentIDs.length === 0
     ) {
-      setFallbackEditorNotice("请选择池内候选范围，或切回“使用整个接待池”。");
+      setFallbackEditorNotice(
+        "已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。",
+      );
       return;
     }
     try {
@@ -1214,7 +1241,7 @@ export default function ReceptionChannels() {
                 <th className="px-6 py-3 font-semibold">Open KFID</th>
                 <th className="px-6 py-3 font-semibold">渠道来源</th>
                 <th className="px-6 py-3 font-semibold">状态</th>
-                <th className="px-6 py-3 font-semibold">接待人员</th>
+                <th className="px-6 py-3 font-semibold">人工配置范围</th>
                 <th className="px-6 py-3 font-semibold">默认路由规则</th>
                 <th className="px-6 py-3 font-semibold text-right">操作</th>
               </tr>
@@ -1270,19 +1297,21 @@ export default function ReceptionChannels() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="space-y-0.5">
-                          <div>
-                            <span className="font-medium text-gray-900">
-                              {Number(channel.pool_user_count ?? channel.staff_count ?? 0)}
-                            </span>
-                            <span className="text-gray-400 ml-1">人</span>
+                          <div className="font-medium text-gray-900">
+                            {formatConfiguredScopePrimary(channel)}
                           </div>
-                          {Number(channel.pool_empty ? 1 : 0) > 0 ? (
-                            <div className="text-[11px] text-amber-600">
-                              建议先配置接待池
-                            </div>
-                          ) : Number(channel.pool_department_count || 0) > 0 ? (
-                            <div className="text-[11px] text-gray-500">
-                              另含 {Number(channel.pool_department_count || 0)} 个部门
+                          {formatConfiguredScopeSecondary(channel) ? (
+                            <div
+                              className={`text-[11px] ${
+                                channel.pool_empty &&
+                                !channel.configured_uses_full_pool &&
+                                Number(channel.configured_user_count || 0) <= 0 &&
+                                Number(channel.configured_department_count || 0) <= 0
+                                  ? "text-amber-600"
+                                  : "text-gray-500"
+                              }`}
+                            >
+                              {formatConfiguredScopeSecondary(channel)}
                             </div>
                           ) : null}
                         </div>
@@ -1751,7 +1780,7 @@ export default function ReceptionChannels() {
                         {fallbackModeLabel(fallbackRoute?.mode)}
                       </Badge>
                       <Badge variant="secondary" className="bg-blue-50 text-blue-700">
-                        {fallbackRoute?.use_full_pool ? "使用整个接待池" : "使用池内子集"}
+                        {fallbackRoute?.use_full_pool ? "使用整个接待池" : "使用接待池对象子集"}
                       </Badge>
                     </div>
                   </div>
@@ -1771,7 +1800,7 @@ export default function ReceptionChannels() {
                     </div>
                   ) : (
                     renderSelectionSummary(selectedFallbackTargetsDeduped, {
-                      emptyText: "当前未单独指定人工候选范围，系统会沿用接待池。",
+                      emptyText: "当前未选择接待池对象子集。",
                     })
                   )}
                 </div>
@@ -1780,7 +1809,7 @@ export default function ReceptionChannels() {
                     ? "当前接待池为空，只能使用“仅智能接待”。"
                     : (fallbackRoute?.use_full_pool ?? fallbackRoute?.uses_default_pool)
                       ? "当前默认兜底规则会直接使用整个接待池。只有显式切到“自定义候选范围”时，才会收缩为池内子集。"
-                      : "当前默认兜底规则只使用接待池中的一个子集作为人工候选范围。成员树如有缺项，请先同步组织架构。"}
+                      : "当前默认兜底规则只使用接待池中的显式对象子集作为人工候选范围。"}
                 </div>
                 {fallbackEditorNotice ? (
                   <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
@@ -1918,10 +1947,10 @@ export default function ReceptionChannels() {
           <div className="space-y-2">
             <div className="text-sm font-semibold text-gray-900">设置默认兜底方式</div>
             <div className="text-xs text-gray-500">
-              先选择兜底方式；需要人工承接时，默认使用整个接待池，只有显式选择时才缩成池内子集。
+              先选择兜底方式；需要人工承接时，默认使用整个接待池，只有显式选择时才缩成接待池对象子集。
             </div>
             <div className="text-[11px] text-gray-500">
-              人工目标来自当前组织架构与接待池。如成员树不完整，请先
+              这里只显示当前接待池中的成员和部门。如接待池对象不完整，请先
               <Link to="/main/settings" className="ml-1 text-blue-600 hover:text-blue-700">
                 同步组织架构
               </Link>
@@ -1966,14 +1995,18 @@ export default function ReceptionChannels() {
                     className="mt-0.5"
                     disabled={isPoolEmpty}
                   />
-                  <span>自定义候选范围（池内子集）</span>
-                </label>
+                    <span>自定义候选范围（接待池对象子集）</span>
+                  </label>
               </div>
               {!fallbackUseFullPoolInput ? (
-                <OrganizationDirectorySelect
-                  label="选择池内候选范围"
-                  placeholder={isOrgOptionsLoading ? "正在加载接待池..." : "只显示当前接待池中的成员或部门"}
-                  searchPlaceholder="搜索池内部门 / 成员 / 角色"
+                <div className="space-y-2">
+                  <div className="text-[11px] text-gray-500">
+                    这里只显示当前接待池中的成员和部门。
+                  </div>
+                  <OrganizationDirectorySelect
+                    label="接待池对象子集"
+                    placeholder={isOrgOptionsLoading ? "正在加载接待池..." : "从当前接待池对象中选择"}
+                    searchPlaceholder="搜索接待池中的成员 / 部门"
                   corpId={orgCorpID}
                   treeRoots={fallbackTreeRoots}
                   ungroupedUsers={fallbackUngroupedUserIDs}
@@ -1981,11 +2014,12 @@ export default function ReceptionChannels() {
                   departmentMap={orgDepartmentMap}
                   selectedItems={selectedFallbackTargetsDeduped}
                   onChange={setSelectedFallbackTargets}
-                  emptyText="当前接待池没有可选成员或部门"
+                  emptyText="当前接待池中还没有可选对象，请先配置接待池"
                   disabled={isOrgOptionsLoading || isPoolEmpty}
                   allowedUserIDs={currentPoolAllowedUserIDs}
                   allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
-                />
+                  />
+                </div>
               ) : null}
             </>
           ) : null}
