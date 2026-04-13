@@ -1,4 +1,4 @@
-type ServicerIdentitySource = {
+export type ServicerIdentitySource = {
   userid?: string;
   raw_servicer_userid?: string;
   resolved_userid?: string;
@@ -82,4 +82,42 @@ export function resolveServicerIdentityView(
     displayFallback,
     resolutionStatus,
   };
+}
+
+export function buildRawServicerIDsByStableIdentity(
+  sources: Array<ServicerIdentitySource | null | undefined>,
+): Map<string, string[]> {
+  const next = new Map<string, string[]>();
+  sources.forEach((source) => {
+    const identity = resolveServicerIdentityView(source);
+    const rawID = identity.rawServicerUserID.trim();
+    if (!rawID) return;
+    const stableID = (identity.stableIdentity || rawID).trim();
+    const bucket = next.get(stableID) || [];
+    if (!bucket.includes(rawID)) {
+      bucket.push(rawID);
+    }
+    next.set(stableID, bucket);
+  });
+  return next;
+}
+
+export function mapSelectedUserIDsToPoolRaw(
+  userIDs: string[],
+  rawUsersByStableIdentity: Map<string, string[]>,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  userIDs.forEach((userID) => {
+    const normalizedID = (userID || "").trim();
+    if (!normalizedID) return;
+    const resolvedRawIDs = rawUsersByStableIdentity.get(normalizedID) || [normalizedID];
+    resolvedRawIDs.forEach((rawID) => {
+      const value = (rawID || "").trim();
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      out.push(value);
+    });
+  });
+  return out;
 }

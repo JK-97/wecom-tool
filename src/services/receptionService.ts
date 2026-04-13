@@ -59,6 +59,7 @@ export type ReceptionChannelDetail = {
     queue_enabled?: boolean;
     requires_human?: boolean;
     uses_default_pool?: boolean;
+    use_full_pool?: boolean;
   };
   state_layers?: {
     wecom_native_states?: string[];
@@ -203,6 +204,8 @@ export async function getReceptionChannelsView(params?: {
 export async function createReceptionChannel(input: {
   name: string;
   media_id?: string;
+  initial_user_ids?: string[];
+  initial_department_ids?: number[];
 }): Promise<ReceptionChannel | null> {
   const payload = await requestJSON<APIReply<{ channel?: ReceptionChannel }>>(
     "/api/v1/reception/channels",
@@ -211,6 +214,8 @@ export async function createReceptionChannel(input: {
       body: JSON.stringify({
         name: input.name,
         media_id: input.media_id || "",
+        initial_user_ids: input.initial_user_ids || [],
+        initial_department_ids: input.initial_department_ids || [],
       }),
     },
   );

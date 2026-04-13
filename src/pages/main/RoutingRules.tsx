@@ -18,6 +18,7 @@ import {
   HelpCircle,
   AlertTriangle,
   CheckCircle2,
+  Loader2,
 } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "react-router-dom"
@@ -28,6 +29,28 @@ import {
   type RoutingRulesViewModel,
 } from "@/services/routingService"
 import { normalizeErrorMessage } from "@/services/http"
+import {
+  getReceptionChannelDetail,
+  listKFServicerAssignments,
+  type KFServicerAssignment,
+  type ReceptionChannelDetail,
+} from "@/services/receptionService"
+import {
+  getOrganizationSettingsView,
+  type OrganizationSettingsView,
+} from "@/services/organizationSettingsService"
+import {
+  buildRawServicerIDsByStableIdentity,
+  mapSelectedUserIDsToPoolRaw,
+  resolveServicerIdentityView,
+} from "@/services/servicerIdentity"
+import {
+  buildDirectoryMaps,
+  buildDirectoryTree,
+  normalizeSelectionItems,
+  OrganizationDirectorySelect,
+  type DirectorySelectionItem,
+} from "@/components/wecom/OrganizationDirectorySelect"
 
 const initialRoutingRulesView: RoutingRulesViewModel = {
   rules: [],
@@ -46,12 +69,25 @@ const initialRoutingRulesView: RoutingRulesViewModel = {
 
 const MAX_VISIBLE_CHANNEL_TABS = 6
 
+function fallbackModeLabel(mode?: string): string {
+  switch ((mode || "").trim()) {
+    case "ai_then_human":
+      return "智能接待后转人工"
+    case "ai_then_queue_then_human":
+      return "智能接待后进入排队池再转人工"
+    case "ai_only":
+    default:
+      return "仅智能接待"
+  }
+}
+
 export default function RoutingRules() {
   const [searchParams] = useSearchParams()
   const [view, setView] = useState<RoutingRulesViewModel>(initialRoutingRulesView)
   const [isLoading, setIsLoading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [notice, setNotice] = useState("")
+  const [drawerNotice, setDrawerNotice] = useState("")
 
   const [filterChannel, setFilterChannel] = useState(searchParams.get("channel") || "all")
   const [keyword, setKeyword] = useState("")
@@ -66,6 +102,19 @@ export default function RoutingRules() {
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [selectedRule, setSelectedRule] = useState<RoutingRuleViewModel | null>(null)
+  const [organizationView, setOrganizationView] =
+    useState<OrganizationSettingsView | null>(null)
+  const [isOrgOptionsLoading, setIsOrgOptionsLoading] = useState(false)
+  const [fallbackDetail, setFallbackDetail] =
+    useState<ReceptionChannelDetail | null>(null)
+  const [fallbackPoolAssignments, setFallbackPoolAssignments] = useState<
+    KFServicerAssignment[]
+  >([])
+  const [fallbackModeInput, setFallbackModeInput] = useState("ai_only")
+  const [fallbackUseFullPoolInput, setFallbackUseFullPoolInput] = useState(true)
+  const [selectedFallbackTargets, setSelectedFallbackTargets] = useState<
+    DirectorySelectionItem[]
+  >([])
 
   const [formName, setFormName] = useState("")
   const [formChannelID, setFormChannelID] = useState("")
@@ -88,6 +137,96 @@ export default function RoutingRules() {
   useEffect(() => {
     setHasAutoOpenedEditRule(false)
   }, [requestedEditRuleID])
+
+  const fallbackPoolRawUsersByStableIdentity = useMemo(
+    () => buildRawServicerIDsByStableIdentity(fallbackPoolAssignments),
+    [fallbackPoolAssignments],
+  )
+
+  const syncFallbackDraftFromDetail = (
+    detail: ReceptionChannelDetail | null,
+    assignments?: KFServicerAssignment[],
+  ) => {
+    const stableIdentityByRaw = new Map<string, string>()
+    ;(assignments || fallbackPoolAssignments).forEach((assignment) => {
+      const identity = resolveServicerIdentityView(assignment)
+      const rawID = identity.rawServicerUserID.trim()
+      const stableID = (identity.stableIdentity || rawID).trim()
+      if (!rawID || !stableID) return
+      stableIdentityByRaw.set(rawID, stableID)
+    })
+    setFallbackDetail(detail)
+    setFallbackModeInput(
+      (detail?.fallback_route?.mode || "ai_only").trim() || "ai_only",
+    )
+    setFallbackUseFullPoolInput(
+      detail?.fallback_route?.use_full_pool ??
+        detail?.fallback_route?.uses_default_pool ??
+        (((detail?.fallback_route?.human_user_ids || []).length === 0 &&
+          (detail?.fallback_route?.human_department_ids || []).length === 0)),
+    )
+    setSelectedFallbackTargets(
+      normalizeSelectionItems([
+        ...((detail?.fallback_route?.human_user_ids || []).map((userID) => ({
+          type: "user" as const,
+          id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
+        }))),
+        ...((detail?.fallback_route?.human_department_ids || []).map(
+          (departmentID) => ({
+            type: "department" as const,
+            id: String(Number(departmentID || 0)),
+          }),
+        )),
+      ]),
+    )
+  }
+
+  const orgCorpID = (organizationView?.integration?.corp_id || "").trim()
+  const { departmentMap: orgDepartmentMap, memberMap: orgMemberMap } =
+    useMemo(() => buildDirectoryMaps(organizationView), [organizationView])
+  const { treeRoots, ungroupedUsers: ungroupedUserIDs } = useMemo(
+    () => buildDirectoryTree(organizationView),
+    [organizationView],
+  )
+  const selectedFallbackTargetsDeduped = useMemo(
+    () => normalizeSelectionItems(selectedFallbackTargets),
+    [selectedFallbackTargets],
+  )
+  const selectedFallbackUsersDeduped = useMemo(
+    () =>
+      selectedFallbackTargetsDeduped
+        .filter((item) => item.type === "user")
+        .map((item) => item.id.trim())
+        .filter(Boolean),
+    [selectedFallbackTargetsDeduped],
+  )
+  const selectedFallbackDepartmentsDeduped = useMemo(
+    () =>
+      selectedFallbackTargetsDeduped
+        .filter((item) => item.type === "department")
+        .map((item) => Number(item.id))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    [selectedFallbackTargetsDeduped],
+  )
+  const isEditingDefaultRule = selectedRule?.isDefault === true
+  const currentPoolAllowedUserIDs = useMemo(
+    () =>
+      fallbackPoolAssignments
+        .map((item) => resolveServicerIdentityView(item).stableIdentity)
+        .filter(Boolean),
+    [fallbackPoolAssignments],
+  )
+  const currentPoolAllowedDepartmentIDs = useMemo(
+    () =>
+      fallbackPoolAssignments
+        .map((item) => Number(item.department_id || 0))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    [fallbackPoolAssignments],
+  )
+  const fallbackPoolEmpty =
+    fallbackDetail?.reception_pool?.empty === true ||
+    (Number(fallbackDetail?.reception_pool?.user_count || 0) === 0 &&
+      Number(fallbackDetail?.reception_pool?.department_count || 0) === 0)
 
   const loadView = async (
     channel: string,
@@ -133,6 +272,39 @@ export default function RoutingRules() {
   }
 
   useEffect(() => {
+    if (!isDrawerOpen || !isEditingDefaultRule) return
+    const channelID = (selectedRule?.channelId || "").trim()
+    if (!channelID) return
+    let active = true
+    void (async () => {
+      try {
+        setIsOrgOptionsLoading(true)
+        const [detail, orgView, assignments] = await Promise.all([
+          getReceptionChannelDetail(channelID),
+          organizationView ? Promise.resolve(organizationView) : getOrganizationSettingsView(),
+          listKFServicerAssignments(channelID),
+        ])
+        if (!active) return
+        setFallbackPoolAssignments(assignments)
+        syncFallbackDraftFromDetail(detail, assignments)
+        if (!organizationView) {
+          setOrganizationView(orgView)
+        }
+      } catch (error) {
+        if (!active) return
+        setDrawerNotice(normalizeErrorMessage(error))
+      } finally {
+        if (active) {
+          setIsOrgOptionsLoading(false)
+        }
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [isDrawerOpen, isEditingDefaultRule, selectedRule?.channelId])
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadView(
         filterChannel,
@@ -153,7 +325,9 @@ export default function RoutingRules() {
   }, [filterChannel, keyword, statusFilter, ruleTypeFilter, modeFilter, targetFilter, hitBucketFilter, responseBucketFilter, diagnosticsOnly])
 
   const openCreateDrawer = () => {
+    setDrawerNotice("")
     setSelectedRule(null)
+    syncFallbackDraftFromDetail(null)
     setFormName("")
     setFormScene("ANY")
     setFormMode("人工接待")
@@ -166,6 +340,7 @@ export default function RoutingRules() {
   }
 
   const openEditDrawer = (rule: RoutingRuleViewModel) => {
+    setDrawerNotice("")
     setSelectedRule(rule)
     setFormName((rule.name || "").trim())
     setFormChannelID((rule.channelId || "").trim())
@@ -175,6 +350,9 @@ export default function RoutingRules() {
     setFormPriority(Number(rule.priority || 100))
     setFormIsDefault(rule.isDefault === true)
     setFormTagFilter("")
+    if (!rule.isDefault) {
+      syncFallbackDraftFromDetail(null)
+    }
     setIsDrawerOpen(true)
   }
 
@@ -188,8 +366,10 @@ export default function RoutingRules() {
     options?: {
       refresh?: boolean
       copyMessage?: boolean
+      noticeScope?: "page" | "drawer"
     },
   ) => {
+    const setScopedNotice = options?.noticeScope === "drawer" ? setDrawerNotice : setNotice
     try {
       setIsSubmitting(true)
       const result = await executeRoutingRulesCommand({
@@ -202,12 +382,12 @@ export default function RoutingRules() {
       if (options?.copyMessage) {
         try {
           await navigator.clipboard.writeText(message)
-          setNotice("链接已复制")
+          setScopedNotice("链接已复制")
         } catch {
-          setNotice("复制失败，请手动复制")
+          setScopedNotice("复制失败，请手动复制")
         }
       } else {
-        setNotice(message)
+        setScopedNotice(message)
       }
       if (options?.refresh !== false) {
         await loadView(
@@ -227,7 +407,7 @@ export default function RoutingRules() {
       }
       return result
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      setScopedNotice(normalizeErrorMessage(error))
       return null
     } finally {
       setIsSubmitting(false)
@@ -235,16 +415,75 @@ export default function RoutingRules() {
   }
 
   const handleSaveRule = async () => {
-    const name = formName.trim()
     const channelID = formChannelID.trim()
+    if (isEditingDefaultRule) {
+      if (!channelID) {
+        setDrawerNotice("当前默认兜底规则缺少渠道")
+        return
+      }
+      if (fallbackPoolEmpty && fallbackModeInput !== "ai_only") {
+        setDrawerNotice("当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。")
+        return
+      }
+      const useFullPool =
+        fallbackModeInput === "ai_only" ? true : fallbackUseFullPoolInput
+      const humanUserIDs = mapSelectedUserIDsToPoolRaw(
+        selectedFallbackUsersDeduped,
+        fallbackPoolRawUsersByStableIdentity,
+      )
+      if (
+        fallbackModeInput !== "ai_only" &&
+        !useFullPool &&
+        humanUserIDs.length === 0 &&
+        selectedFallbackDepartmentsDeduped.length === 0
+      ) {
+        setDrawerNotice("请选择池内候选范围，或切回“使用整个接待池”。")
+        return
+      }
+      const result = await runCommand(
+        {
+          command: "configure_fallback_route",
+          openKFID: channelID,
+          payload: {
+            mode: fallbackModeInput,
+            use_full_pool: useFullPool,
+            human_target_type:
+              fallbackModeInput === "ai_only" || useFullPool
+                ? ""
+                : selectedFallbackUsersDeduped.length > 0 &&
+                    selectedFallbackDepartmentsDeduped.length > 0
+                  ? "mixed"
+                  : selectedFallbackDepartmentsDeduped.length > 0
+                    ? "department"
+                    : humanUserIDs.length > 0
+                      ? "user"
+                      : "",
+            human_user_ids:
+              fallbackModeInput === "ai_only" || useFullPool ? [] : humanUserIDs,
+            human_department_ids:
+              fallbackModeInput === "ai_only" || useFullPool
+                ? []
+                : selectedFallbackDepartmentsDeduped,
+          },
+        },
+        { noticeScope: "drawer" },
+      )
+      if (!result?.success) {
+        return
+      }
+      setIsDrawerOpen(false)
+      return
+    }
+
+    const name = formName.trim()
     const scene = formScene.trim() || "ANY"
     const target = formTarget.trim() || "默认接待池"
     if (!name) {
-      setNotice("请输入规则名称")
+      setDrawerNotice("请输入规则名称")
       return
     }
     if (!channelID) {
-      setNotice("请选择应用渠道")
+      setDrawerNotice("请选择应用渠道")
       return
     }
 
@@ -261,12 +500,15 @@ export default function RoutingRules() {
 
     const command = selectedRule ? "update_rule" : "create_rule"
     const ruleID = selectedRule ? Number(selectedRule.id || 0) : 0
-    const result = await runCommand({
-      command,
-      ruleID,
-      openKFID: channelID,
-      payload,
-    })
+    const result = await runCommand(
+      {
+        command,
+        ruleID,
+        openKFID: channelID,
+        payload,
+      },
+      { noticeScope: "drawer" },
+    )
     if (!result?.success) {
       return
     }
@@ -278,7 +520,6 @@ export default function RoutingRules() {
   const statsTotal = Number(view.totalHits7d || 0)
   const diagnosticItems = view.diagnostics?.items || []
   const diagnostics = view.diagnostics?.warnings || []
-  const isEditingDefaultRule = selectedRule?.isDefault === true
   const activeAdvancedFilterCount = [
     statusFilter !== "all",
     ruleTypeFilter !== "all",
@@ -774,193 +1015,300 @@ export default function RoutingRules() {
       {/* New/Edit Rule Drawer */}
       <Dialog
         isOpen={isDrawerOpen}
-        onClose={() => setIsDrawerOpen(false)}
+        onClose={() => {
+          setDrawerNotice("")
+          setIsDrawerOpen(false)
+        }}
         title={selectedRule ? "编辑路由规则" : "新建路由规则"}
-        className="max-w-[600px]"
+        className={isEditingDefaultRule ? "max-w-[980px]" : "max-w-[600px]"}
         footer={
           <div className="flex justify-end gap-3 w-full">
             <Button variant="outline" onClick={() => setIsDrawerOpen(false)}>
               取消
             </Button>
             <Button className="bg-blue-600" disabled={isSubmitting} onClick={() => void handleSaveRule()}>
-              保存规则
+              {isEditingDefaultRule ? "保存兜底规则" : "保存规则"}
             </Button>
           </div>
         }
       >
         <div className="space-y-6">
-          {/* Section 1: Basic */}
-          <div className="space-y-4">
-            <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">1</span>
-              基础信息
-            </h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">
-                  规则名称 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="如：VIP 客户优先路由"
-                  value={formName}
-                  onChange={(event) => setFormName(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">
-                  应用渠道 <span className="text-red-500">*</span>
-                </label>
-                <select
-                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formChannelID}
-                  onChange={(event) => setFormChannelID(event.target.value)}
-                >
-                  {view.channelOptions.map((channel) => {
-                    const id = (channel.channelId || "").trim()
-                    if (!id) return null
-                    return (
-                      <option key={id} value={id}>
-                        {(channel.label || id).trim()}
-                      </option>
-                    )
-                  })}
-                </select>
-              </div>
+          {drawerNotice ? (
+            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              {drawerNotice}
             </div>
-          </div>
-
-          {/* Section 2: Condition */}
-          <div className="space-y-4">
-            <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">2</span>
-              匹配条件
-            </h4>
-            <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">场景值 (Scene)</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    className="flex-1 h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="输入场景值，支持通配符 *"
-                    value={formScene}
-                    onChange={(event) => setFormScene(event.target.value)}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9"
-                    disabled={isSubmitting}
-                    onClick={() =>
-                      void runCommand(
-                        {
-                          command: "copy_channel_link",
-                          openKFID: formChannelID,
-                          payload: {
-                            channel_id: formChannelID,
-                            scene: formScene,
-                          },
-                        },
-                        {
-                          refresh: false,
-                          copyMessage: true,
-                        },
-                      )
-                    }
-                  >
-                    <Copy className="h-4 w-4 mr-2" /> 复制当前渠道链接
-                  </Button>
+          ) : null}
+          {isEditingDefaultRule ? (
+            <>
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">1</span>
+                  默认兜底规则
+                </h4>
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700 space-y-2">
+                  <div className="font-medium">当前正在编辑该渠道的默认兜底规则</div>
+                  <div>渠道：{(selectedRule?.channel || selectedRule?.channelId || "-").trim()}</div>
+                  <div>规则名：{(selectedRule?.name || "默认兜底规则").trim()}</div>
+                  <div>说明：这里编辑的是 routing 默认兜底规则，渠道页展示的是同一份真相。</div>
                 </div>
-                <p className="text-[10px] text-gray-400 italic">提示：留空或填写 ANY 则匹配该渠道下所有未被其他规则命中的流量。</p>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">客户标签 (可选)</label>
-                <input
-                  type="text"
-                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="如：决策人, 高意向"
-                  value={formTagFilter}
-                  onChange={(event) => setFormTagFilter(event.target.value)}
-                />
-              </div>
-            </div>
-          </div>
 
-          {/* Section 3: Action */}
-          <div className="space-y-4">
-            <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">3</span>
-              执行动作
-            </h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">接待模式</label>
-                <select
-                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formMode}
-                  onChange={(event) => setFormMode(event.target.value)}
-                >
-                  {view.modeOptions.length > 0 ? (
-                    view.modeOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))
-                  ) : (
-                    <option value={formMode}>{formMode}</option>
-                  )}
-                </select>
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">2</span>
+                  兜底动作
+                </h4>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-700">兜底模式</label>
+                  <select
+                    className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={fallbackModeInput}
+                    onChange={(event) => {
+                      const nextMode = event.target.value
+                      setFallbackModeInput(nextMode)
+                      if (nextMode === "ai_only") {
+                        setFallbackUseFullPoolInput(true)
+                      }
+                    }}
+                  >
+                    <option value="ai_only">仅智能接待</option>
+                    <option value="ai_then_human">智能接待后转人工</option>
+                    <option value="ai_then_queue_then_human">智能接待后进入排队再转人工</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500">
+                    默认使用整个接待池；如有需要，可缩小为池内子集。多选成员/部门表示人工候选范围，不表示唯一指派对象。
+                  </p>
+                </div>
+                {fallbackModeInput !== "ai_only" ? (
+                  <>
+                    {fallbackPoolEmpty ? (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                        当前接待池为空，只能使用“仅智能接待（ai_only）”兜底。
+                      </div>
+                    ) : null}
+                    <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="text-xs font-medium text-gray-700">人工范围</div>
+                      <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                        <input
+                          type="radio"
+                          name="routing-default-full-pool"
+                          checked={fallbackUseFullPoolInput}
+                          onChange={() => setFallbackUseFullPoolInput(true)}
+                          disabled={fallbackPoolEmpty}
+                          className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">
+                            使用整个接待池（默认）
+                          </span>
+                          <span className="block text-xs text-gray-500">
+                            系统会在当前渠道接待池范围内选择可承接人工的成员或部门。
+                          </span>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                        <input
+                          type="radio"
+                          name="routing-default-full-pool"
+                          checked={!fallbackUseFullPoolInput}
+                          onChange={() => setFallbackUseFullPoolInput(false)}
+                          disabled={fallbackPoolEmpty}
+                          className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">
+                            自定义候选范围（池内子集）
+                          </span>
+                          <span className="block text-xs text-gray-500">
+                            仅从当前接待池中缩小人工候选范围。
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                    {!fallbackUseFullPoolInput ? (
+                      <OrganizationDirectorySelect
+                        label="池内候选范围"
+                        placeholder={
+                          isOrgOptionsLoading ? "正在加载池内对象..." : "从当前接待池中选择成员或部门"
+                        }
+                        searchPlaceholder="搜索接待池内成员 / 部门"
+                        corpId={orgCorpID}
+                        treeRoots={treeRoots}
+                        ungroupedUsers={ungroupedUserIDs}
+                        memberMap={orgMemberMap}
+                        departmentMap={orgDepartmentMap}
+                        selectedItems={selectedFallbackTargetsDeduped}
+                        onChange={setSelectedFallbackTargets}
+                        emptyText="当前接待池内没有可选成员或部门"
+                        disabled={isOrgOptionsLoading || fallbackPoolEmpty}
+                        allowedUserIDs={currentPoolAllowedUserIDs}
+                        allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+                <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 flex items-center gap-2">
+                  <Info className="h-3.5 w-3.5" />
+                  保存后会直接更新该渠道的默认兜底规则，渠道页摘要会同步变化。
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-700">分配目标</label>
-                <select
-                  className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formTarget}
-                  onChange={(event) => setFormTarget(event.target.value)}
-                >
-                  {(view.targetOptions.length > 0 ? view.targetOptions : [formTarget]).map((target) => (
-                    <option key={target} value={target}>
-                      {target}
-                    </option>
-                  ))}
-                </select>
+            </>
+          ) : (
+            <>
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">1</span>
+                  基础信息
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-700">
+                      规则名称 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="如：VIP 客户优先路由"
+                      value={formName}
+                      onChange={(event) => setFormName(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-700">
+                      应用渠道 <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={formChannelID}
+                      onChange={(event) => setFormChannelID(event.target.value)}
+                    >
+                      {view.channelOptions.map((channel) => {
+                        const id = (channel.channelId || "").trim()
+                        if (!id) return null
+                        return (
+                          <option key={id} value={id}>
+                            {(channel.label || id).trim()}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-700">优先级</label>
-              <input
-                type="number"
-                min={1}
-                className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={formPriority}
-                onChange={(event) => setFormPriority(Number(event.target.value || 1))}
-                disabled={formIsDefault}
-              />
-              {formIsDefault ? (
-                <p className="text-[10px] text-amber-600">兜底规则优先级固定为系统末位，不可手动修改。</p>
-              ) : null}
-            </div>
-            <div className="flex items-center gap-2 pt-2">
-              <input
-                type="checkbox"
-                id="isDefault"
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                checked={formIsDefault}
-                onChange={(event) => setFormIsDefault(event.target.checked)}
-                disabled={isEditingDefaultRule}
-              />
-              <label htmlFor="isDefault" className="text-xs text-gray-600">
-                设为该渠道的兜底规则 (优先级最低)
-              </label>
-            </div>
-            {isEditingDefaultRule ? <p className="text-[10px] text-gray-500">当前规则已是兜底规则，类型不可变更。</p> : null}
-            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 flex items-center gap-2">
-              <Info className="h-3.5 w-3.5" />
-              保存后会立即生效到路由执行链路。
-            </div>
-          </div>
+
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">2</span>
+                  匹配条件
+                </h4>
+                <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-700">场景值 (Scene)</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="输入场景值，支持通配符 *"
+                        value={formScene}
+                        onChange={(event) => setFormScene(event.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9"
+                        disabled={isSubmitting}
+                        onClick={() =>
+                          void runCommand(
+                            {
+                              command: "copy_channel_link",
+                              openKFID: formChannelID,
+                              payload: {
+                                channel_id: formChannelID,
+                                scene: formScene,
+                              },
+                            },
+                            {
+                              refresh: false,
+                              copyMessage: true,
+                              noticeScope: "drawer",
+                            },
+                          )
+                        }
+                      >
+                        <Copy className="h-4 w-4 mr-2" /> 复制当前渠道链接
+                      </Button>
+                    </div>
+                    <p className="text-[10px] text-gray-400 italic">提示：留空或填写 ANY 则匹配该渠道下所有未被其他规则命中的流量。</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-700">客户标签 (可选)</label>
+                    <input
+                      type="text"
+                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="如：决策人, 高意向"
+                      value={formTagFilter}
+                      onChange={(event) => setFormTagFilter(event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-600 text-[10px]">3</span>
+                  执行动作
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-700">接待模式</label>
+                    <select
+                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={formMode}
+                      onChange={(event) => setFormMode(event.target.value)}
+                    >
+                      {view.modeOptions.length > 0 ? (
+                        view.modeOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))
+                      ) : (
+                        <option value={formMode}>{formMode}</option>
+                      )}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-700">分配目标</label>
+                    <select
+                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={formTarget}
+                      onChange={(event) => setFormTarget(event.target.value)}
+                    >
+                      {(view.targetOptions.length > 0 ? view.targetOptions : [formTarget]).map((target) => (
+                        <option key={target} value={target}>
+                          {target}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-700">优先级</label>
+                  <input
+                    type="number"
+                    min={1}
+                    className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formPriority}
+                    onChange={(event) => setFormPriority(Number(event.target.value || 1))}
+                  />
+                </div>
+                <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 flex items-center gap-2">
+                  <Info className="h-3.5 w-3.5" />
+                  普通规则在这里维护；默认兜底规则请直接编辑现有“兜底”规则。
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </Dialog>
     </div>
