@@ -144,6 +144,10 @@ function actionModeRequiresHuman(actionMode?: string): boolean {
   return (actionMode || "").trim() !== "ai_only"
 }
 
+function actionModeSupportsAIToHumanKeywords(actionMode?: string): boolean {
+  return ["ai_then_assign_human", "ai_then_queue_then_human"].includes((actionMode || "").trim())
+}
+
 function dispatchStrategySupportsHumanScope(strategy?: string): boolean {
   return ["pool_dispatch", "direct_if_available_else_queue", "always_queue", "specific_user"].includes(
     (strategy || "").trim(),
@@ -219,6 +223,7 @@ export default function RoutingRules() {
   const [regularDispatchCapacityThresholdInput, setRegularDispatchCapacityThresholdInput] =
     useState(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
   const [regularUseFullPoolInput, setRegularUseFullPoolInput] = useState(true)
+  const [regularAIToHumanKeywordsInput, setRegularAIToHumanKeywordsInput] = useState("")
   const [selectedRegularTargets, setSelectedRegularTargets] = useState<
     DirectorySelectionItem[]
   >([])
@@ -591,6 +596,7 @@ export default function RoutingRules() {
     setRegularDispatchStrategyInput("none")
     setRegularDispatchCapacityThresholdInput(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
     setRegularUseFullPoolInput(true)
+    setRegularAIToHumanKeywordsInput("")
     setSelectedRegularTargets([])
     setFormPriority(100)
     setFormChannelID(filterChannel !== "all" ? filterChannel : (view.channelOptions[0]?.channelId || "").trim())
@@ -611,10 +617,15 @@ export default function RoutingRules() {
       setRegularDispatchStrategyInput("none")
       setRegularDispatchCapacityThresholdInput(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
       setRegularUseFullPoolInput(true)
+      setRegularAIToHumanKeywordsInput("")
       setSelectedRegularTargets([])
     } else {
       const conditions = parseJSONRecord(rule.conditionsJson)
       const action = parseJSONRecord(rule.actionJson)
+      const aiToHumanConditions =
+        action.ai_to_human_conditions && typeof action.ai_to_human_conditions === "object"
+          ? (action.ai_to_human_conditions as Record<string, unknown>)
+          : {}
       const actionMode = ((rule.actionMode || String(action.action_mode || "")).trim() ||
         "ai_only") as RoutingActionMode
       const dispatchStrategy = ((rule.dispatchStrategy || String(action.dispatch_strategy || "")).trim() ||
@@ -639,6 +650,7 @@ export default function RoutingRules() {
               (Array.isArray(action.assigned_staff_ids) && action.assigned_staff_ids.length === 0 &&
                 Array.isArray(action.assigned_department_ids) && action.assigned_department_ids.length === 0),
       )
+      setRegularAIToHumanKeywordsInput(String(aiToHumanConditions.keywords || "").trim())
       setSelectedRegularTargets(
         normalizeSelectionItems([
           ...(Array.isArray(action.assigned_staff_ids)
@@ -795,6 +807,7 @@ export default function RoutingRules() {
     }
     const actionMode = regularActionModeInput
     const dispatchStrategy = regularDispatchStrategyInput
+    const aiToHumanKeywords = regularAIToHumanKeywordsInput.trim()
     const requiresHuman = actionModeRequiresHuman(actionMode)
     const useFullPool =
       !requiresHuman || dispatchStrategyRequiresSpecificUser(dispatchStrategy)
@@ -826,6 +839,10 @@ export default function RoutingRules() {
       setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
       return
     }
+    if (actionModeSupportsAIToHumanKeywords(actionMode) && !aiToHumanKeywords) {
+      setDrawerNotice("请配置该路由的转人工关键词，命中后才会按当前策略转人工。")
+      return
+    }
 
     const payload = {
       name,
@@ -842,6 +859,7 @@ export default function RoutingRules() {
       use_full_pool: useFullPool,
       human_user_ids: requiresHuman && !useFullPool ? humanUserIDs : [],
       human_department_ids: requiresHuman && !useFullPool ? humanDepartmentIDs : [],
+      ai_to_human_keywords: actionModeSupportsAIToHumanKeywords(actionMode) ? aiToHumanKeywords : "",
       priority: formPriority,
     }
 
@@ -1729,6 +1747,20 @@ export default function RoutingRules() {
                 </div>
                 {actionModeRequiresHuman(regularActionModeInput) ? (
                   <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    {actionModeSupportsAIToHumanKeywords(regularActionModeInput) ? (
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-gray-700">转人工关键词</label>
+                        <textarea
+                          className="min-h-[88px] w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="如：转人工，人工客服，退款，投诉"
+                          value={regularAIToHumanKeywordsInput}
+                          onChange={(event) => setRegularAIToHumanKeywordsInput(event.target.value)}
+                        />
+                        <p className="text-[11px] text-gray-500">
+                          仅当前路由生效。会话先保持 AI 接待，后续消息命中这些关键词后，才按下面的人工策略执行转接。
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-gray-700">分配策略</label>
                       <select
