@@ -1405,7 +1405,7 @@ export default function RoutingRules() {
           setIsDrawerOpen(false)
         }}
         title={selectedRule ? "编辑路由规则" : "新建路由规则"}
-        className={isEditingDefaultRule ? "max-w-[980px]" : "max-w-[600px]"}
+        className={isEditingDefaultRule ? "max-w-[1020px]" : "max-w-[1180px]"}
         footer={
           <div className="flex justify-end gap-3 w-full">
             <Button variant="outline" onClick={() => setIsDrawerOpen(false)}>

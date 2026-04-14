@@ -637,8 +637,8 @@ export function OrganizationDirectorySelect({
             />
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-0 lg:grid-cols-[minmax(0,1.9fr)_minmax(280px,0.95fr)]">
-          <div className="min-h-[22rem] max-h-[30rem] overflow-y-auto bg-white p-3">
+        <div className="grid grid-cols-1 gap-0 lg:grid-cols-[minmax(0,2.25fr)_minmax(320px,1fr)]">
+          <div className="min-h-[24rem] max-h-[32rem] overflow-y-auto bg-white p-3.5">
             {hasContent ? (
               <div className="space-y-1">
                 {filteredRoots.map((node) => renderDepartment(node, 0))}
@@ -659,7 +659,7 @@ export function OrganizationDirectorySelect({
               </div>
             )}
           </div>
-          <div className="border-t border-gray-100 bg-gray-50 p-3 lg:max-h-[30rem] lg:overflow-y-auto lg:border-l lg:border-t-0">
+          <div className="border-t border-gray-100 bg-gray-50 p-3.5 lg:max-h-[32rem] lg:overflow-y-auto lg:border-l lg:border-t-0">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] font-semibold text-gray-700">已选择的成员或部门</div>
