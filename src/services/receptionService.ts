@@ -55,6 +55,11 @@ export type ReceptionChannelDetail = {
   };
   fallback_route?: {
     mode?: string;
+    action_mode?: string;
+    action_mode_label?: string;
+    dispatch_strategy?: string;
+    dispatch_strategy_label?: string;
+    dispatch_capacity_threshold?: number;
     human_target_type?: string;
     human_user_ids?: string[];
     human_department_ids?: number[];

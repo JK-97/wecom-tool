@@ -1020,7 +1020,21 @@ export default function CSCommandCenter() {
               <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-3">
                 <SessionEntryContextRow
                   label="系统动作"
-                  value={(detail?.routing_explanation?.action_label || "-").trim()}
+                  value={
+                    (
+                      detail?.routing_explanation?.action_mode_label ||
+                      detail?.routing_explanation?.action_label ||
+                      "-"
+                    ).trim()
+                  }
+                />
+                <SessionEntryContextRow
+                  label="分配策略"
+                  value={
+                    (
+                      detail?.routing_explanation?.dispatch_strategy_label || "-"
+                    ).trim()
+                  }
                 />
                 <SessionEntryContextRow
                   label="动作来源"

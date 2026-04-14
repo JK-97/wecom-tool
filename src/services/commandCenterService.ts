@@ -101,8 +101,12 @@ export type CommandCenterSessionDetail = {
   routing_explanation?: {
     action_type?: string;
     action_label?: string;
+    action_mode?: string;
+    action_mode_label?: string;
     decision_source?: string;
     decision_source_label?: string;
+    dispatch_strategy?: string;
+    dispatch_strategy_label?: string;
     execution_status?: string;
     execution_status_label?: string;
     reason?: string;

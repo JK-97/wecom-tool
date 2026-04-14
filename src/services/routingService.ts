@@ -14,6 +14,11 @@ export type RoutingRuleViewModel = {
   scene: string
   mode: string
   target: string
+  actionMode: string
+  actionModeLabel: string
+  dispatchStrategy: string
+  dispatchStrategyLabel: string
+  dispatchCapacityThreshold: number
   priority: number
   isDefault: boolean
   status: "active" | "inactive" | string
@@ -73,6 +78,11 @@ type RawRoutingRuleView = {
   scene?: string
   mode?: string
   target?: string
+  action_mode?: string
+  action_mode_label?: string
+  dispatch_strategy?: string
+  dispatch_strategy_label?: string
+  dispatch_capacity_threshold?: number
   priority?: number
   is_default?: boolean
   status?: string
@@ -208,6 +218,11 @@ function mapRule(item: RawRoutingRuleView): RoutingRuleViewModel {
     scene: String(item.scene || "").trim() || "无场景",
     mode: String(item.mode || "机器人+人工").trim(),
     target: String(item.target || "默认接待池").trim(),
+    actionMode: String(item.action_mode || "").trim(),
+    actionModeLabel: String(item.action_mode_label || "").trim(),
+    dispatchStrategy: String(item.dispatch_strategy || "").trim(),
+    dispatchStrategyLabel: String(item.dispatch_strategy_label || "").trim(),
+    dispatchCapacityThreshold: Number(item.dispatch_capacity_threshold || 0),
     priority: Number(item.priority || 0),
     isDefault: item.is_default === true,
     status: String(item.status || "inactive").trim(),

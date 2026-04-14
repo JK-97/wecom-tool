@@ -70,16 +70,88 @@ const initialRoutingRulesView: RoutingRulesViewModel = {
 
 const MAX_VISIBLE_CHANNEL_TABS = 6
 
-function fallbackModeLabel(mode?: string): string {
-  switch ((mode || "").trim()) {
-    case "ai_then_human":
-      return "智能接待后转人工"
-    case "ai_then_queue_then_human":
-      return "智能接待后进入排队池再转人工"
-    case "ai_only":
-    default:
-      return "仅智能接待"
+type RoutingActionMode =
+  | "ai_only"
+  | "send_to_pool"
+  | "assign_human"
+  | "queue_then_human"
+  | "ai_then_assign_human"
+  | "ai_then_queue_then_human"
+
+type RoutingDispatchStrategy =
+  | "none"
+  | "specific_user"
+  | "pool_dispatch"
+  | "direct_if_available_else_queue"
+  | "always_queue"
+
+const DEFAULT_DIRECT_DISPATCH_THRESHOLD = 3
+
+const ACTION_MODE_OPTIONS: Array<{
+  value: RoutingActionMode
+  label: string
+  description: string
+}> = [
+  { value: "ai_only", label: "仅 AI", description: "仅由 AI 接待，不进入人工流程。" },
+  { value: "send_to_pool", label: "送入待接入池", description: "立即进入人工体系，由接待池继续分配。" },
+  { value: "assign_human", label: "转给指定人工", description: "直接分配给明确人工，不经过排队。" },
+  { value: "queue_then_human", label: "排队后待人工接入", description: "立即进入排队，等待人工接入。" },
+  { value: "ai_then_assign_human", label: "AI 接待后转人工", description: "先由 AI 接待，后续再转给人工。" },
+  { value: "ai_then_queue_then_human", label: "AI 接待后排队待人工", description: "先由 AI 接待，后续进入排队等待人工。" },
+]
+
+const DISPATCH_STRATEGY_OPTIONS: Record<RoutingActionMode, Array<{
+  value: RoutingDispatchStrategy
+  label: string
+  description: string
+}>> = {
+  ai_only: [{ value: "none", label: "无需人工分配", description: "当前动作不会进入人工流程。" }],
+  send_to_pool: [
+    { value: "pool_dispatch", label: "交给接待池分配", description: "进入人工体系后，由接待池继续承接。" },
+    { value: "direct_if_available_else_queue", label: "有空位先直分，否则排队", description: "有空闲人工则直接分配，否则进入排队。" },
+  ],
+  assign_human: [{ value: "specific_user", label: "直接指定人工", description: "明确指定 1 名人工直接承接。" }],
+  queue_then_human: [{ value: "always_queue", label: "始终进入排队", description: "不做即时分配，直接进入排队。" }],
+  ai_then_assign_human: [
+    { value: "specific_user", label: "直接指定人工", description: "AI 接待后，直接转给明确人工。" },
+    { value: "direct_if_available_else_queue", label: "有空位先直分，否则排队", description: "AI 接待后，若有空位则直分，否则进入排队。" },
+  ],
+  ai_then_queue_then_human: [{ value: "always_queue", label: "始终进入排队", description: "AI 接待后统一进入排队。" }],
+}
+
+function actionModeLabel(actionMode?: string): string {
+  return (
+    ACTION_MODE_OPTIONS.find((item) => item.value === (actionMode || "").trim())
+      ?.label || "仅 AI"
+  )
+}
+
+function defaultDispatchStrategyForActionMode(
+  actionMode: RoutingActionMode,
+): RoutingDispatchStrategy {
+  return DISPATCH_STRATEGY_OPTIONS[actionMode][0]?.value || "none"
+}
+
+function dispatchStrategyLabel(strategy?: string): string {
+  for (const options of Object.values(DISPATCH_STRATEGY_OPTIONS)) {
+    const matched = options.find((item) => item.value === (strategy || "").trim())
+    if (matched) return matched.label
   }
+  return "无需人工分配"
+}
+
+function actionModeRequiresHuman(actionMode?: string): boolean {
+  return (actionMode || "").trim() !== "ai_only"
+}
+
+function dispatchStrategySupportsHumanScope(strategy?: string): boolean {
+  return ["pool_dispatch", "direct_if_available_else_queue", "always_queue", "specific_user"].includes(
+    (strategy || "").trim(),
+  )
+}
+
+function dispatchStrategyRequiresSpecificUser(strategy?: string): boolean {
+  return (strategy || "").trim() === "specific_user"
 }
 
 function parseJSONRecord(raw?: string): Record<string, unknown> {
@@ -90,19 +162,6 @@ function parseJSONRecord(raw?: string): Record<string, unknown> {
     return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {}
   } catch {
     return {}
-  }
-}
-
-function regularActionLabel(actionSemantic?: string): string {
-  switch ((actionSemantic || "").trim()) {
-    case "send_to_pool":
-      return "送入待接入池"
-    case "assign_human":
-      return "转给指定人工"
-    case "queue_then_human":
-      return "排队后待人工接入"
-    default:
-      return "仅 AI"
   }
 }
 
@@ -145,12 +204,20 @@ export default function RoutingRules() {
   const [fallbackPoolAssignments, setFallbackPoolAssignments] = useState<
     KFServicerAssignment[]
   >([])
-  const [fallbackModeInput, setFallbackModeInput] = useState("ai_only")
+  const [fallbackActionModeInput, setFallbackActionModeInput] = useState<RoutingActionMode>("ai_only")
+  const [fallbackDispatchStrategyInput, setFallbackDispatchStrategyInput] =
+    useState<RoutingDispatchStrategy>("none")
+  const [fallbackDispatchCapacityThresholdInput, setFallbackDispatchCapacityThresholdInput] =
+    useState(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
   const [fallbackUseFullPoolInput, setFallbackUseFullPoolInput] = useState(true)
   const [selectedFallbackTargets, setSelectedFallbackTargets] = useState<
     DirectorySelectionItem[]
   >([])
-  const [regularActionSemanticInput, setRegularActionSemanticInput] = useState("ai_only")
+  const [regularActionModeInput, setRegularActionModeInput] = useState<RoutingActionMode>("ai_only")
+  const [regularDispatchStrategyInput, setRegularDispatchStrategyInput] =
+    useState<RoutingDispatchStrategy>("none")
+  const [regularDispatchCapacityThresholdInput, setRegularDispatchCapacityThresholdInput] =
+    useState(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
   const [regularUseFullPoolInput, setRegularUseFullPoolInput] = useState(true)
   const [selectedRegularTargets, setSelectedRegularTargets] = useState<
     DirectorySelectionItem[]
@@ -200,14 +267,26 @@ export default function RoutingRules() {
       stableIdentityByRaw.set(rawID, stableID)
     })
     setFallbackDetail(detail)
-    setFallbackModeInput(
-      (detail?.fallback_route?.mode || "ai_only").trim() || "ai_only",
+    const actionMode = ((detail?.fallback_route?.action_mode || "ai_only").trim() ||
+      "ai_only") as RoutingActionMode
+    const dispatchStrategy = ((detail?.fallback_route?.dispatch_strategy || "").trim() ||
+      defaultDispatchStrategyForActionMode(actionMode)) as RoutingDispatchStrategy
+    setFallbackActionModeInput(actionMode)
+    setFallbackDispatchStrategyInput(dispatchStrategy)
+    setFallbackDispatchCapacityThresholdInput(
+      Number(
+        detail?.fallback_route?.dispatch_capacity_threshold ||
+          (dispatchStrategy === "direct_if_available_else_queue"
+            ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+            : 0),
+      ),
     )
     setFallbackUseFullPoolInput(
-      detail?.fallback_route?.use_full_pool ??
-        detail?.fallback_route?.uses_default_pool ??
-        (((detail?.fallback_route?.human_user_ids || []).length === 0 &&
-          (detail?.fallback_route?.human_department_ids || []).length === 0)),
+      actionMode === "ai_only"
+        ? true
+        : detail?.fallback_route?.use_full_pool ??
+            (((detail?.fallback_route?.human_user_ids || []).length === 0 &&
+              (detail?.fallback_route?.human_department_ids || []).length === 0)),
     )
     setSelectedFallbackTargets(
       normalizeSelectionItems([
@@ -333,6 +412,14 @@ export default function RoutingRules() {
     regularDetail?.reception_pool?.empty === true ||
     (Number(regularDetail?.reception_pool?.user_count || 0) === 0 &&
       Number(regularDetail?.reception_pool?.department_count || 0) === 0)
+  const fallbackDispatchOptions = useMemo(
+    () => DISPATCH_STRATEGY_OPTIONS[fallbackActionModeInput] || DISPATCH_STRATEGY_OPTIONS.ai_only,
+    [fallbackActionModeInput],
+  )
+  const regularDispatchOptions = useMemo(
+    () => DISPATCH_STRATEGY_OPTIONS[regularActionModeInput] || DISPATCH_STRATEGY_OPTIONS.ai_only,
+    [regularActionModeInput],
+  )
 
   const loadView = async (
     channel: string,
@@ -500,7 +587,9 @@ export default function RoutingRules() {
     setFormScene("")
     setFormSceneParamValue("")
     setFormSceneParamNonEmpty(false)
-    setRegularActionSemanticInput("ai_only")
+    setRegularActionModeInput("ai_only")
+    setRegularDispatchStrategyInput("none")
+    setRegularDispatchCapacityThresholdInput(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
     setRegularUseFullPoolInput(true)
     setSelectedRegularTargets([])
     setFormPriority(100)
@@ -518,17 +607,38 @@ export default function RoutingRules() {
       setFormScene("")
       setFormSceneParamValue("")
       setFormSceneParamNonEmpty(false)
-      setRegularActionSemanticInput("ai_only")
+      setRegularActionModeInput("ai_only")
+      setRegularDispatchStrategyInput("none")
+      setRegularDispatchCapacityThresholdInput(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
       setRegularUseFullPoolInput(true)
       setSelectedRegularTargets([])
     } else {
       const conditions = parseJSONRecord(rule.conditionsJson)
       const action = parseJSONRecord(rule.actionJson)
+      const actionMode = ((rule.actionMode || String(action.action_mode || "")).trim() ||
+        "ai_only") as RoutingActionMode
+      const dispatchStrategy = ((rule.dispatchStrategy || String(action.dispatch_strategy || "")).trim() ||
+        defaultDispatchStrategyForActionMode(actionMode)) as RoutingDispatchStrategy
       setFormScene(firstSceneValueFromConditions(rule.conditionsJson) || "")
       setFormSceneParamValue(String(conditions.scene_param_value || "").trim())
       setFormSceneParamNonEmpty(conditions.scene_param_non_empty === true)
-      setRegularActionSemanticInput(String(action.action_semantic || "ai_only").trim() || "ai_only")
-      setRegularUseFullPoolInput(action.use_full_pool === true)
+      setRegularActionModeInput(actionMode)
+      setRegularDispatchStrategyInput(dispatchStrategy)
+      setRegularDispatchCapacityThresholdInput(
+        Number(
+          action.dispatch_capacity_threshold ||
+            (dispatchStrategy === "direct_if_available_else_queue"
+              ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+              : 0),
+        ),
+      )
+      setRegularUseFullPoolInput(
+        actionMode === "ai_only"
+          ? true
+          : action.use_full_pool === true ||
+              (Array.isArray(action.assigned_staff_ids) && action.assigned_staff_ids.length === 0 &&
+                Array.isArray(action.assigned_department_ids) && action.assigned_department_ids.length === 0),
+      )
       setSelectedRegularTargets(
         normalizeSelectionItems([
           ...(Array.isArray(action.assigned_staff_ids)
@@ -615,21 +725,35 @@ export default function RoutingRules() {
         setDrawerNotice("当前默认兜底规则缺少渠道")
         return
       }
-      if (fallbackPoolEmpty && fallbackModeInput !== "ai_only") {
+      const actionMode = fallbackActionModeInput
+      const dispatchStrategy = fallbackDispatchStrategyInput
+      const requiresHuman = actionModeRequiresHuman(actionMode)
+      if (fallbackPoolEmpty && requiresHuman) {
         setDrawerNotice("当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。")
         return
       }
       const useFullPool =
-        fallbackModeInput === "ai_only" ? true : fallbackUseFullPoolInput
+        !requiresHuman || dispatchStrategyRequiresSpecificUser(dispatchStrategy)
+          ? actionMode === "ai_only"
+          : fallbackUseFullPoolInput
       const humanUserIDs = mapSelectedUserIDsToPoolRaw(
         selectedFallbackUsersDeduped,
         fallbackPoolRawUsersByStableIdentity,
       )
+      const humanDepartmentIDs = selectedFallbackDepartmentsDeduped
       if (
-        fallbackModeInput !== "ai_only" &&
+        dispatchStrategyRequiresSpecificUser(dispatchStrategy) &&
+        (humanDepartmentIDs.length > 0 || humanUserIDs.length !== 1)
+      ) {
+        setDrawerNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。")
+        return
+      }
+      if (
+        requiresHuman &&
         !useFullPool &&
+        dispatchStrategySupportsHumanScope(dispatchStrategy) &&
         humanUserIDs.length === 0 &&
-        selectedFallbackDepartmentsDeduped.length === 0
+        humanDepartmentIDs.length === 0
       ) {
         setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
         return
@@ -639,25 +763,15 @@ export default function RoutingRules() {
           command: "configure_fallback_route",
           openKFID: channelID,
           payload: {
-            mode: fallbackModeInput,
+            action_mode: actionMode,
+            dispatch_strategy: dispatchStrategy,
+            dispatch_capacity_threshold:
+              dispatchStrategy === "direct_if_available_else_queue"
+                ? Number(fallbackDispatchCapacityThresholdInput || DEFAULT_DIRECT_DISPATCH_THRESHOLD)
+                : 0,
             use_full_pool: useFullPool,
-            human_target_type:
-              fallbackModeInput === "ai_only" || useFullPool
-                ? ""
-                : selectedFallbackUsersDeduped.length > 0 &&
-                    selectedFallbackDepartmentsDeduped.length > 0
-                  ? "mixed"
-                  : selectedFallbackDepartmentsDeduped.length > 0
-                    ? "department"
-                    : humanUserIDs.length > 0
-                      ? "user"
-                      : "",
-            human_user_ids:
-              fallbackModeInput === "ai_only" || useFullPool ? [] : humanUserIDs,
-            human_department_ids:
-              fallbackModeInput === "ai_only" || useFullPool
-                ? []
-                : selectedFallbackDepartmentsDeduped,
+            human_user_ids: !requiresHuman || useFullPool ? [] : humanUserIDs,
+            human_department_ids: !requiresHuman || useFullPool ? [] : humanDepartmentIDs,
           },
         },
         { noticeScope: "drawer" },
@@ -679,23 +793,35 @@ export default function RoutingRules() {
       setDrawerNotice("请选择应用渠道")
       return
     }
+    const actionMode = regularActionModeInput
+    const dispatchStrategy = regularDispatchStrategyInput
+    const requiresHuman = actionModeRequiresHuman(actionMode)
     const useFullPool =
-      regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human"
-        ? regularUseFullPoolInput
-        : false
+      !requiresHuman || dispatchStrategyRequiresSpecificUser(dispatchStrategy)
+        ? actionMode === "ai_only"
+        : regularUseFullPoolInput
     const humanUserIDs = mapSelectedUserIDsToPoolRaw(
       selectedRegularUsersDeduped,
       regularPoolRawUsersByStableIdentity,
     )
-    if ((regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human") && regularPoolEmpty) {
+    const humanDepartmentIDs = selectedRegularDepartmentsDeduped
+    if (requiresHuman && regularPoolEmpty) {
       setDrawerNotice("当前接待池为空，普通人工路由无法生效。请先配置接待池，或改为“仅 AI”。")
       return
     }
     if (
-      (regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human") &&
+      dispatchStrategyRequiresSpecificUser(dispatchStrategy) &&
+      (humanDepartmentIDs.length > 0 || humanUserIDs.length !== 1)
+    ) {
+      setDrawerNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。")
+      return
+    }
+    if (
+      requiresHuman &&
       !useFullPool &&
+      dispatchStrategySupportsHumanScope(dispatchStrategy) &&
       humanUserIDs.length === 0 &&
-      selectedRegularDepartmentsDeduped.length === 0
+      humanDepartmentIDs.length === 0
     ) {
       setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
       return
@@ -707,16 +833,15 @@ export default function RoutingRules() {
       scene,
       scene_param_value: formSceneParamValue.trim(),
       scene_param_non_empty: formSceneParamNonEmpty,
-      action_semantic: regularActionSemanticInput,
+      action_mode: actionMode,
+      dispatch_strategy: dispatchStrategy,
+      dispatch_capacity_threshold:
+        dispatchStrategy === "direct_if_available_else_queue"
+          ? Number(regularDispatchCapacityThresholdInput || DEFAULT_DIRECT_DISPATCH_THRESHOLD)
+          : 0,
       use_full_pool: useFullPool,
-      human_user_ids:
-        regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human"
-          ? humanUserIDs
-          : [],
-      human_department_ids:
-        regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human"
-          ? selectedRegularDepartmentsDeduped
-          : [],
+      human_user_ids: requiresHuman && !useFullPool ? humanUserIDs : [],
+      human_department_ids: requiresHuman && !useFullPool ? humanDepartmentIDs : [],
       priority: formPriority,
     }
 
@@ -991,8 +1116,8 @@ export default function RoutingRules() {
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">规则名称</th>
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">应用渠道</th>
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">命中条件</th>
-                  <th className="px-6 py-3 font-semibold border-b border-gray-200">动作</th>
-                  <th className="px-6 py-3 font-semibold border-b border-gray-200">人工范围</th>
+                  <th className="px-6 py-3 font-semibold border-b border-gray-200">动作模式</th>
+                  <th className="px-6 py-3 font-semibold border-b border-gray-200">分配策略与范围</th>
                   <th className="px-6 py-3 font-semibold border-b border-gray-200">状态</th>
                   <th className="px-6 py-3 font-semibold text-right border-b border-gray-200">操作</th>
                 </tr>
@@ -1059,11 +1184,31 @@ export default function RoutingRules() {
                         <code className="bg-gray-100 px-1.5 py-0.5 rounded text-[11px] text-gray-600 font-mono">{rule.scene}</code>
                       </td>
                       <td className="px-6 py-4">
-                        <Badge variant="outline" className="text-[10px] font-medium border-gray-200 text-gray-600">
-                          {rule.mode}
-                        </Badge>
+                        <div className="space-y-1">
+                          <Badge variant="outline" className="text-[10px] font-medium border-gray-200 text-gray-600">
+                            {rule.actionModeLabel || "仅 AI"}
+                          </Badge>
+                          {(rule.dispatchStrategyLabel || "").trim() ? (
+                            <div className="text-[11px] text-gray-500">
+                              {rule.dispatchStrategyLabel}
+                              {rule.dispatchStrategy === "direct_if_available_else_queue" &&
+                              Number(rule.dispatchCapacityThreshold || 0) > 0
+                                ? ` · 阈值 ${Number(rule.dispatchCapacityThreshold)}`
+                                : ""}
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
-                      <td className="px-6 py-4 font-medium text-gray-700">{rule.target}</td>
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-gray-700">{rule.target}</div>
+                        {rule.actionMode !== "ai_only" ? (
+                          <div className="mt-1 text-[11px] text-gray-500">
+                            {rule.dispatchStrategy === "specific_user"
+                              ? "直接指定人工"
+                              : rule.target}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                           <div className={`h-2 w-2 rounded-full ${rule.status === "active" ? "bg-green-500" : "bg-gray-300"}`} />
@@ -1281,96 +1426,154 @@ export default function RoutingRules() {
                   兜底动作
                 </h4>
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-gray-700">兜底模式</label>
+                  <label className="text-xs font-medium text-gray-700">系统动作</label>
                   <select
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={fallbackModeInput}
+                    value={fallbackActionModeInput}
                     onChange={(event) => {
-                      const nextMode = event.target.value
-                      setFallbackModeInput(nextMode)
-                      if (nextMode === "ai_only") {
+                      const nextMode = event.target.value as RoutingActionMode
+                      const nextStrategy = defaultDispatchStrategyForActionMode(nextMode)
+                      setFallbackActionModeInput(nextMode)
+                      setFallbackDispatchStrategyInput(nextStrategy)
+                      setFallbackDispatchCapacityThresholdInput(
+                        nextStrategy === "direct_if_available_else_queue"
+                          ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+                          : 0,
+                      )
+                      if (nextMode === "ai_only" || dispatchStrategyRequiresSpecificUser(nextStrategy)) {
                         setFallbackUseFullPoolInput(true)
                       }
                     }}
                   >
-                    <option value="ai_only">仅智能接待</option>
-                    <option value="ai_then_human">智能接待后转人工</option>
-                    <option value="ai_then_queue_then_human">智能接待后进入排队再转人工</option>
+                    {ACTION_MODE_OPTIONS.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
                   </select>
                   <p className="text-[11px] text-gray-500">
-                    默认使用整个接待池；如有需要，可缩小为接待池对象子集。多选成员/部门表示人工候选范围，不表示唯一指派对象。
+                    {ACTION_MODE_OPTIONS.find((item) => item.value === fallbackActionModeInput)?.description}
                   </p>
                 </div>
-                {fallbackModeInput !== "ai_only" ? (
+                {actionModeRequiresHuman(fallbackActionModeInput) ? (
                   <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-gray-700">分配策略</label>
+                      <select
+                        className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={fallbackDispatchStrategyInput}
+                        onChange={(event) => {
+                          const nextStrategy = event.target.value as RoutingDispatchStrategy
+                          setFallbackDispatchStrategyInput(nextStrategy)
+                          setFallbackDispatchCapacityThresholdInput(
+                            nextStrategy === "direct_if_available_else_queue"
+                              ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+                              : 0,
+                          )
+                          if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+                            setFallbackUseFullPoolInput(false)
+                          }
+                        }}
+                      >
+                        {fallbackDispatchOptions.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-gray-500">
+                        {fallbackDispatchOptions.find((item) => item.value === fallbackDispatchStrategyInput)?.description}
+                      </p>
+                    </div>
+                    {fallbackDispatchStrategyInput === "direct_if_available_else_queue" ? (
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-gray-700">直分容量阈值</label>
+                        <input
+                          type="number"
+                          min={1}
+                          className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={fallbackDispatchCapacityThresholdInput}
+                          onChange={(event) =>
+                            setFallbackDispatchCapacityThresholdInput(Math.max(1, Number(event.target.value || DEFAULT_DIRECT_DISPATCH_THRESHOLD)))
+                          }
+                        />
+                        <p className="text-[11px] text-gray-500">当某位客服当前接待中的买家数小于该阈值时，可直接分配；否则进入排队。</p>
+                      </div>
+                    ) : null}
                     {fallbackPoolEmpty ? (
                       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
                         当前接待池为空，只能使用“仅智能接待（ai_only）”兜底。
                       </div>
                     ) : null}
-                    <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-                      <div className="text-xs font-medium text-gray-700">人工范围</div>
-                      <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
-                        <input
-                          type="radio"
-                          name="routing-default-full-pool"
-                          checked={fallbackUseFullPoolInput}
-                          onChange={() => setFallbackUseFullPoolInput(true)}
-                          disabled={fallbackPoolEmpty}
-                          className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <span>
-                          <span className="block font-medium text-gray-900">
-                            使用整个接待池（默认）
-                          </span>
-                          <span className="block text-xs text-gray-500">
-                            系统会在当前渠道接待池范围内选择可承接人工的成员或部门。
-                          </span>
-                        </span>
-                      </label>
-                      <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
-                        <input
-                          type="radio"
-                          name="routing-default-full-pool"
-                          checked={!fallbackUseFullPoolInput}
-                          onChange={() => setFallbackUseFullPoolInput(false)}
-                          disabled={fallbackPoolEmpty}
-                          className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <span>
-                          <span className="block font-medium text-gray-900">
-                            自定义候选范围（接待池对象子集）
-                          </span>
-                          <span className="block text-xs text-gray-500">
-                            仅从当前接待池中的显式对象缩小人工候选范围。
-                          </span>
-                        </span>
-                      </label>
-                    </div>
-                    {!fallbackUseFullPoolInput ? (
-                      <div className="space-y-2">
-                        <div className="text-[11px] text-gray-500">
-                          这里只显示当前接待池中的成员和部门。
+                    {dispatchStrategySupportsHumanScope(fallbackDispatchStrategyInput) ? (
+                      <>
+                        <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <div className="text-xs font-medium text-gray-700">人工范围</div>
+                          <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                            <input
+                              type="radio"
+                              name="routing-default-full-pool"
+                              checked={fallbackUseFullPoolInput}
+                              onChange={() => setFallbackUseFullPoolInput(true)}
+                              disabled={fallbackPoolEmpty || dispatchStrategyRequiresSpecificUser(fallbackDispatchStrategyInput)}
+                              className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span>
+                              <span className="block font-medium text-gray-900">
+                                使用整个接待池（默认）
+                              </span>
+                              <span className="block text-xs text-gray-500">
+                                系统会在当前渠道接待池范围内选择可承接人工的成员或部门。
+                              </span>
+                            </span>
+                          </label>
+                          <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                            <input
+                              type="radio"
+                              name="routing-default-full-pool"
+                              checked={!fallbackUseFullPoolInput}
+                              onChange={() => setFallbackUseFullPoolInput(false)}
+                              disabled={fallbackPoolEmpty}
+                              className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span>
+                              <span className="block font-medium text-gray-900">
+                                自定义候选范围（接待池对象子集）
+                              </span>
+                              <span className="block text-xs text-gray-500">
+                                仅从当前接待池中的显式对象缩小人工候选范围。
+                              </span>
+                            </span>
+                          </label>
                         </div>
-                        <OrganizationDirectorySelect
-                        label="接待池对象子集"
-                        placeholder={
-                          isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"
-                        }
-                        searchPlaceholder="搜索接待池中的成员 / 部门"
-                        corpId={orgCorpID}
-                        treeRoots={fallbackTreeRoots}
-                        ungroupedUsers={fallbackUngroupedUserIDs}
-                        memberMap={orgMemberMap}
-                        departmentMap={orgDepartmentMap}
-                        selectedItems={selectedFallbackTargetsDeduped}
-                        onChange={setSelectedFallbackTargets}
-                        emptyText="当前接待池中还没有可选对象，请先配置接待池"
-                        disabled={isOrgOptionsLoading || fallbackPoolEmpty}
-                        allowedUserIDs={currentPoolAllowedUserIDs}
-                        allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
-                        />
-                      </div>
+                        {!fallbackUseFullPoolInput ? (
+                          <div className="space-y-2">
+                            <div className="text-[11px] text-gray-500">
+                              {dispatchStrategyRequiresSpecificUser(fallbackDispatchStrategyInput)
+                                ? "请选择 1 名接待成员，作为直接指定人工。"
+                                : "这里只显示当前接待池中的成员和部门。"}
+                            </div>
+                            <OrganizationDirectorySelect
+                              label="接待池对象子集"
+                              placeholder={
+                                isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"
+                              }
+                              searchPlaceholder="搜索接待池中的成员 / 部门"
+                              corpId={orgCorpID}
+                              treeRoots={fallbackTreeRoots}
+                              ungroupedUsers={fallbackUngroupedUserIDs}
+                              memberMap={orgMemberMap}
+                              departmentMap={orgDepartmentMap}
+                              selectedItems={selectedFallbackTargetsDeduped}
+                              onChange={setSelectedFallbackTargets}
+                              emptyText="当前接待池中还没有可选对象，请先配置接待池"
+                              disabled={isOrgOptionsLoading || fallbackPoolEmpty}
+                              allowedUserIDs={currentPoolAllowedUserIDs}
+                              allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
+                            />
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                   </>
                 ) : null}
@@ -1495,27 +1698,80 @@ export default function RoutingRules() {
                   执行动作
                 </h4>
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-gray-700">动作类型</label>
+                  <label className="text-xs font-medium text-gray-700">系统动作</label>
                   <select
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={regularActionSemanticInput}
+                    value={regularActionModeInput}
                     onChange={(event) => {
-                      const nextValue = event.target.value
-                      setRegularActionSemanticInput(nextValue)
-                      if (nextValue === "ai_only" || nextValue === "send_to_pool") {
+                      const nextMode = event.target.value as RoutingActionMode
+                      const nextStrategy = defaultDispatchStrategyForActionMode(nextMode)
+                      setRegularActionModeInput(nextMode)
+                      setRegularDispatchStrategyInput(nextStrategy)
+                      setRegularDispatchCapacityThresholdInput(
+                        nextStrategy === "direct_if_available_else_queue"
+                          ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+                          : 0,
+                      )
+                      if (nextMode === "ai_only" || dispatchStrategyRequiresSpecificUser(nextStrategy)) {
                         setRegularUseFullPoolInput(true)
-                        setSelectedRegularTargets([])
                       }
                     }}
                   >
-                    <option value="ai_only">仅 AI</option>
-                    <option value="send_to_pool">送入待接入池</option>
-                    <option value="assign_human">转给指定人工</option>
-                    <option value="queue_then_human">排队后待人工接入</option>
+                    {ACTION_MODE_OPTIONS.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
                   </select>
+                  <p className="text-[11px] text-gray-500">
+                    {ACTION_MODE_OPTIONS.find((item) => item.value === regularActionModeInput)?.description}
+                  </p>
                 </div>
-                {regularActionSemanticInput === "assign_human" || regularActionSemanticInput === "queue_then_human" ? (
+                {actionModeRequiresHuman(regularActionModeInput) ? (
                   <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-gray-700">分配策略</label>
+                      <select
+                        className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={regularDispatchStrategyInput}
+                        onChange={(event) => {
+                          const nextStrategy = event.target.value as RoutingDispatchStrategy
+                          setRegularDispatchStrategyInput(nextStrategy)
+                          setRegularDispatchCapacityThresholdInput(
+                            nextStrategy === "direct_if_available_else_queue"
+                              ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+                              : 0,
+                          )
+                          if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+                            setRegularUseFullPoolInput(false)
+                          }
+                        }}
+                      >
+                        {regularDispatchOptions.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-gray-500">
+                        {regularDispatchOptions.find((item) => item.value === regularDispatchStrategyInput)?.description}
+                      </p>
+                    </div>
+                    {regularDispatchStrategyInput === "direct_if_available_else_queue" ? (
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-gray-700">直分容量阈值</label>
+                        <input
+                          type="number"
+                          min={1}
+                          className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={regularDispatchCapacityThresholdInput}
+                          onChange={(event) =>
+                            setRegularDispatchCapacityThresholdInput(Math.max(1, Number(event.target.value || DEFAULT_DIRECT_DISPATCH_THRESHOLD)))
+                          }
+                        />
+                        <p className="text-[11px] text-gray-500">当某位客服当前接待中的买家数小于该阈值时，可直接分配；否则进入排队。</p>
+                      </div>
+                    ) : null}
                     <div className="space-y-3">
                       <div className="text-xs font-medium text-gray-700">人工范围</div>
                       <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
@@ -1524,7 +1780,7 @@ export default function RoutingRules() {
                           name="routing-regular-full-pool"
                           checked={regularUseFullPoolInput}
                           onChange={() => setRegularUseFullPoolInput(true)}
-                          disabled={regularPoolEmpty}
+                          disabled={regularPoolEmpty || dispatchStrategyRequiresSpecificUser(regularDispatchStrategyInput)}
                           className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span>
@@ -1549,7 +1805,11 @@ export default function RoutingRules() {
                     </div>
                     {!regularUseFullPoolInput ? (
                       <div className="space-y-2">
-                        <div className="text-[11px] text-gray-500">这里只显示当前接待池中的成员和部门。</div>
+                        <div className="text-[11px] text-gray-500">
+                          {dispatchStrategyRequiresSpecificUser(regularDispatchStrategyInput)
+                            ? "请选择 1 名接待成员，作为直接指定人工。"
+                            : "这里只显示当前接待池中的成员和部门。"}
+                        </div>
                         <OrganizationDirectorySelect
                           label="接待池对象子集"
                           placeholder={isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"}
@@ -1582,7 +1842,7 @@ export default function RoutingRules() {
                 </div>
                 <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 flex items-center gap-2">
                   <Info className="h-3.5 w-3.5" />
-                  普通规则在这里维护；默认兜底规则请直接编辑现有“兜底”规则。命中后会在会话详情里明确显示命中的规则名和动作。
+                  普通规则在这里维护；默认兜底规则请直接编辑现有“兜底”规则。命中后会在会话详情里明确显示命中的规则名、系统动作和分配策略。
                 </div>
               </div>
             </>
