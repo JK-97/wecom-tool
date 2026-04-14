@@ -79,6 +79,8 @@ type TransferCandidate = {
   rawID: string;
 };
 
+type RoutingRecord = NonNullable<CommandCenterSessionDetail["routing_records"]>[number];
+
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
   const bucket = (session.state_bucket || "").trim().toLowerCase();
   if (bucket === "active") return "active";
@@ -106,6 +108,7 @@ function renderServicerValue(props: {
   value?: string;
   corpId: string;
   identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
+  showRawID?: boolean;
 }) {
   const tokens = splitIdentityTokens(props.value || "");
   if (tokens.length === 0) return "-";
@@ -137,12 +140,73 @@ function renderServicerValue(props: {
                 {displayFallback}
               </span>
             )}
-            {rawID ? <span className="text-[10px] text-gray-400">ID:{rawID}</span> : null}
+            {props.showRawID && rawID ? (
+              <span className="text-[10px] text-gray-400">ID:{rawID}</span>
+            ) : null}
           </span>
         );
       })}
     </span>
   );
+}
+
+function formatRoutingDateTime(value?: string): string {
+  const parsed = (value || "").trim();
+  if (!parsed) return "-";
+  const millis = Date.parse(parsed);
+  if (Number.isNaN(millis)) return parsed;
+  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatRoutingEventTime(value?: string): string {
+  const parsed = (value || "").trim();
+  if (!parsed) return "";
+  const millis = Date.parse(parsed);
+  if (Number.isNaN(millis)) return parsed;
+  return new Date(millis).toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderRoutingIdentity(props: {
+  userid?: string;
+  fallback?: string;
+  corpId: string;
+  identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
+}) {
+  const token = (props.userid || "").trim();
+  const fallback = (props.fallback || "").trim() || "人工";
+  if (!token) return <span>{fallback}</span>;
+  const identity = resolveServicerIdentityToken(token, props.identityLookup);
+  const displayIdentity = (identity?.displayIdentity || token).trim();
+  const displayFallback = (identity?.displayFallback || fallback).trim();
+  return (
+    <WecomOpenDataName
+      userid={displayIdentity}
+      corpId={props.corpId}
+      fallback={displayFallback}
+      className="font-medium text-gray-900"
+    />
+  );
+}
+
+function hasRoutingRecordDetails(
+  record?: RoutingRecord,
+): boolean {
+  const details = record?.details;
+  if (!details) return false;
+  return [
+    details.dispatch_strategy_label,
+    details.action_boundary_label,
+    details.execution_result_label,
+    details.result_state_label,
+    details.rule_name,
+    details.reason_summary,
+    details.trace_id,
+    details.target_raw_servicer_userid,
+  ].some((item) => (item || "").trim().length > 0);
 }
 
 export default function CSCommandCenter() {
@@ -841,16 +905,20 @@ export default function CSCommandCenter() {
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
-              <span className="font-medium">路由规则:</span>
+              <span className="font-medium">最近 routing:</span>
               <span className="text-blue-600 flex items-center gap-0.5 cursor-pointer hover:underline">
-                {(detail?.route_rule_name || "-").trim()}{" "}
+                {(
+                  detail?.routing_records?.[0]?.action_text ||
+                  detail?.routing_records?.[0]?.details?.trigger_label ||
+                  "-"
+                ).trim()}{" "}
                 <ExternalLink className="w-3 h-3" />
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
-              <span className="font-medium">接待池:</span>
+              <span className="font-medium">当前状态:</span>
               <span className="text-gray-900">
-                {(detail?.route_pool_name || "-").trim()}
+                {(detail?.routing_records?.[0]?.details?.result_state_label || "-").trim()}
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500 ml-auto">
@@ -1015,77 +1083,116 @@ export default function CSCommandCenter() {
 
             <div>
               <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <GitBranch className="w-4 h-4 text-blue-600" /> 最近一次 routing 结果
+                <GitBranch className="w-4 h-4 text-blue-600" /> 最近 2 次 routing 变动
               </h4>
-              <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-3">
-                <SessionEntryContextRow
-                  label="系统动作"
-                  value={
-                    (
-                      detail?.routing_explanation?.action_mode_label ||
-                      detail?.routing_explanation?.action_label ||
-                      "-"
-                    ).trim()
-                  }
-                />
-                <SessionEntryContextRow
-                  label="分配策略"
-                  value={
-                    (
-                      detail?.routing_explanation?.dispatch_strategy_label || "-"
-                    ).trim()
-                  }
-                />
-                <SessionEntryContextRow
-                  label="动作来源"
-                  value={(detail?.routing_explanation?.decision_source_label || "-").trim()}
-                />
-                <SessionEntryContextRow
-                  label="执行结果"
-                  value={(detail?.routing_explanation?.execution_status_label || "-").trim()}
-                />
-                <SessionEntryContextRow
-                  label="目标对象"
-                  value={renderServicerValue({
-                    value: (detail?.routing_explanation?.target || detail?.route_pool_name || "").trim(),
-                    corpId: corpID,
-                    identityLookup: sessionServicerLookup,
-                  })}
-                />
-                <SessionEntryContextRow
-                  label="命中规则"
-                  value={(detail?.route_rule_name || "-").trim()}
-                />
-                <SessionEntryContextRow
-                  label="接待池"
-                  value={(detail?.route_pool_name || "-").trim()}
-                />
-                <SessionEntryContextRow
-                  label="动作边界"
-                  value={
-                    detail?.routing_explanation
-                      ? detail.routing_explanation.is_manual_override
-                        ? "人工覆盖"
-                        : detail.routing_explanation.is_automatic === false
-                          ? "人工动作"
-                          : "系统自动处理"
-                      : "-"
-                  }
-                />
-                <SessionEntryContextRow
-                  label="结果原因"
-                  value={(detail?.routing_explanation?.reason || "-").trim()}
-                />
-                {(detail?.routing_explanation?.target_raw_servicer_userid || "").trim() ? (
-                  <SessionEntryContextRow
-                    label="追踪 ID"
-                    value={(detail?.routing_explanation?.target_raw_servicer_userid || "").trim()}
-                  />
-                ) : null}
-                <div className="pt-2 border-t border-gray-100">
+              <div className="divide-y divide-gray-100">
+                {(detail?.routing_records || []).length > 0 ? (
+                  (detail?.routing_records || []).slice(0, 2).map((record, index) => (
+                    <div key={`${record.occurred_at || ""}-${record.actor_userid || record.actor_label || ""}-${index}`} className="py-2.5">
+                      <div className="flex items-start gap-3">
+                        <div className="w-11 shrink-0 text-[11px] font-medium text-gray-400 pt-0.5">
+                          {formatRoutingEventTime(record.occurred_at)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm leading-6 text-gray-900">
+                            {record.actor_type === "system" ? (
+                              <span className="font-medium">系统</span>
+                            ) : (
+                              renderRoutingIdentity({
+                                userid: record.actor_userid,
+                                fallback: record.actor_label,
+                                corpId: corpID,
+                                identityLookup: sessionServicerLookup,
+                              })
+                            )}
+                            <span className="mx-1.5">{(record.action_text || "").trim() || "更新了会话状态"}</span>
+                            {(record.target_label || "").trim() ? (
+                              renderRoutingIdentity({
+                                userid: record.target_userid,
+                                fallback: record.target_label,
+                                corpId: corpID,
+                                identityLookup: sessionServicerLookup,
+                              })
+                            ) : null}
+                          </div>
+                          {hasRoutingRecordDetails(record) ? (
+                            <details className="mt-1 text-[11px] text-gray-500">
+                              <summary className="cursor-pointer list-none select-none text-gray-400 hover:text-gray-600">
+                                查看详情
+                              </summary>
+                              <div className="mt-2 space-y-2 border-l border-gray-100 pl-3">
+                                <SessionEntryContextRow
+                                  label="触发来源"
+                                  value={(record.details?.trigger_label || "-").trim()}
+                                />
+                                {(record.details?.rule_name || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="命中规则"
+                                    value={(record.details?.rule_name || "").trim()}
+                                  />
+                                ) : null}
+                                <SessionEntryContextRow
+                                  label="执行结果"
+                                  value={(record.details?.execution_result_label || "-").trim()}
+                                />
+                                <SessionEntryContextRow
+                                  label="当前状态"
+                                  value={(record.details?.result_state_label || "-").trim()}
+                                />
+                                {(record.details?.target_label || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="当前目标"
+                                    value={renderServicerValue({
+                                      value: (record.details?.target_label || "").trim(),
+                                      corpId: corpID,
+                                      identityLookup: sessionServicerLookup,
+                                    })}
+                                  />
+                                ) : null}
+                                {(record.details?.reason_summary || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="说明"
+                                    value={(record.details?.reason_summary || "").trim()}
+                                  />
+                                ) : null}
+                                {(record.details?.dispatch_strategy_label || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="分配策略"
+                                    value={(record.details?.dispatch_strategy_label || "").trim()}
+                                  />
+                                ) : null}
+                                {(record.details?.action_boundary_label || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="动作边界"
+                                    value={(record.details?.action_boundary_label || "").trim()}
+                                  />
+                                ) : null}
+                                {(record.details?.trace_id || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="追踪 ID"
+                                    value={(record.details?.trace_id || "").trim()}
+                                  />
+                                ) : null}
+                                {(record.details?.target_raw_servicer_userid || "").trim() ? (
+                                  <SessionEntryContextRow
+                                    label="原始目标 ID"
+                                    value={(record.details?.target_raw_servicer_userid || "").trim()}
+                                  />
+                                ) : null}
+                              </div>
+                            </details>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-2.5 text-xs text-gray-500">暂无主要 routing 变动</div>
+                )}
+                <div className="pt-2">
                   <Link
                     to="/main/routing-rules"
-                    className="text-[11px] text-blue-600 flex items-center justify-center gap-1 hover:underline"
+                    className="text-[11px] text-blue-600 flex items-center gap-1 hover:underline"
                   >
                     前往调整路由规则 <ChevronRight className="w-3 h-3" />
                   </Link>
@@ -1760,7 +1867,7 @@ function compareCommandCenterMessages(
   return leftIndex - rightIndex;
 }
 
-function compareTimeStrings(left: string, right: string): number {
+function compareTimeStrings(left?: string, right?: string): number {
   const leftMs = Date.parse((left || "").trim());
   const rightMs = Date.parse((right || "").trim());
   const leftValid = Number.isFinite(leftMs);
