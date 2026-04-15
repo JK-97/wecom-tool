@@ -107,6 +107,7 @@ export type CommandCenterSessionDetail = {
     target_label?: string;
     target_userid?: string;
     details?: {
+      rule_id?: string;
       dispatch_strategy_label?: string;
       action_boundary_label?: string;
       execution_result_label?: string;

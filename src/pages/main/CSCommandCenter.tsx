@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { Dialog } from "@/components/ui/Dialog";
 import { Textarea } from "@/components/ui/Textarea";
 import {
@@ -9,12 +9,10 @@ import {
   AlertCircle,
   Clock,
   CheckCircle2,
-  UserX,
   ShieldAlert,
   AlertTriangle,
   GitBranch,
   UserPlus,
-  ExternalLink,
   Info,
   ChevronRight,
   Star,
@@ -47,6 +45,7 @@ import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
 
 type SessionTab = "queue" | "active" | "closed";
+type DetailPanelTab = "monitor" | "upgrade" | "session";
 const COMMAND_CENTER_SESSION_POLL_INTERVAL_MS = 5000;
 const COMMAND_CENTER_VIEW_POLL_INTERVAL_MS = 15000;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
@@ -80,6 +79,10 @@ type TransferCandidate = {
 };
 
 type RoutingRecord = NonNullable<CommandCenterSessionDetail["routing_records"]>[number];
+type SessionStatusPresentation = {
+  label: string;
+  badgeClassName: string;
+};
 
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
   const bucket = (session.state_bucket || "").trim().toLowerCase();
@@ -176,11 +179,18 @@ function renderRoutingIdentity(props: {
   corpId: string;
   identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
 }) {
-  const token = (props.userid || "").trim();
   const fallback = (props.fallback || "").trim() || "人工";
-  if (!token) return <span>{fallback}</span>;
-  const identity = resolveServicerIdentityToken(token, props.identityLookup);
-  const displayIdentity = (identity?.displayIdentity || token).trim();
+  const candidates = [
+    (props.userid || "").trim(),
+    ...splitIdentityTokens(props.fallback || ""),
+  ].filter(Boolean);
+  const resolvedToken =
+    candidates.find((item) => resolveServicerIdentityToken(item, props.identityLookup)) ||
+    candidates[0] ||
+    "";
+  if (!resolvedToken) return <span>{fallback}</span>;
+  const identity = resolveServicerIdentityToken(resolvedToken, props.identityLookup);
+  const displayIdentity = (identity?.displayIdentity || resolvedToken).trim();
   const displayFallback = (identity?.displayFallback || fallback).trim();
   return (
     <WecomOpenDataName
@@ -209,6 +219,99 @@ function hasRoutingRecordDetails(
   ].some((item) => (item || "").trim().length > 0);
 }
 
+function shouldShowRoutingReason(record?: RoutingRecord): boolean {
+  const reason = (record?.details?.reason_summary || "").trim();
+  if (!reason) return false;
+  const action = (record?.action_text || "").trim();
+  const target = (record?.target_label || record?.details?.target_label || "").trim();
+  const normalizedReason = reason.replace(/\s+/g, "");
+  const normalizedAction = action.replace(/\s+/g, "");
+  const normalizedTarget = target.replace(/\s+/g, "");
+  if (normalizedAction && normalizedReason.includes(normalizedAction)) return false;
+  if (normalizedTarget && normalizedReason.includes(normalizedTarget)) return false;
+  return true;
+}
+
+function readRoutingRuleName(record?: RoutingRecord): string {
+  return (record?.details?.rule_name || "").trim();
+}
+
+function readRoutingRuleLink(record?: RoutingRecord): string {
+  const ruleID = (record?.details?.rule_id || "").trim();
+  if (ruleID) {
+    return `/main/routing-rules?edit_rule_id=${encodeURIComponent(ruleID)}`;
+  }
+  return "/main/routing-rules";
+}
+
+function readRoutingActionHeadline(record?: RoutingRecord): string {
+  const action = (record?.action_text || "").trim();
+  if (!action) return "更新了会话状态";
+  return action
+    .replace(/^按普通规则/, "")
+    .replace(/^按兜底规则/, "")
+    .trim();
+}
+
+function formatQueueWaitDuration(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`;
+  if (minutes > 0) return `${minutes}分${seconds}秒`;
+  return `${seconds}秒`;
+}
+
+function readLiveQueueWaitText(
+  session: CommandCenterSession | null | undefined,
+  fetchedAtMs: number,
+  nowMs: number,
+): string {
+  if (!session) return "";
+  const baseSeconds = Number(session.queue_wait_secs || 0);
+  if (baseSeconds > 0 && fetchedAtMs > 0) {
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000));
+    return formatQueueWaitDuration(baseSeconds + elapsedSeconds);
+  }
+  return (session.queue_wait_text || "").trim();
+}
+
+function resolveSessionStatusPresentation(
+  session?: CommandCenterSession | null,
+): SessionStatusPresentation {
+  const bucket = session ? resolveSessionBucket(session) : "queue";
+  const state = Number(session?.session_state || 0);
+  if (bucket === "closed" || state === 4) {
+    return {
+      label: "已结束",
+      badgeClassName: "bg-gray-100 text-gray-600 border-gray-200",
+    };
+  }
+  if (bucket === "active" || state === 3) {
+    return {
+      label: "人工接待",
+      badgeClassName: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    };
+  }
+  if (state === 1) {
+    return {
+      label: "智能助手",
+      badgeClassName: "bg-blue-50 text-blue-700 border-blue-200",
+    };
+  }
+  if (bucket === "queue" || state === 2) {
+    return {
+      label: "排队中",
+      badgeClassName: "bg-amber-50 text-amber-700 border-amber-200",
+    };
+  }
+  return {
+    label: (session?.session_label || "待处理").trim() || "待处理",
+    badgeClassName: "bg-slate-100 text-slate-700 border-slate-200",
+  };
+}
+
 export default function CSCommandCenter() {
   const auth = useAuth();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -216,11 +319,13 @@ export default function CSCommandCenter() {
   const [isEndModalOpen, setIsEndModalOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false);
+  const [isRoutingHistoryExpanded, setIsRoutingHistoryExpanded] = useState(false);
 
   const [view, setView] = useState<CommandCenterViewModel | null>(null);
   const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null);
   const [selectedExternalUserID, setSelectedExternalUserID] = useState("");
   const [activeTab, setActiveTab] = useState<SessionTab>("queue");
+  const [detailPanelTab, setDetailPanelTab] = useState<DetailPanelTab>("monitor");
   const [keyword, setKeyword] = useState("");
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -229,6 +334,9 @@ export default function CSCommandCenter() {
   const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
   const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
+  const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
+  const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [transferSearch, setTransferSearch] = useState("");
   const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
   const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
@@ -273,6 +381,18 @@ export default function CSCommandCenter() {
   }, [selectedExternalUserID]);
 
   useEffect(() => {
+    setIsRoutingHistoryExpanded(false);
+  }, [selectedExternalUserID]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     let alive = true;
     void listReceptionChannels({ limit: 500 })
       .then((channels) => {
@@ -309,6 +429,7 @@ export default function CSCommandCenter() {
       limit: 200,
     });
     setView(data);
+    setViewFetchedAtMs(Date.now());
     const selectedID = (
       data?.selected?.external_userid ||
       data?.sessions?.[0]?.external_userid ||
@@ -329,6 +450,7 @@ export default function CSCommandCenter() {
       limit: 200,
     });
     setDetail(data);
+    setDetailFetchedAtMs(Date.now());
   };
 
   useEffect(() => {
@@ -337,6 +459,7 @@ export default function CSCommandCenter() {
       .then((data) => {
         if (!alive) return;
         setView(data);
+        setViewFetchedAtMs(Date.now());
         const selectedID = (
           data?.selected?.external_userid ||
           data?.sessions?.[0]?.external_userid ||
@@ -367,6 +490,7 @@ export default function CSCommandCenter() {
       .then((data) => {
         if (!alive) return;
         setDetail(data);
+        setDetailFetchedAtMs(Date.now());
       })
       .catch(() => {
         if (!alive) return;
@@ -505,20 +629,6 @@ export default function CSCommandCenter() {
     if (!query) return transferCandidates;
     return transferCandidates.filter((item) => item.searchText.includes(query));
   }, [transferCandidates, transferSearch]);
-
-  const actionPanel = useMemo(() => {
-    if (!selectedSession) {
-      return {
-        title: "尚未选择会话",
-        description: "请先从左侧选择一个客户会话，再执行人工流转操作。",
-        primaryAction: null,
-        secondaryActions: [],
-      } satisfies SessionActionPanel;
-    }
-    const state = Number(selectedSession.session_state || 0);
-    const poolCandidateCount = isTransferModalOpen ? transferCandidates.length : null;
-    return buildSessionActionPanel(state, poolCandidateCount);
-  }, [isTransferModalOpen, selectedSession?.session_state, transferCandidates.length]);
 
   const poolCandidateCount = transferCandidates.length;
 
@@ -670,10 +780,50 @@ export default function CSCommandCenter() {
     activeMonitor?.compliance_pass === false;
   const assignedDisplayForHeader = resolveAssignedDisplay(selectedSession || undefined);
   const selectedSourcePresentation = resolveChannelPresentation(selectedSession?.source);
+  const routingRecords = detail?.routing_records || [];
+  const routingHistoryRecords = routingRecords.slice(0, 10);
+  const visibleRoutingRecords = isRoutingHistoryExpanded
+    ? routingHistoryRecords
+    : routingHistoryRecords.slice(0, 3);
+  const latestRoutingRecord = routingRecords[0];
+  const latestMatchedRoutingRecord =
+    routingRecords.find((item) => readRoutingRuleName(item) !== "") || latestRoutingRecord;
+  const currentSessionMeta = detail?.session || selectedSession;
+  const effectiveSessionState = Number(currentSessionMeta?.session_state || 0);
+  const actionPanel = useMemo(() => {
+    if (!currentSessionMeta) {
+      return {
+        title: "尚未选择会话",
+        description: "请先从左侧选择一个客户会话，再执行人工流转操作。",
+        primaryAction: null,
+        secondaryActions: [],
+      } satisfies SessionActionPanel;
+    }
+    const poolCandidateCount = isTransferModalOpen ? transferCandidates.length : null;
+    return buildSessionActionPanel(effectiveSessionState, poolCandidateCount);
+  }, [currentSessionMeta, effectiveSessionState, isTransferModalOpen, transferCandidates.length]);
+  const queueWaitText = readLiveQueueWaitText(
+    currentSessionMeta,
+    detail?.session ? detailFetchedAtMs : viewFetchedAtMs,
+    nowMs,
+  );
+  const slaStatusToken = ((selectedSession?.reply_sla_status || "normal").trim() || "normal").toLowerCase();
+  const slaBadgeLabel =
+    selectedSession?.reply_overdue === true || selectedSession?.overdue === true
+      ? "超时"
+      : slaStatusToken === "warning"
+        ? "预警"
+        : "";
+  const sessionStatus = resolveSessionStatusPresentation(currentSessionMeta);
+  const actionButtons = buildFlatSessionActions(
+    effectiveSessionState,
+    transferCandidates.length,
+    isTransferModalOpen,
+  );
 
   return (
-    <div className="flex h-full gap-6">
-      <div className="w-[380px] shrink-0 flex flex-col border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
+    <div className="flex h-full gap-5">
+      <div className="w-[332px] shrink-0 flex flex-col border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="p-4 border-b border-gray-100 bg-gray-50">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">
             微信客服中心
@@ -725,13 +875,14 @@ export default function CSCommandCenter() {
                 (session.external_userid || "").trim() ===
                 (selectedSession?.external_userid || "").trim();
               const bucket = resolveSessionBucket(session);
-              const queueWaitText = (session.queue_wait_text || "").trim();
+              const queueWaitText = readLiveQueueWaitText(session, viewFetchedAtMs, nowMs);
               const replyOverdue =
                 session.reply_overdue === true || session.overdue === true;
               const slaStatus = (session.reply_sla_status || "")
                 .trim()
                 .toLowerCase();
               const assignedDisplay = resolveAssignedDisplay(session);
+              const sessionStatus = resolveSessionStatusPresentation(session);
               return (
                 <div
                   key={(
@@ -765,8 +916,8 @@ export default function CSCommandCenter() {
                           </Badge>
                 );
               })()}
-                          <Badge className="text-[9px] px-1 py-0 bg-gray-100 text-gray-500 border-none">
-                            {(session.session_label || "会话中").trim()}
+                          <Badge className={`text-[9px] px-1 py-0 border-none ${sessionStatus.badgeClassName}`}>
+                            {sessionStatus.label}
                           </Badge>
                         </div>
                       </div>
@@ -830,71 +981,41 @@ export default function CSCommandCenter() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
+      <div className="flex-1 flex min-w-0 flex-col border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="border-b border-gray-200 bg-white shrink-0">
-          <div className="h-16 px-6 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <h3 className="text-lg font-semibold text-gray-900">
+          <div className="min-h-[72px] px-6 py-4 flex items-center gap-4">
+            <div className="min-w-0 flex items-center gap-4">
+              <h3 className="truncate text-lg font-semibold text-gray-900">
                 {(selectedSession?.name || "未选择会话").trim()}
               </h3>
               <Badge
-                variant="success"
-                className="bg-green-50 text-green-700 border-green-200"
+                className={sessionStatus.badgeClassName}
               >
-                {(selectedSession?.session_label || "-").trim()}
+                {sessionStatus.label}
               </Badge>
-              <span className="text-sm text-gray-500 border-l border-gray-200 pl-4">
+              <span className="min-w-0 text-sm text-gray-500 border-l border-gray-200 pl-4">
                 接待人：
                 {assignedDisplayForHeader.displayUserID ? (
-                  <span className="inline-flex items-center gap-2">
+                  <span className="inline-flex min-w-0 items-center gap-2">
                     <WecomOpenDataName
                       userid={assignedDisplayForHeader.displayUserID}
                       corpId={corpID}
                       fallback={assignedDisplayForHeader.displayFallback}
                       className="text-sm text-gray-700"
                     />
-                    {assignedDisplayForHeader.rawID ? (
-                      <span
-                        className="text-[11px] text-gray-400"
-                        title={assignedDisplayForHeader.rawID}
-                      >
-                        ID:{assignedDisplayForHeader.rawID}
-                      </span>
-                    ) : null}
                   </span>
                 ) : assignedDisplayForHeader.displayFallback ? (
-                  <span className="inline-flex items-center gap-2">
-                    <span className="text-sm text-gray-700">
-                      {assignedDisplayForHeader.displayFallback}
-                    </span>
-                    {assignedDisplayForHeader.rawID ? (
-                      <span
-                        className="text-[11px] text-gray-400"
-                        title={assignedDisplayForHeader.rawID}
-                      >
-                        ID:{assignedDisplayForHeader.rawID}
-                      </span>
-                    ) : null}
+                  <span className="inline-flex items-center gap-2 text-sm text-gray-700">
+                    {assignedDisplayForHeader.displayFallback}
                   </span>
                 ) : (
                   "待分配"
                 )}
               </span>
             </div>
-            <div className="text-right">
-              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-gray-400">
-                当前操作状态
-              </div>
-              <div className="mt-1 text-sm font-medium text-gray-900">
-                {actionPanel.title}
-              </div>
-              <div className="mt-1 text-xs text-gray-500">
-                {actionPanel.description}
-              </div>
-            </div>
           </div>
 
-          <div className="px-6 py-2 bg-gray-50 border-t border-gray-100 flex items-center gap-6 text-[11px]">
+          <div className="px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px]">
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">来源渠道:</span>
               <span
@@ -905,432 +1026,473 @@ export default function CSCommandCenter() {
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
-              <span className="font-medium">最近 routing:</span>
-              <span className="text-blue-600 flex items-center gap-0.5 cursor-pointer hover:underline">
-                {(
-                  detail?.routing_records?.[0]?.action_text ||
-                  detail?.routing_records?.[0]?.details?.trigger_label ||
-                  "-"
-                ).trim()}{" "}
-                <ExternalLink className="w-3 h-3" />
-              </span>
+              <span className="font-medium">匹配路由:</span>
+              {readRoutingRuleName(latestMatchedRoutingRecord) ? (
+                <Link
+                  to={readRoutingRuleLink(latestMatchedRoutingRecord)}
+                  className="text-blue-600 hover:underline"
+                >
+                  {readRoutingRuleName(latestMatchedRoutingRecord)}
+                </Link>
+              ) : (
+                <span className="text-gray-900">-</span>
+              )}
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">当前状态:</span>
               <span className="text-gray-900">
-                {(detail?.routing_records?.[0]?.details?.result_state_label || "-").trim()}
+                {(latestRoutingRecord?.details?.result_state_label || sessionStatus.label || "-").trim()}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-gray-500 ml-auto">
-              <span className="font-medium">告警状态:</span>
-              {selectedSession?.reply_overdue === true ||
-              selectedSession?.overdue === true ? (
+            {slaBadgeLabel ? (
+              <div className="ml-auto flex items-center gap-1.5 text-gray-500">
+                <span className="font-medium">告警:</span>
                 <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
-                  超时
+                  {slaBadgeLabel}
                 </Badge>
-              ) : (
-                <Badge className="bg-gray-100 text-gray-700 border-none text-[10px] px-1.5 py-0">
-                  {((selectedSession?.reply_sla_status || "normal").trim() ||
-                    "normal") === "warning"
-                    ? "预警"
-                    : "正常"}
+              </div>
+            ) : null}
+            {queueWaitText ? (
+              <div className="flex items-center gap-1.5 text-gray-500">
+                <span className="font-medium">排队:</span>
+                <span className="text-gray-900">{queueWaitText}</span>
+              </div>
+            ) : null}
+            {isUpgradeSuccess ? (
+              <div className="flex items-center gap-1.5 text-gray-500">
+                <span className="font-medium">客户升级:</span>
+                <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
+                  已升级
                 </Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 text-gray-500">
-              <span className="font-medium">排队时间:</span>
-              <span className="text-gray-900">
-                {(selectedSession?.queue_wait_text || "-").trim() || "-"}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5 text-gray-500">
-              <span className="font-medium">升级状态:</span>
-              <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
-                {isUpgradeSuccess ? "已升级" : "未升级"}
-              </Badge>
-            </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
         <div className="flex-1 flex min-h-0">
-          <div className="flex-1 bg-[#F5F7FA] p-6 overflow-y-auto flex flex-col gap-6">
-            {orderedMessages.length === 0 ? (
-              <div className="text-sm text-gray-500">暂无会话消息</div>
-            ) : (
-              orderedMessages.map((message) => {
-                const outgoing = (message.sender || "").trim() !== "customer";
-                return (
-                  <div
-                    key={
-                      message.id || `${message.timestamp}-${message.content}`
-                    }
-                    className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
-                  >
-                    {outgoing ? (
-                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                        <span className="text-xs font-bold text-blue-600">
-                          AI
-                        </span>
-                      </div>
-                    ) : (
-                      <Avatar src="" size="sm" />
-                    )}
-                    <div
-                      className={`px-4 py-2.5 max-w-[70%] shadow-sm rounded-2xl ${
-                        outgoing
-                          ? "bg-blue-600 text-white rounded-tr-none"
-                          : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
-                      }`}
-                    >
-                      <p className="text-sm">
-                        {(message.content || "").trim()}
-                      </p>
-                      <p
-                        className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex-1 overflow-y-auto bg-[#F5F7FA] p-6">
+              <div className="flex flex-col gap-6">
+                {orderedMessages.length === 0 ? (
+                  <div className="text-sm text-gray-500">暂无会话消息</div>
+                ) : (
+                  orderedMessages.map((message) => {
+                    const outgoing = (message.sender || "").trim() !== "customer";
+                    return (
+                      <div
+                        key={
+                          message.id || `${message.timestamp}-${message.content}`
+                        }
+                        className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
                       >
-                        {(message.timestamp || "")
-                          .replace("T", " ")
-                          .slice(0, 16)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                        {outgoing ? (
+                          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                            <span className="text-xs font-bold text-blue-600">
+                              AI
+                            </span>
+                          </div>
+                        ) : (
+                          <Avatar src="" size="sm" />
+                        )}
+                        <div
+                          className={`px-4 py-2.5 max-w-[70%] shadow-sm rounded-2xl ${
+                            outgoing
+                              ? "bg-blue-600 text-white rounded-tr-none"
+                              : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
+                          }`}
+                        >
+                          <p className="text-sm">
+                            {(message.content || "").trim()}
+                          </p>
+                          <p
+                            className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+                          >
+                            {(message.timestamp || "")
+                              .replace("T", " ")
+                              .slice(0, 16)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
 
-          <div className="w-[300px] border-l border-gray-200 bg-white p-5 overflow-y-auto space-y-6">
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <UserX className="w-4 h-4 text-blue-600" /> 会话操作
-              </h4>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-4 space-y-4">
-                <div className="space-y-1">
-                  <div className="text-xs text-gray-500">当前状态</div>
-                  <div className="text-sm font-medium text-gray-900">
-                    {actionPanel.title}
-                  </div>
-                  <div className="text-xs leading-relaxed text-gray-500">
+            <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
+              {selectedSession ? (
+                <div className="mb-3 flex items-center justify-between gap-3 text-[11px]">
+                  <div className="min-w-0 text-gray-500">
                     {actionPanel.description}
                   </div>
-                </div>
-
-                {actionPanel.emptyHint ? (
-                  <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
-                    {actionPanel.emptyHint}
+                  <div className="shrink-0 font-medium text-gray-900">
+                    {sessionStatus.label}
                   </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  {actionPanel.primaryAction ? (
-                    <Button
-                      className={resolveActionButtonClassName(actionPanel.primaryAction)}
-                      disabled={isSubmitting || actionPanel.primaryAction.disabled}
-                      onClick={() => void handleActionClick(actionPanel.primaryAction!)}
-                    >
-                      {actionPanel.primaryAction.label}
-                    </Button>
-                  ) : null}
-
-                  {actionPanel.secondaryActions.length > 0 ? (
-                    <div className="grid gap-2">
-                      {actionPanel.secondaryActions.map((action) => (
-                        <Button
-                          key={action.key}
-                          variant="outline"
-                          className={resolveActionButtonClassName(action)}
-                          disabled={isSubmitting || action.disabled}
-                          onClick={() => void handleActionClick(action)}
-                        >
-                          {action.label}
-                        </Button>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
-
-                {readActionDisabledMessage(actionPanel) ? (
-                  <div className="text-[11px] leading-relaxed text-gray-500">
-                    {readActionDisabledMessage(actionPanel)}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <Info className="w-4 h-4 text-blue-600" /> 进入会话来源
-              </h4>
-              <div className="bg-gray-50 rounded-lg border border-gray-100 p-3 space-y-2">
-                <SessionEntryContextRow
-                  label="场景"
-                  value={(detail?.entry_context?.scene || "").trim()}
-                />
-                <SessionEntryContextRow
-                  label="场景参数"
-                  value={(detail?.entry_context?.scene_param || "").trim()}
-                />
-                <SessionEntryContextRow
-                  label="来源昵称"
-                  value={(detail?.entry_context?.wechat_channels_nickname || "").trim()}
-                />
-                <SessionEntryContextRow
-                  label="欢迎码"
-                  value={(detail?.entry_context?.welcome_code || "").trim()}
-                />
-              </div>
-            </div>
-
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <GitBranch className="w-4 h-4 text-blue-600" /> 最近 2 次 routing 变动
-              </h4>
-              <div className="divide-y divide-gray-100">
-                {(detail?.routing_records || []).length > 0 ? (
-                  (detail?.routing_records || []).slice(0, 2).map((record, index) => (
-                    <div key={`${record.occurred_at || ""}-${record.actor_userid || record.actor_label || ""}-${index}`} className="py-2.5">
-                      <div className="flex items-start gap-3">
-                        <div className="w-11 shrink-0 text-[11px] font-medium text-gray-400 pt-0.5">
-                          {formatRoutingEventTime(record.occurred_at)}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm leading-6 text-gray-900">
-                            {record.actor_type === "system" ? (
-                              <span className="font-medium">系统</span>
-                            ) : (
-                              renderRoutingIdentity({
-                                userid: record.actor_userid,
-                                fallback: record.actor_label,
-                                corpId: corpID,
-                                identityLookup: sessionServicerLookup,
-                              })
-                            )}
-                            <span className="mx-1.5">{(record.action_text || "").trim() || "更新了会话状态"}</span>
-                            {(record.target_label || "").trim() ? (
-                              renderRoutingIdentity({
-                                userid: record.target_userid,
-                                fallback: record.target_label,
-                                corpId: corpID,
-                                identityLookup: sessionServicerLookup,
-                              })
-                            ) : null}
-                          </div>
-                          {hasRoutingRecordDetails(record) ? (
-                            <details className="mt-1 text-[11px] text-gray-500">
-                              <summary className="cursor-pointer list-none select-none text-gray-400 hover:text-gray-600">
-                                查看详情
-                              </summary>
-                              <div className="mt-2 space-y-2 border-l border-gray-100 pl-3">
-                                <SessionEntryContextRow
-                                  label="触发来源"
-                                  value={(record.details?.trigger_label || "-").trim()}
-                                />
-                                {(record.details?.rule_name || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="命中规则"
-                                    value={(record.details?.rule_name || "").trim()}
-                                  />
-                                ) : null}
-                                <SessionEntryContextRow
-                                  label="执行结果"
-                                  value={(record.details?.execution_result_label || "-").trim()}
-                                />
-                                <SessionEntryContextRow
-                                  label="当前状态"
-                                  value={(record.details?.result_state_label || "-").trim()}
-                                />
-                                {(record.details?.target_label || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="当前目标"
-                                    value={renderServicerValue({
-                                      value: (record.details?.target_label || "").trim(),
-                                      corpId: corpID,
-                                      identityLookup: sessionServicerLookup,
-                                    })}
-                                  />
-                                ) : null}
-                                {(record.details?.reason_summary || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="说明"
-                                    value={(record.details?.reason_summary || "").trim()}
-                                  />
-                                ) : null}
-                                {(record.details?.dispatch_strategy_label || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="分配策略"
-                                    value={(record.details?.dispatch_strategy_label || "").trim()}
-                                  />
-                                ) : null}
-                                {(record.details?.action_boundary_label || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="动作边界"
-                                    value={(record.details?.action_boundary_label || "").trim()}
-                                  />
-                                ) : null}
-                                {(record.details?.trace_id || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="追踪 ID"
-                                    value={(record.details?.trace_id || "").trim()}
-                                  />
-                                ) : null}
-                                {(record.details?.target_raw_servicer_userid || "").trim() ? (
-                                  <SessionEntryContextRow
-                                    label="原始目标 ID"
-                                    value={(record.details?.target_raw_servicer_userid || "").trim()}
-                                  />
-                                ) : null}
-                              </div>
-                            </details>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="py-2.5 text-xs text-gray-500">暂无主要 routing 变动</div>
-                )}
-                <div className="pt-2">
-                  <Link
-                    to="/main/routing-rules"
-                    className="text-[11px] text-blue-600 flex items-center gap-1 hover:underline"
+              ) : null}
+              <div className="grid grid-cols-3 gap-3">
+                {actionButtons.map((action) => (
+                  <Button
+                    key={action.key}
+                    variant={action.tone === "primary" ? undefined : "outline"}
+                    className={`h-9 w-full ${resolveActionButtonClassName(action)}`}
+                    disabled={isSubmitting || action.disabled}
+                    onClick={() => void handleActionClick(action)}
                   >
-                    前往调整路由规则 <ChevronRight className="w-3 h-3" />
-                  </Link>
+                    {action.label}
+                  </Button>
+                ))}
+              </div>
+
+              {actionPanel.emptyHint ? (
+                <div className="mt-3 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+                  {actionPanel.emptyHint}
                 </div>
-              </div>
+              ) : null}
+              {readActionDisabledMessage(actionPanel) ? (
+                <div className="mt-3 text-[11px] leading-relaxed text-gray-500">
+                  {readActionDisabledMessage(actionPanel)}
+                </div>
+              ) : null}
             </div>
+          </div>
 
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                <UserPlus className="w-4 h-4 text-blue-600" /> 客户升级
-              </h4>
-              <div className="bg-blue-50 rounded-lg border border-blue-100 p-4 text-center">
-                <p className="text-xs text-blue-700 mb-3 leading-relaxed">
-                  可将当前会话升级为客户联系并自动创建跟进任务。
-                </p>
-                <Button
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-xs h-8"
-                  onClick={() => setIsUpgradeModalOpen(true)}
-                >
-                  立即升级
-                </Button>
+          <div className="w-[320px] shrink-0 border-l border-gray-200 bg-white">
+            <Tabs
+              value={detailPanelTab}
+              onValueChange={(value) => setDetailPanelTab(value as DetailPanelTab)}
+              className="flex h-full min-h-0 flex-col"
+            >
+              <div className="border-b border-gray-100 px-3 py-3">
+                <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1">
+                  <TabsTrigger
+                    value="monitor"
+                    className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
+                  >
+                    <ShieldAlert className="h-4 w-4" />
+                    <span>AI 实时监控</span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="upgrade"
+                    className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
+                  >
+                    <UserPlus className="h-4 w-4" />
+                    <span>客户升级</span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="session"
+                    className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
+                  >
+                    <GitBranch className="h-4 w-4" />
+                    <span>来源与路由</span>
+                  </TabsTrigger>
+                </TabsList>
               </div>
-            </div>
 
-            <div>
-              <h4 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-blue-600" /> AI 实时监控
-              </h4>
-
-              <div className="space-y-6">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-xs text-gray-500">客户情绪</div>
-                    {analysisStatus === "running" ||
-                    analysisStatus === "queued" ? (
-                      <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">
-                        进行中
-                      </Badge>
-                    ) : analysisStatus === "failed" ? (
-                      <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
-                        分析失败
-                      </Badge>
-                    ) : analysisStatus === "succeeded" ? (
-                      <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
-                        最近已完成
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-gray-100 text-gray-600 border-none text-[10px] px-1.5 py-0">
-                        未启动
-                      </Badge>
-                    )}
+              <TabsContent value="monitor" className="mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
+                <div className="space-y-6">
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-xs text-gray-500">客户情绪</div>
+                      {analysisStatus === "running" || analysisStatus === "queued" ? (
+                        <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">
+                          进行中
+                        </Badge>
+                      ) : analysisStatus === "failed" ? (
+                        <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
+                          分析失败
+                        </Badge>
+                      ) : analysisStatus === "succeeded" ? (
+                        <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
+                          最近已完成
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-gray-100 text-gray-600 border-none text-[10px] px-1.5 py-0">
+                          未启动
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">{emotionPresentation.emoji}</span>
+                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+                        <div
+                          className={`h-full ${emotionPresentation.barClass}`}
+                          style={{ width: `${emotionPresentation.width}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-medium ${emotionPresentation.textClass}`}>
+                        {activeMonitor?.emotion?.label?.trim() || "中性"}
+                      </span>
+                    </div>
+                    {activeMonitor?.emotion?.reason ? (
+                      <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                        {activeMonitor.emotion.reason.trim()}
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl">{emotionPresentation.emoji}</span>
-                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full ${emotionPresentation.barClass}`}
-                        style={{ width: `${emotionPresentation.width}%` }}
+
+                  <div>
+                    <div className="mb-2 text-xs text-gray-500">会话摘要</div>
+                    <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">
+                      {summaryText}
+                    </div>
+                    {activeMonitor?.summary_detail?.customer_intent ||
+                    activeMonitor?.summary_detail?.suggested_focus ? (
+                      <div className="mt-2 space-y-1 text-[11px] text-gray-500">
+                        {activeMonitor?.summary_detail?.customer_intent ? (
+                          <div>
+                            客户诉求：
+                            {activeMonitor.summary_detail.customer_intent.trim()}
+                          </div>
+                        ) : null}
+                        {activeMonitor?.summary_detail?.priority ? (
+                          <div>
+                            优先级：{activeMonitor.summary_detail.priority.trim()}
+                          </div>
+                        ) : null}
+                        {activeMonitor?.summary_detail?.suggested_focus ? (
+                          <div>
+                            跟进重点：
+                            {activeMonitor.summary_detail.suggested_focus.trim()}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs text-gray-500">合规质检</div>
+                    {complianceRisk ? (
+                      <div className="flex items-center gap-2 rounded-md border border-red-100 bg-red-50 p-2 text-sm text-red-600">
+                        <AlertTriangle className="h-4 w-4" /> 检测到潜在风险话术
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-md border border-green-100 bg-green-50 p-2 text-sm text-green-600">
+                        <CheckCircle2 className="h-4 w-4" /> 未发现违规话术
+                      </div>
+                    )}
+                    {activeMonitor?.compliance?.reason ? (
+                      <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                        {activeMonitor.compliance.reason.trim()}
+                      </div>
+                    ) : null}
+                    {activeMonitor?.compliance?.risk_tags &&
+                    activeMonitor.compliance.risk_tags.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {activeMonitor.compliance.risk_tags.map((tag) => (
+                          <Badge
+                            key={tag}
+                            className="bg-amber-100 text-amber-700 border-none text-[10px] px-1.5 py-0"
+                          >
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                    {activeMonitor?.compliance?.recommended_action ? (
+                      <div className="mt-2 text-[11px] text-gray-500">
+                        建议动作：
+                        {activeMonitor.compliance.recommended_action.trim()}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+              </TabsContent>
+
+              <TabsContent value="upgrade" className="mt-0 flex-1 overflow-y-auto px-4 py-4">
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">客户升级</div>
+                    <div className="mt-1 text-xs text-gray-500">进入客户联系流程</div>
+                  </div>
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-4">
+                    <Button
+                      className="w-full bg-blue-600 text-xs hover:bg-blue-700"
+                      onClick={() => setIsUpgradeModalOpen(true)}
+                    >
+                      升级为客户
+                    </Button>
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="session" className="mt-0 flex-1 overflow-y-auto px-4 py-4">
+                <div className="space-y-6">
+                  <div>
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
+                      <Info className="h-4 w-4 text-blue-600" /> 会话来源
+                    </div>
+                    <div className="space-y-2 border-b border-gray-100 pb-1">
+                      <SessionEntryContextRow
+                        label="场景"
+                        value={(detail?.entry_context?.scene || "").trim()}
+                      />
+                      <SessionEntryContextRow
+                        label="场景参数"
+                        value={(detail?.entry_context?.scene_param || "").trim()}
+                      />
+                      <SessionEntryContextRow
+                        label="来源昵称"
+                        value={(detail?.entry_context?.wechat_channels_nickname || "").trim()}
+                      />
+                      <SessionEntryContextRow
+                        label="欢迎码"
+                        value={(detail?.entry_context?.welcome_code || "").trim()}
                       />
                     </div>
-                    <span className={`text-xs font-medium ${emotionPresentation.textClass}`}>
-                      {activeMonitor?.emotion?.label?.trim() || "中性"}
-                    </span>
                   </div>
-                  {activeMonitor?.emotion?.reason ? (
-                    <div className="mt-2 text-[11px] text-gray-500 leading-relaxed">
-                      {activeMonitor.emotion.reason.trim()}
-                    </div>
-                  ) : null}
-                </div>
 
-                <div>
-                  <div className="text-xs text-gray-500 mb-2">会话摘要</div>
-                  <div className="bg-gray-50 p-3 rounded-md border border-gray-100 text-sm text-gray-700 leading-relaxed">
-                    {summaryText}
+                  <div>
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
+                      <GitBranch className="h-4 w-4 text-blue-600" /> 路由历史
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {routingHistoryRecords.length > 0 ? (
+                        visibleRoutingRecords.map((record, index) => (
+                          <div
+                            key={`${record.occurred_at || ""}-${record.actor_userid || record.actor_label || ""}-${index}`}
+                            className="py-2.5"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="w-11 shrink-0 pt-0.5 text-[11px] font-medium text-gray-400">
+                                {formatRoutingEventTime(record.occurred_at)}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm leading-6 text-gray-900">
+                                  {record.actor_type === "system" ? (
+                                    <span className="font-medium">系统</span>
+                                  ) : record.actor_type === "customer" ? (
+                                    <span className="font-medium text-gray-900">
+                                      {(record.actor_label || "买家").trim()}
+                                    </span>
+                                  ) : (
+                                    renderRoutingIdentity({
+                                      userid: record.actor_userid,
+                                      fallback: record.actor_label,
+                                      corpId: corpID,
+                                      identityLookup: sessionServicerLookup,
+                                    })
+                                  )}
+                                  <span className="mx-1.5">
+                                    {readRoutingActionHeadline(record)}
+                                  </span>
+                                  {(record.target_label || "").trim() ? (
+                                    renderRoutingIdentity({
+                                      userid: record.target_userid,
+                                      fallback: record.target_label,
+                                      corpId: corpID,
+                                      identityLookup: sessionServicerLookup,
+                                    })
+                                  ) : null}
+                                </div>
+                                {readRoutingRuleName(record) ? (
+                                  <div className="mt-0.5">
+                                    <Link
+                                      to={readRoutingRuleLink(record)}
+                                      className="text-xs text-blue-600 hover:underline"
+                                    >
+                                      匹配路由：{readRoutingRuleName(record)}
+                                    </Link>
+                                  </div>
+                                ) : null}
+                                {hasRoutingRecordDetails(record) ? (
+                                  <details className="mt-1 text-[11px] text-gray-500">
+                                    <summary className="cursor-pointer list-none select-none text-gray-400 hover:text-gray-600">
+                                      查看详情
+                                    </summary>
+                                    <div className="mt-2 space-y-2 border-l border-gray-100 pl-3">
+                                      <SessionEntryContextRow
+                                        label="触发来源"
+                                        value={(record.details?.trigger_label || "-").trim()}
+                                      />
+                                      {(record.details?.rule_name || "").trim() ? (
+                                        <SessionEntryContextRow
+                                          label="命中规则"
+                                          value={(record.details?.rule_name || "").trim()}
+                                        />
+                                      ) : null}
+                                      <SessionEntryContextRow
+                                        label="执行结果"
+                                        value={(record.details?.execution_result_label || "-").trim()}
+                                      />
+                                      <SessionEntryContextRow
+                                        label="当前状态"
+                                        value={(record.details?.result_state_label || "-").trim()}
+                                      />
+                                      {(record.details?.target_label || "").trim() ? (
+                                        <SessionEntryContextRow
+                                          label="当前目标"
+                                          value={renderRoutingIdentity({
+                                            userid: record.details?.target_userid,
+                                            fallback: record.details?.target_label,
+                                            corpId: corpID,
+                                            identityLookup: sessionServicerLookup,
+                                          })}
+                                        />
+                                      ) : null}
+                                      {shouldShowRoutingReason(record) ? (
+                                        <SessionEntryContextRow
+                                          label="说明"
+                                          value={(record.details?.reason_summary || "").trim()}
+                                        />
+                                      ) : null}
+                                      {(record.details?.dispatch_strategy_label || "").trim() ? (
+                                        <SessionEntryContextRow
+                                          label="分配策略"
+                                          value={(record.details?.dispatch_strategy_label || "").trim()}
+                                        />
+                                      ) : null}
+                                      {(record.details?.action_boundary_label || "").trim() ? (
+                                        <SessionEntryContextRow
+                                          label="动作边界"
+                                          value={(record.details?.action_boundary_label || "").trim()}
+                                        />
+                                      ) : null}
+                                      {(record.details?.trace_id || "").trim() ? (
+                                        <SessionEntryContextRow
+                                          label="追踪 ID"
+                                          value={(record.details?.trace_id || "").trim()}
+                                        />
+                                      ) : null}
+                                      {(record.details?.target_raw_servicer_userid || "").trim() ? (
+                                        <SessionEntryContextRow
+                                          label="原始目标 ID"
+                                          value={(record.details?.target_raw_servicer_userid || "").trim()}
+                                        />
+                                      ) : null}
+                                    </div>
+                                  </details>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="py-2.5 text-xs text-gray-500">暂无主要 routing 变动</div>
+                      )}
+                    </div>
+                    {routingHistoryRecords.length > 3 ? (
+                      <button
+                        type="button"
+                        className="mt-2 text-[11px] font-medium text-blue-600 hover:underline"
+                        onClick={() => setIsRoutingHistoryExpanded((value) => !value)}
+                      >
+                        {isRoutingHistoryExpanded
+                          ? "收起"
+                          : `更多 (${routingHistoryRecords.length - visibleRoutingRecords.length})`}
+                      </button>
+                    ) : null}
+                    <Link
+                      to="/main/routing-rules"
+                      className="mt-3 inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
+                    >
+                      前往调整路由规则 <ChevronRight className="h-3 w-3" />
+                    </Link>
                   </div>
-                  {activeMonitor?.summary_detail?.customer_intent ||
-                  activeMonitor?.summary_detail?.suggested_focus ? (
-                    <div className="mt-2 space-y-1 text-[11px] text-gray-500">
-                      {activeMonitor?.summary_detail?.customer_intent ? (
-                        <div>
-                          客户诉求：
-                          {activeMonitor.summary_detail.customer_intent.trim()}
-                        </div>
-                      ) : null}
-                      {activeMonitor?.summary_detail?.priority ? (
-                        <div>
-                          优先级：{activeMonitor.summary_detail.priority.trim()}
-                        </div>
-                      ) : null}
-                      {activeMonitor?.summary_detail?.suggested_focus ? (
-                        <div>
-                          跟进重点：
-                          {activeMonitor.summary_detail.suggested_focus.trim()}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
                 </div>
-
-                <div>
-                  <div className="text-xs text-gray-500 mb-2">合规质检</div>
-                  {complianceRisk ? (
-                    <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 p-2 rounded-md border border-red-100">
-                      <AlertTriangle className="w-4 h-4" /> 检测到潜在风险话术
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-2 rounded-md border border-green-100">
-                      <CheckCircle2 className="w-4 h-4" /> 未发现违规话术
-                    </div>
-                  )}
-                  {activeMonitor?.compliance?.reason ? (
-                    <div className="mt-2 text-[11px] text-gray-500 leading-relaxed">
-                      {activeMonitor.compliance.reason.trim()}
-                    </div>
-                  ) : null}
-                  {activeMonitor?.compliance?.risk_tags &&
-                  activeMonitor.compliance.risk_tags.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {activeMonitor.compliance.risk_tags.map((tag) => (
-                        <Badge
-                          key={tag}
-                          className="bg-amber-100 text-amber-700 border-none text-[10px] px-1.5 py-0"
-                        >
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : null}
-                  {activeMonitor?.compliance?.recommended_action ? (
-                    <div className="mt-2 text-[11px] text-gray-500">
-                      建议动作：
-                      {activeMonitor.compliance.recommended_action.trim()}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </div>
@@ -1727,9 +1889,9 @@ function buildSessionActionPanel(
     case 3:
       return {
         title: "当前由人工接待",
-        description: "可继续转给其他人工，或送回待接入池、直接结束会话。",
+        description: "可继续转给其他人工，或直接结束会话。",
         primaryAction: transferAction,
-        secondaryActions: [queueAction, endAction],
+        secondaryActions: [endAction],
         emptyHint:
           !hasKnownCandidates || hasHumanCandidates
             ? ""
@@ -1752,14 +1914,58 @@ function buildSessionActionPanel(
   }
 }
 
+function buildFlatSessionActions(
+  sessionState: number,
+  poolCandidateCount: number,
+  hasLoadedCandidates: boolean,
+): SessionActionDescriptor[] {
+  const canTransfer = !hasLoadedCandidates || poolCandidateCount > 0;
+  const transferAction: SessionActionDescriptor = {
+    key: "transfer_to_human",
+    label: "转给指定人工",
+    description: "从当前接待池中选择一个人工接待人员",
+    tone: "primary",
+    disabled: sessionState === 4 || !canTransfer,
+    disabledReason:
+      sessionState === 4
+        ? "当前会话已结束"
+        : canTransfer
+          ? ""
+          : "当前接待池没有可转接人工",
+  };
+  const queueAction: SessionActionDescriptor = {
+    key: "send_to_queue",
+    label: "送入待接入池",
+    description: "送回企业微信待接入池，等待人工继续接入",
+    tone: "secondary",
+    disabled: sessionState === 2 || sessionState === 4,
+    disabledReason:
+      sessionState === 2 ? "当前已在待接入池中" : sessionState === 4 ? "当前会话已结束" : "",
+  };
+  const endAction: SessionActionDescriptor = {
+    key: "end_session",
+    label: "结束会话",
+    description: "结束当前会话，不再继续人工接待",
+    tone: "danger",
+    disabled: sessionState !== 3,
+    disabledReason:
+      sessionState === 4 ? "当前会话已结束" : sessionState === 3 ? "" : "当前状态不支持直接结束会话",
+  };
+  if (sessionState === 3) {
+    queueAction.disabled = true;
+    queueAction.disabledReason = "人工接待中的会话不能再送入待接入池";
+  }
+  return [transferAction, queueAction, endAction];
+}
+
 function resolveActionButtonClassName(action: SessionActionDescriptor): string {
   if (action.tone === "primary") {
-    return "w-full bg-blue-600 text-white hover:bg-blue-700";
+    return "bg-blue-600 text-white hover:bg-blue-700";
   }
   if (action.tone === "danger") {
-    return "w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700";
+    return "border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700";
   }
-  return "w-full border-gray-200 text-gray-700 hover:bg-gray-100";
+  return "border-gray-200 text-gray-700 hover:bg-gray-100";
 }
 
 function readActionDisabledMessage(panel: SessionActionPanel): string {
