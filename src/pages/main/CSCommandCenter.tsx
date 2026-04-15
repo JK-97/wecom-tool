@@ -17,7 +17,7 @@ import {
   ChevronRight,
   Star,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import {
@@ -46,8 +46,6 @@ import { useAuth } from "@/context/AuthContext";
 
 type SessionTab = "queue" | "active" | "closed";
 type DetailPanelTab = "monitor" | "upgrade" | "session";
-const COMMAND_CENTER_SESSION_POLL_INTERVAL_MS = 5000;
-const COMMAND_CENTER_VIEW_POLL_INTERVAL_MS = 15000;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
 
 type SessionActionDescriptor = {
@@ -331,6 +329,50 @@ function resolveSessionStatusPresentation(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Page-level unified store (useReducer) — ensures left panel, right panel,
+// and status bar all update in the same React commit from the same source.
+// ---------------------------------------------------------------------------
+type PageState = {
+  view: CommandCenterViewModel | null;
+  detail: CommandCenterSessionDetail | null;
+  viewFetchedAtMs: number;
+  detailFetchedAtMs: number;
+};
+
+type PageAction =
+  | { type: "set_view"; view: CommandCenterViewModel | null; viewFetchedAtMs: number }
+  | { type: "set_detail"; detail: CommandCenterSessionDetail | null; detailFetchedAtMs: number }
+  | {
+      type: "update_both";
+      view: CommandCenterViewModel | null;
+      detail: CommandCenterSessionDetail | null;
+      viewFetchedAtMs: number;
+      detailFetchedAtMs: number;
+    }
+  | { type: "clear_detail" };
+
+function pageReducer(state: PageState, action: PageAction): PageState {
+  switch (action.type) {
+    case "set_view":
+      return { ...state, view: action.view, viewFetchedAtMs: action.viewFetchedAtMs };
+    case "set_detail":
+      return { ...state, detail: action.detail, detailFetchedAtMs: action.detailFetchedAtMs };
+    case "update_both":
+      return {
+        ...state,
+        view: action.view,
+        detail: action.detail,
+        viewFetchedAtMs: action.viewFetchedAtMs,
+        detailFetchedAtMs: action.detailFetchedAtMs,
+      };
+    case "clear_detail":
+      return { ...state, detail: null, detailFetchedAtMs: 0 };
+    default:
+      return state;
+  }
+}
+
 export default function CSCommandCenter() {
   const auth = useAuth();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -340,8 +382,18 @@ export default function CSCommandCenter() {
   const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false);
   const [isRoutingHistoryExpanded, setIsRoutingHistoryExpanded] = useState(false);
 
-  const [view, setView] = useState<CommandCenterViewModel | null>(null);
-  const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null);
+  // Unified page state — all page areas read from the same version source.
+  const [pageState, pageDispatch] = useReducer(pageReducer, {
+    view: null,
+    detail: null,
+    viewFetchedAtMs: 0,
+    detailFetchedAtMs: 0,
+  });
+  const { view, detail, viewFetchedAtMs, detailFetchedAtMs } = pageState;
+
+  // SSE connection ref and monotonic version tracker.
+  const sseRef = useRef<EventSource | null>(null);
+  const lastVersionRef = useRef<number>(0);
   const [selectedExternalUserID, setSelectedExternalUserID] = useState("");
   const [activeTab, setActiveTab] = useState<SessionTab>("queue");
   const [detailPanelTab, setDetailPanelTab] = useState<DetailPanelTab>("monitor");
@@ -353,8 +405,6 @@ export default function CSCommandCenter() {
   const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
   const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
-  const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
-  const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [transferSearch, setTransferSearch] = useState("");
   const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
@@ -447,8 +497,7 @@ export default function CSCommandCenter() {
       open_kfid: queryOpenKFID,
       limit: 200,
     });
-    setView(data);
-    setViewFetchedAtMs(Date.now());
+    pageDispatch({ type: "set_view", view: data, viewFetchedAtMs: Date.now() });
     const selectedID = (
       data?.selected?.external_userid ||
       data?.sessions?.[0]?.external_userid ||
@@ -460,7 +509,7 @@ export default function CSCommandCenter() {
   const loadDetail = async (externalUserID: string) => {
     const selected = (externalUserID || "").trim();
     if (!selected) {
-      setDetail(null);
+      pageDispatch({ type: "clear_detail" });
       return;
     }
     const data = await getCSCommandCenterSessionDetail({
@@ -468,17 +517,16 @@ export default function CSCommandCenter() {
       external_userid: selected,
       limit: 200,
     });
-    setDetail(data);
-    setDetailFetchedAtMs(Date.now());
+    pageDispatch({ type: "set_detail", detail: data, detailFetchedAtMs: Date.now() });
   };
 
+  // Initial snapshot load — runs once on mount (or when open_kfid changes).
   useEffect(() => {
     let alive = true;
     void getCSCommandCenterView({ open_kfid: queryOpenKFID, limit: 200 })
       .then((data) => {
         if (!alive) return;
-        setView(data);
-        setViewFetchedAtMs(Date.now());
+        pageDispatch({ type: "set_view", view: data, viewFetchedAtMs: Date.now() });
         const selectedID = (
           data?.selected?.external_userid ||
           data?.sessions?.[0]?.external_userid ||
@@ -488,17 +536,18 @@ export default function CSCommandCenter() {
       })
       .catch(() => {
         if (!alive) return;
-        setView(null);
+        pageDispatch({ type: "set_view", view: null, viewFetchedAtMs: Date.now() });
       });
     return () => {
       alive = false;
     };
   }, [queryOpenKFID]);
 
+  // Load detail whenever the selected session changes.
   useEffect(() => {
     let alive = true;
     if (!selectedExternalUserID) {
-      setDetail(null);
+      pageDispatch({ type: "clear_detail" });
       return;
     }
     void getCSCommandCenterSessionDetail({
@@ -508,47 +557,129 @@ export default function CSCommandCenter() {
     })
       .then((data) => {
         if (!alive) return;
-        setDetail(data);
-        setDetailFetchedAtMs(Date.now());
+        pageDispatch({ type: "set_detail", detail: data, detailFetchedAtMs: Date.now() });
       })
       .catch(() => {
         if (!alive) return;
-        setDetail(null);
+        pageDispatch({ type: "clear_detail" });
       });
     return () => {
       alive = false;
     };
   }, [queryOpenKFID, selectedExternalUserID]);
 
+  // SSE — the single real-time subscription entry point for this page.
+  // On every server-sent update: fetch view + detail atomically and advance
+  // lastVersionRef so out-of-order / duplicate messages are ignored.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      void loadView();
-    }, COMMAND_CENTER_VIEW_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [queryOpenKFID]);
+    if (typeof EventSource === "undefined") return;
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      const currentExternalUserID = selectedExternalUserIDRef.current;
-      if (currentExternalUserID !== "") {
-        void loadDetail(currentExternalUserID);
+    const buildURL = (sinceVersion: number) => {
+      const params = new URLSearchParams();
+      if (queryOpenKFID) params.set("open_kfid", queryOpenKFID);
+      params.set("since_version", String(sinceVersion));
+      return `/api/v1/main/cs-command-center/stream?${params.toString()}`;
+    };
+
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      const es = new EventSource(buildURL(lastVersionRef.current));
+      sseRef.current = es;
+
+      es.addEventListener("update", (ev: MessageEvent) => {
+        try {
+          const payload = JSON.parse(ev.data) as { version?: number };
+          const version = payload.version ?? 0;
+          if (version > 0 && version <= lastVersionRef.current) return; // already seen
+          lastVersionRef.current = Math.max(lastVersionRef.current, version);
+        } catch {
+          // ignore malformed event
+        }
+
+        // Fetch view + detail in parallel; dispatch a single atomic update.
+        const currentUserID = selectedExternalUserIDRef.current;
+        const viewPromise = getCSCommandCenterView({ open_kfid: queryOpenKFID, limit: 200 });
+        const detailPromise = currentUserID
+          ? getCSCommandCenterSessionDetail({
+              open_kfid: queryOpenKFID,
+              external_userid: currentUserID,
+              limit: 200,
+            })
+          : Promise.resolve(null);
+
+        void Promise.all([viewPromise, detailPromise])
+          .then(([viewData, detailData]) => {
+            pageDispatch({
+              type: "update_both",
+              view: viewData,
+              detail: detailData,
+              viewFetchedAtMs: Date.now(),
+              detailFetchedAtMs: Date.now(),
+            });
+            // Auto-select first session if none is selected.
+            setSelectedExternalUserID((prev) => {
+              if (prev) return prev;
+              return (
+                viewData?.selected?.external_userid ||
+                viewData?.sessions?.[0]?.external_userid ||
+                ""
+              );
+            });
+          })
+          .catch(() => {
+            // Ignore fetch errors on SSE-triggered refreshes.
+          });
+      });
+
+      es.onerror = () => {
+        es.close();
+        sseRef.current = null;
+        // Reconnect after 3 s with exponential back-off potential.
+        reconnectTimer = setTimeout(() => {
+          connect();
+        }, 3000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
       }
-    }, COMMAND_CENTER_SESSION_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+      }
+    };
   }, [queryOpenKFID]);
 
+  // On tab becoming visible: reconnect SSE (if it dropped) and do an
+  // immediate snapshot refresh to catch any changes while hidden.
   useEffect(() => {
     if (typeof document === "undefined") return;
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
+      // Trigger immediate data refresh.
       void loadView();
       const currentExternalUserID = selectedExternalUserIDRef.current;
       if (currentExternalUserID !== "") {
         void loadDetail(currentExternalUserID);
+      }
+      // Reconnect SSE if it was closed.
+      if (!sseRef.current || sseRef.current.readyState === EventSource.CLOSED) {
+        const params = new URLSearchParams();
+        if (queryOpenKFID) params.set("open_kfid", queryOpenKFID);
+        params.set("since_version", String(lastVersionRef.current));
+        const es = new EventSource(
+          `/api/v1/main/cs-command-center/stream?${params.toString()}`,
+        );
+        sseRef.current = es;
+        es.onerror = () => {
+          es.close();
+          sseRef.current = null;
+        };
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
