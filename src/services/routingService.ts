@@ -13,7 +13,7 @@ export type RoutingRuleViewModel = {
   channelId: string
   scene: string
   mode: string
-  target: string
+  target: RoutingTarget
   actionMode: string
   actionModeLabel: string
   dispatchStrategy: string
@@ -42,6 +42,21 @@ export type RoutingChannelOption = {
   ruleCount: number
 }
 
+export type RoutingTarget = {
+  key: string
+  kind: string
+  useFullPool: boolean
+  userIds: string[]
+  departmentIds: number[]
+  userCount: number
+  departmentCount: number
+}
+
+export type RoutingTargetOption = {
+  value: string
+  target: RoutingTarget
+}
+
 export type RoutingRulesViewModel = {
   rules: RoutingRuleViewModel[]
   totalHits7d: number
@@ -50,7 +65,7 @@ export type RoutingRulesViewModel = {
   distributions: RoutingDistribution[]
   channelOptions: RoutingChannelOption[]
   modeOptions: string[]
-  targetOptions: string[]
+  targetOptions: RoutingTargetOption[]
   diagnostics: {
     warnings: string[]
     items: Array<{
@@ -77,7 +92,7 @@ type RawRoutingRuleView = {
   channel_id?: string
   scene?: string
   mode?: string
-  target?: string
+  target?: RawRoutingTarget
   action_mode?: string
   action_mode_label?: string
   dispatch_strategy?: string
@@ -92,6 +107,16 @@ type RawRoutingRuleView = {
   response_time?: string
   conditions_json?: string
   action_json?: string
+}
+
+type RawRoutingTarget = {
+  key?: string
+  kind?: string
+  use_full_pool?: boolean
+  user_ids?: string[]
+  department_ids?: number[]
+  user_count?: number
+  department_count?: number
 }
 
 type RawRoutingDistribution = {
@@ -112,7 +137,10 @@ type RawRoutingRulesViewData = {
     rule_count?: number
   }>
   mode_options?: string[]
-  target_options?: string[]
+  target_options?: Array<{
+    value?: string
+    target?: RawRoutingTarget
+  }>
   diagnostics?: {
     warnings?: string[]
     items?: Array<{
@@ -170,7 +198,12 @@ export async function getRoutingRulesView(params?: {
       }))
       .filter((item) => item.channelId.length > 0),
     modeOptions: (data.mode_options || []).map((item) => String(item || "").trim()).filter(Boolean),
-    targetOptions: (data.target_options || []).map((item) => String(item || "").trim()).filter(Boolean),
+    targetOptions: (data.target_options || [])
+      .map((item) => ({
+        value: String(item?.value || "").trim(),
+        target: mapTarget(item?.target),
+      }))
+      .filter((item) => item.value.length > 0 && item.target.key.length > 0),
     diagnostics: {
       warnings: (data.diagnostics?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean),
       items: (data.diagnostics?.items || [])
@@ -217,7 +250,7 @@ function mapRule(item: RawRoutingRuleView): RoutingRuleViewModel {
     channelId: String(item.channel_id || "").trim(),
     scene: String(item.scene || "").trim() || "无场景",
     mode: String(item.mode || "机器人+人工").trim(),
-    target: String(item.target || "默认接待池").trim(),
+    target: mapTarget(item.target),
     actionMode: String(item.action_mode || "").trim(),
     actionModeLabel: String(item.action_mode_label || "").trim(),
     dispatchStrategy: String(item.dispatch_strategy || "").trim(),
@@ -232,5 +265,17 @@ function mapRule(item: RawRoutingRuleView): RoutingRuleViewModel {
     responseTime: String(item.response_time || "0s").trim(),
     conditionsJson: String(item.conditions_json || "{}").trim() || "{}",
     actionJson: String(item.action_json || "{}").trim() || "{}",
+  }
+}
+
+function mapTarget(item?: RawRoutingTarget): RoutingTarget {
+  return {
+    key: String(item?.key || "").trim(),
+    kind: String(item?.kind || "").trim(),
+    useFullPool: item?.use_full_pool === true,
+    userIds: (item?.user_ids || []).map((value) => String(value || "").trim()).filter(Boolean),
+    departmentIds: (item?.department_ids || []).map((value) => Number(value || 0)).filter((value) => value > 0),
+    userCount: Number(item?.user_count || 0),
+    departmentCount: Number(item?.department_count || 0),
   }
 }

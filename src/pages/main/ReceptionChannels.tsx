@@ -160,7 +160,7 @@ const ACTION_MODE_OPTIONS: Array<{
   { value: "assign_human", label: "转给指定人工", description: "直接分配给明确人工，不经过排队。" },
   { value: "queue_then_human", label: "排队后待人工接入", description: "立即进入排队，等待人工接入。" },
   { value: "ai_then_assign_human", label: "AI 接待后转人工", description: "先由 AI 接待，后续再转给人工。" },
-  { value: "ai_then_queue_then_human", label: "AI 接待后排队待人工", description: "先由 AI 接待，后续进入排队等待人工。" },
+  { value: "ai_then_queue_then_human", label: "AI 命中条件后转人工 - 先进入排队，等待自动分配", description: "先由 AI 接待；命中当前路由条件后，先进入排队，再等待系统自动分配人工。" },
 ];
 
 const DISPATCH_STRATEGY_OPTIONS: Record<
@@ -178,7 +178,7 @@ const DISPATCH_STRATEGY_OPTIONS: Record<
     { value: "specific_user", label: "直接指定人工", description: "AI 接待后，直接转给明确人工。" },
     { value: "direct_if_available_else_queue", label: "有空位先直分，否则排队", description: "AI 接待后，若有空位则直分，否则进入排队。" },
   ],
-  ai_then_queue_then_human: [{ value: "always_queue", label: "始终进入排队", description: "AI 接待后统一进入排队。" }],
+  ai_then_queue_then_human: [{ value: "always_queue", label: "先进入排队，等待自动分配", description: "AI 命中条件后，先进入排队，后续由系统自动分配人工。" }],
 };
 
 const actionModeLabel = (actionMode?: string): string =>
@@ -497,18 +497,17 @@ export default function ReceptionChannels() {
             : 0),
       ),
     );
+    const fallbackTarget = detail?.fallback_route?.target;
     setFallbackUseFullPoolInput(
-      detail?.fallback_route?.use_full_pool ??
-        (((detail?.fallback_route?.human_user_ids || []).length === 0 &&
-          (detail?.fallback_route?.human_department_ids || []).length === 0)),
+      detail?.fallback_route?.use_full_pool ?? fallbackTarget?.useFullPool ?? false,
     );
     setSelectedFallbackTargets(
       normalizeSelectionItems([
-        ...(detail?.fallback_route?.human_user_ids || []).map((userID) => ({
+        ...(fallbackTarget?.userIds || []).map((userID) => ({
           type: "user" as const,
           id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
         })),
-        ...(detail?.fallback_route?.human_department_ids || []).map((departmentID) => ({
+        ...(fallbackTarget?.departmentIds || []).map((departmentID) => ({
           type: "department" as const,
           id: String(departmentID),
         })),

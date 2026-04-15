@@ -1,4 +1,5 @@
 import { requestFormData, requestJSON } from "./http";
+import type { RoutingTarget } from "./routingService";
 
 type APIReply<T> = {
   code?: number;
@@ -60,10 +61,7 @@ export type ReceptionChannelDetail = {
     dispatch_strategy?: string;
     dispatch_strategy_label?: string;
     dispatch_capacity_threshold?: number;
-    human_target_type?: string;
-    human_user_ids?: string[];
-    human_department_ids?: number[];
-    human_target_display?: string;
+    target?: RoutingTarget;
     queue_enabled?: boolean;
     requires_human?: boolean;
     uses_default_pool?: boolean;
@@ -74,11 +72,11 @@ export type ReceptionChannelDetail = {
     system_queue_enabled?: boolean;
     system_queue_state?: string;
     fallback_mode?: string;
-    pending_human_target_display?: string;
+    pending_target?: RoutingTarget;
     routing_state?: string;
     execution_status?: string;
     waiting_human_accept?: boolean;
-    effective_human_target_display?: string;
+    effective_target?: RoutingTarget;
     state_hint?: string;
   };
   route_bindings?: Array<{
@@ -86,7 +84,7 @@ export type ReceptionChannelDetail = {
     rule_name?: string;
     scene?: string;
     mode?: string;
-    target?: string;
+    target?: RoutingTarget;
     target_valid?: boolean;
     target_issue?: string;
     priority?: number;

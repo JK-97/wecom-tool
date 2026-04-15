@@ -25,6 +25,7 @@ import { useSearchParams } from "react-router-dom"
 import {
   executeRoutingRulesCommand,
   getRoutingRulesView,
+  type RoutingTarget,
   type RoutingRuleViewModel,
   type RoutingRulesViewModel,
 } from "@/services/routingService"
@@ -87,6 +88,44 @@ type RoutingDispatchStrategy =
 
 const DEFAULT_DIRECT_DISPATCH_THRESHOLD = 3
 
+function formatRoutingTargetLabel(target?: RoutingTarget): string {
+  const kind = (target?.kind || "").trim()
+  const userCount = Number(target?.userCount || target?.userIds?.length || 0)
+  const departmentCount = Number(target?.departmentCount || target?.departmentIds?.length || 0)
+  switch (kind) {
+    case "ai_only":
+      return "无需人工接待"
+    case "current_pool":
+      return "当前接待池"
+    case "full_pool":
+      return "整个接待池"
+    case "specific_user":
+      return "指定 1 名成员"
+    case "pool_subset": {
+      const parts: string[] = []
+      if (userCount > 0) parts.push(`${userCount} 名成员`)
+      if (departmentCount > 0) parts.push(`${departmentCount} 个部门`)
+      return parts.join(" / ") || "接待池对象子集"
+    }
+    default:
+      return "当前接待池"
+  }
+}
+
+function formatRoutingTargetDetail(target?: RoutingTarget): string {
+  const kind = (target?.kind || "").trim()
+  switch (kind) {
+    case "specific_user":
+      return "直接指定人工"
+    case "full_pool":
+      return "使用整个接待池"
+    case "pool_subset":
+      return "接待池对象子集"
+    default:
+      return ""
+  }
+}
+
 const ACTION_MODE_OPTIONS: Array<{
   value: RoutingActionMode
   label: string
@@ -97,7 +136,7 @@ const ACTION_MODE_OPTIONS: Array<{
   { value: "assign_human", label: "转给指定人工", description: "直接分配给明确人工，不经过排队。" },
   { value: "queue_then_human", label: "排队后待人工接入", description: "立即进入排队，等待人工接入。" },
   { value: "ai_then_assign_human", label: "AI 接待后转人工", description: "先由 AI 接待，后续再转给人工。" },
-  { value: "ai_then_queue_then_human", label: "AI 接待后排队待人工", description: "先由 AI 接待，后续进入排队等待人工。" },
+  { value: "ai_then_queue_then_human", label: "AI 命中条件后转人工 - 先进入排队，等待自动分配", description: "先由 AI 接待；命中当前路由条件后，先进入排队，再等待系统自动分配人工。" },
 ]
 
 const DISPATCH_STRATEGY_OPTIONS: Record<RoutingActionMode, Array<{
@@ -116,7 +155,7 @@ const DISPATCH_STRATEGY_OPTIONS: Record<RoutingActionMode, Array<{
     { value: "specific_user", label: "直接指定人工", description: "AI 接待后，直接转给明确人工。" },
     { value: "direct_if_available_else_queue", label: "有空位先直分，否则排队", description: "AI 接待后，若有空位则直分，否则进入排队。" },
   ],
-  ai_then_queue_then_human: [{ value: "always_queue", label: "始终进入排队", description: "AI 接待后统一进入排队。" }],
+  ai_then_queue_then_human: [{ value: "always_queue", label: "先进入排队，等待自动分配", description: "AI 命中条件后，先进入排队，后续由系统自动分配人工。" }],
 }
 
 function actionModeLabel(actionMode?: string): string {
@@ -286,20 +325,19 @@ export default function RoutingRules() {
             : 0),
       ),
     )
+    const fallbackTarget = detail?.fallback_route?.target
     setFallbackUseFullPoolInput(
       actionMode === "ai_only"
         ? true
-        : detail?.fallback_route?.use_full_pool ??
-            (((detail?.fallback_route?.human_user_ids || []).length === 0 &&
-              (detail?.fallback_route?.human_department_ids || []).length === 0)),
+        : detail?.fallback_route?.use_full_pool ?? fallbackTarget?.useFullPool ?? false,
     )
     setSelectedFallbackTargets(
       normalizeSelectionItems([
-        ...((detail?.fallback_route?.human_user_ids || []).map((userID) => ({
+        ...((fallbackTarget?.userIds || []).map((userID) => ({
           type: "user" as const,
           id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
         }))),
-        ...((detail?.fallback_route?.human_department_ids || []).map(
+        ...((fallbackTarget?.departmentIds || []).map(
           (departmentID) => ({
             type: "department" as const,
             id: String(Number(departmentID || 0)),
@@ -1067,8 +1105,8 @@ export default function RoutingRules() {
                   >
                     <option value="all">全部目标</option>
                     {view.targetOptions.map((item) => (
-                      <option key={item} value={item}>
-                        {item}
+                      <option key={item.value} value={item.value}>
+                        {formatRoutingTargetLabel(item.target)}
                       </option>
                     ))}
                   </select>
@@ -1218,12 +1256,10 @@ export default function RoutingRules() {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="font-medium text-gray-700">{rule.target}</div>
-                        {rule.actionMode !== "ai_only" ? (
+                        <div className="font-medium text-gray-700">{formatRoutingTargetLabel(rule.target)}</div>
+                        {rule.actionMode !== "ai_only" && formatRoutingTargetDetail(rule.target) ? (
                           <div className="mt-1 text-[11px] text-gray-500">
-                            {rule.dispatchStrategy === "specific_user"
-                              ? "直接指定人工"
-                              : rule.target}
+                            {formatRoutingTargetDetail(rule.target)}
                           </div>
                         ) : null}
                       </td>

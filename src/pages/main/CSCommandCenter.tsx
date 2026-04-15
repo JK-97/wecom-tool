@@ -253,6 +253,19 @@ function readRoutingActionHeadline(record?: RoutingRecord): string {
     .trim();
 }
 
+function shouldShowRoutingHeadlineTarget(record?: RoutingRecord): boolean {
+  const action = readRoutingActionHeadline(record);
+  if (!action) return false;
+  switch (action) {
+    case "转给":
+    case "安排转给":
+    case "安排转给人工":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function formatQueueWaitDuration(totalSeconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(safeSeconds / 3600);
@@ -280,7 +293,13 @@ function readLiveQueueWaitText(
 function resolveSessionStatusPresentation(
   session?: CommandCenterSession | null,
 ): SessionStatusPresentation {
-  const bucket = session ? resolveSessionBucket(session) : "queue";
+  if (!session) {
+    return {
+      label: "",
+      badgeClassName: "",
+    };
+  }
+  const bucket = resolveSessionBucket(session);
   const state = Number(session?.session_state || 0);
   if (bucket === "closed" || state === 4) {
     return {
@@ -988,11 +1007,13 @@ export default function CSCommandCenter() {
               <h3 className="truncate text-lg font-semibold text-gray-900">
                 {(selectedSession?.name || "未选择会话").trim()}
               </h3>
-              <Badge
-                className={sessionStatus.badgeClassName}
-              >
-                {sessionStatus.label}
-              </Badge>
+              {sessionStatus.label ? (
+                <Badge
+                  className={sessionStatus.badgeClassName}
+                >
+                  {sessionStatus.label}
+                </Badge>
+              ) : null}
               <span className="min-w-0 text-sm text-gray-500 border-l border-gray-200 pl-4">
                 接待人：
                 {assignedDisplayForHeader.displayUserID ? (
@@ -1041,7 +1062,7 @@ export default function CSCommandCenter() {
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">当前状态:</span>
               <span className="text-gray-900">
-                {(latestRoutingRecord?.details?.result_state_label || sessionStatus.label || "-").trim()}
+                {(sessionStatus.label || latestRoutingRecord?.details?.result_state_label || "-").trim()}
               </span>
             </div>
             {slaBadgeLabel ? (
@@ -1377,7 +1398,7 @@ export default function CSCommandCenter() {
                                   <span className="mx-1.5">
                                     {readRoutingActionHeadline(record)}
                                   </span>
-                                  {(record.target_label || "").trim() ? (
+                                  {shouldShowRoutingHeadlineTarget(record) && (record.target_label || "").trim() ? (
                                     renderRoutingIdentity({
                                       userid: record.target_userid,
                                       fallback: record.target_label,
@@ -1392,14 +1413,14 @@ export default function CSCommandCenter() {
                                       to={readRoutingRuleLink(record)}
                                       className="text-xs text-blue-600 hover:underline"
                                     >
-                                      匹配路由：{readRoutingRuleName(record)}
+                                      按路由：{readRoutingRuleName(record)}
                                     </Link>
                                   </div>
                                 ) : null}
                                 {hasRoutingRecordDetails(record) ? (
                                   <details className="mt-1 text-[11px] text-gray-500">
                                     <summary className="cursor-pointer list-none select-none text-gray-400 hover:text-gray-600">
-                                      查看详情
+                                      查看处理细节
                                     </summary>
                                     <div className="mt-2 space-y-2 border-l border-gray-100 pl-3">
                                       <SessionEntryContextRow
