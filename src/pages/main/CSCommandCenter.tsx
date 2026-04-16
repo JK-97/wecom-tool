@@ -17,17 +17,19 @@ import {
   ChevronRight,
   Star,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Link } from "react-router-dom";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import {
-  getCSCommandCenterSessionDetail,
-  getCSCommandCenterView,
   transitionKFServiceState,
-  type CommandCenterMessage,
-  type CommandCenterSession,
-  type CommandCenterSessionDetail,
-  type CommandCenterViewModel,
 } from "@/services/commandCenterService";
 import {
   listKFServicerAssignments,
@@ -43,11 +45,23 @@ import {
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
+import {
+  bootstrapCommandCenter,
+  createCommandCenterStream,
+} from "./CSCommandCenter.client";
+import {
+  commandCenterReducer,
+  initialCommandCenterState,
+  normalizePatchEvent,
+  selectCommandCenterDetail,
+  selectCommandCenterViewModel,
+  type CommandCenterMessage,
+  type CommandCenterSession,
+  type CommandCenterSessionDetail,
+  type DetailPanelTab,
+  type SessionTab,
+} from "./CSCommandCenter.store";
 
-type SessionTab = "queue" | "active" | "closed";
-type DetailPanelTab = "monitor" | "upgrade" | "session";
-const COMMAND_CENTER_SESSION_POLL_INTERVAL_MS = 5000;
-const COMMAND_CENTER_VIEW_POLL_INTERVAL_MS = 15000;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
 
 type SessionActionDescriptor = {
@@ -333,39 +347,22 @@ function resolveSessionStatusPresentation(
 
 export default function CSCommandCenter() {
   const auth = useAuth();
-  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
-  const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
-  const [isEndModalOpen, setIsEndModalOpen] = useState(false);
-  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
-  const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false);
-  const [isRoutingHistoryExpanded, setIsRoutingHistoryExpanded] = useState(false);
-
-  const [view, setView] = useState<CommandCenterViewModel | null>(null);
-  const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null);
-  const [selectedExternalUserID, setSelectedExternalUserID] = useState("");
-  const [activeTab, setActiveTab] = useState<SessionTab>("queue");
-  const [detailPanelTab, setDetailPanelTab] = useState<DetailPanelTab>("monitor");
-  const [keyword, setKeyword] = useState("");
-  const [notice, setNotice] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [state, dispatch] = useReducer(
+    commandCenterReducer,
+    initialCommandCenterState,
+  );
   const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
   const [sessionServicerAssignments, setSessionServicerAssignments] = useState<KFServicerAssignment[]>([]);
   const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
   const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
-  const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
-  const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [transferSearch, setTransferSearch] = useState("");
-  const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
   const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
   const servicerAssignmentsCacheRef = useRef(new Map<string, KFServicerAssignment[]>());
   const selectedExternalUserIDRef = useRef("");
-
-  const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
-  const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
-  const [upgradeTask, setUpgradeTask] = useState("");
-  const [upgradeStars, setUpgradeStars] = useState(4);
+  const cursorRef = useRef(0);
+  const streamRef = useRef<EventSource | null>(null);
+  const bootstrapSeqRef = useRef(0);
 
   const queryOpenKFID = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -374,6 +371,26 @@ export default function CSCommandCenter() {
   }, []);
 
   const corpID = (auth.corp?.id || "").trim();
+  const view = useMemo(() => selectCommandCenterViewModel(state), [state]);
+  const detail = useMemo(() => selectCommandCenterDetail(state), [state]);
+  const selectedExternalUserID = state.selectedExternalUserID;
+  const activeTab = state.ui.activeTab;
+  const detailPanelTab = state.ui.detailPanelTab;
+  const keyword = state.ui.keyword;
+  const notice = state.ui.notice;
+  const isSubmitting = state.ui.isSubmitting;
+  const isTransferModalOpen = state.ui.isTransferModalOpen;
+  const isQueueModalOpen = state.ui.isQueueModalOpen;
+  const isEndModalOpen = state.ui.isEndModalOpen;
+  const isUpgradeModalOpen = state.ui.isUpgradeModalOpen;
+  const isUpgradeSuccess = state.ui.isUpgradeSuccess;
+  const isRoutingHistoryExpanded = state.ui.isRoutingHistoryExpanded;
+  const transferSearch = state.ui.transferSearch;
+  const selectedTransferServicerID = state.ui.selectedTransferServicerID;
+  const upgradeOwner = state.ui.upgradeOwner;
+  const upgradeReason = state.ui.upgradeReason;
+  const upgradeTask = state.ui.upgradeTask;
+  const upgradeStars = state.ui.upgradeStars;
   const sessionServicerLookup = useMemo(
     () => buildServicerIdentityLookup(sessionServicerAssignments),
     [sessionServicerAssignments],
@@ -400,8 +417,17 @@ export default function CSCommandCenter() {
   }, [selectedExternalUserID]);
 
   useEffect(() => {
-    setIsRoutingHistoryExpanded(false);
+    dispatch({
+      type: "SET_UI",
+      payload: {
+        isRoutingHistoryExpanded: false,
+      },
+    });
   }, [selectedExternalUserID]);
+
+  useEffect(() => {
+    cursorRef.current = state.cursor;
+  }, [state.cursor]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -442,118 +468,84 @@ export default function CSCommandCenter() {
     };
   }, []);
 
-  const loadView = async () => {
-    const data = await getCSCommandCenterView({
-      open_kfid: queryOpenKFID,
-      limit: 200,
-    });
-    setView(data);
-    setViewFetchedAtMs(Date.now());
-    const selectedID = (
-      data?.selected?.external_userid ||
-      data?.sessions?.[0]?.external_userid ||
-      ""
-    ).trim();
-    setSelectedExternalUserID((prev) => prev || selectedID);
-  };
-
-  const loadDetail = async (externalUserID: string) => {
-    const selected = (externalUserID || "").trim();
-    if (!selected) {
-      setDetail(null);
-      return;
+  const closeCommandCenterStream = useEffectEvent(() => {
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
     }
-    const data = await getCSCommandCenterSessionDetail({
-      open_kfid: queryOpenKFID,
-      external_userid: selected,
-      limit: 200,
-    });
-    setDetail(data);
-    setDetailFetchedAtMs(Date.now());
-  };
+  });
 
-  useEffect(() => {
-    let alive = true;
-    void getCSCommandCenterView({ open_kfid: queryOpenKFID, limit: 200 })
-      .then((data) => {
-        if (!alive) return;
-        setView(data);
-        setViewFetchedAtMs(Date.now());
-        const selectedID = (
-          data?.selected?.external_userid ||
-          data?.sessions?.[0]?.external_userid ||
-          ""
-        ).trim();
-        setSelectedExternalUserID(selectedID);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setView(null);
+  const runBootstrap = useEffectEvent(
+    async (requestedSelectedExternalUserID?: string) => {
+      const seq = bootstrapSeqRef.current + 1;
+      bootstrapSeqRef.current = seq;
+      closeCommandCenterStream();
+      dispatch({
+        type: "REBOOTSTRAP",
+        pendingSelectedExternalUserID: requestedSelectedExternalUserID,
       });
-    return () => {
-      alive = false;
-    };
-  }, [queryOpenKFID]);
-
-  useEffect(() => {
-    let alive = true;
-    if (!selectedExternalUserID) {
-      setDetail(null);
-      return;
-    }
-    void getCSCommandCenterSessionDetail({
-      open_kfid: queryOpenKFID,
-      external_userid: selectedExternalUserID,
-      limit: 200,
-    })
-      .then((data) => {
-        if (!alive) return;
-        setDetail(data);
-        setDetailFetchedAtMs(Date.now());
-      })
-      .catch(() => {
-        if (!alive) return;
-        setDetail(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [queryOpenKFID, selectedExternalUserID]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      void loadView();
-    }, COMMAND_CENTER_VIEW_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [queryOpenKFID]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      const currentExternalUserID = selectedExternalUserIDRef.current;
-      if (currentExternalUserID !== "") {
-        void loadDetail(currentExternalUserID);
+      try {
+        const snapshot = await bootstrapCommandCenter({
+          openKFID: queryOpenKFID,
+          selectedExternalUserID:
+            (requestedSelectedExternalUserID || "").trim() || undefined,
+        });
+        if (bootstrapSeqRef.current !== seq) {
+          return;
+        }
+        dispatch({
+          type: "INIT_FROM_BOOTSTRAP",
+          payload: snapshot,
+          receivedAtMs: Date.now(),
+        });
+        const stream = createCommandCenterStream({
+          openKFID: queryOpenKFID,
+          sinceCursor: Number(snapshot.cursor || 0),
+          onPatch: (event) => {
+            const patch = normalizePatchEvent(event);
+            if (!patch || patch.cursor <= cursorRef.current) {
+              return;
+            }
+            dispatch({
+              type: "APPLY_PATCH",
+              patch,
+              receivedAtMs: Date.now(),
+            });
+          },
+          onRebootstrapRequired: () => {
+            closeCommandCenterStream();
+            void runBootstrap(selectedExternalUserIDRef.current);
+          },
+          onError: () => {
+            // EventSource automatically reconnects and carries Last-Event-ID.
+          },
+        });
+        if (bootstrapSeqRef.current !== seq) {
+          stream.close();
+          return;
+        }
+        streamRef.current = stream;
+      } catch (error) {
+        if (bootstrapSeqRef.current !== seq) {
+          return;
+        }
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            isBootstrapping: false,
+            bootstrapError: normalizeErrorMessage(error),
+            notice: normalizeErrorMessage(error),
+          },
+        });
       }
-    }, COMMAND_CENTER_SESSION_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [queryOpenKFID]);
+    },
+  );
 
   useEffect(() => {
-    if (typeof document === "undefined") return;
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "visible") return;
-      void loadView();
-      const currentExternalUserID = selectedExternalUserIDRef.current;
-      if (currentExternalUserID !== "") {
-        void loadDetail(currentExternalUserID);
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void runBootstrap("");
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      bootstrapSeqRef.current += 1;
+      closeCommandCenterStream();
     };
   }, [queryOpenKFID]);
 
@@ -599,17 +591,26 @@ export default function CSCommandCenter() {
     if (!isTransferModalOpen) return;
     if (!openKFID) {
       setTransferCandidates([]);
-      setSelectedTransferServicerID("");
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          selectedTransferServicerID: "",
+        },
+      });
       return;
     }
     const cached = transferCandidatesCacheRef.current.get(openKFID);
     if (cached) {
       setTransferCandidates(cached);
-      setSelectedTransferServicerID((prev) => {
-        if (prev && cached.some((item) => item.servicerUserID === prev)) {
-          return prev;
-        }
-        return cached[0]?.servicerUserID || "";
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          selectedTransferServicerID:
+            selectedTransferServicerID &&
+            cached.some((item) => item.servicerUserID === selectedTransferServicerID)
+              ? selectedTransferServicerID
+              : cached[0]?.servicerUserID || "",
+        },
       });
       return;
     }
@@ -621,18 +622,29 @@ export default function CSCommandCenter() {
         const nextCandidates = buildTransferCandidates(assignments);
         transferCandidatesCacheRef.current.set(openKFID, nextCandidates);
         setTransferCandidates(nextCandidates);
-        setSelectedTransferServicerID((prev) => {
-          if (prev && nextCandidates.some((item) => item.servicerUserID === prev)) {
-            return prev;
-          }
-          return nextCandidates[0]?.servicerUserID || "";
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            selectedTransferServicerID:
+              selectedTransferServicerID &&
+              nextCandidates.some(
+                (item) => item.servicerUserID === selectedTransferServicerID,
+              )
+                ? selectedTransferServicerID
+                : nextCandidates[0]?.servicerUserID || "",
+          },
         });
       })
       .catch((error) => {
         if (!alive) return;
         setTransferCandidates([]);
-        setSelectedTransferServicerID("");
-        setNotice(normalizeErrorMessage(error));
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            selectedTransferServicerID: "",
+            notice: normalizeErrorMessage(error),
+          },
+        });
       })
       .finally(() => {
         if (!alive) return;
@@ -641,7 +653,7 @@ export default function CSCommandCenter() {
     return () => {
       alive = false;
     };
-  }, [isTransferModalOpen, selectedSession?.open_kfid]);
+  }, [dispatch, isTransferModalOpen, selectedSession?.open_kfid, selectedTransferServicerID]);
 
   const transferCandidatesFiltered = useMemo(() => {
     const query = transferSearch.trim().toLowerCase();
@@ -699,38 +711,69 @@ export default function CSCommandCenter() {
     successMessage: string;
   }) => {
     if (!selectedSession?.open_kfid || !selectedSession?.external_userid) {
-      setNotice("未选择有效会话");
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          notice: "未选择有效会话",
+        },
+      });
       return false;
     }
     try {
-      setIsSubmitting(true);
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          isSubmitting: true,
+        },
+      });
       await transitionKFServiceState({
         open_kfid: selectedSession.open_kfid,
         external_userid: selectedSession.external_userid,
         service_state: input.serviceState,
         servicer_userid: input.servicerUserID,
       });
-      setNotice(input.successMessage);
-      await Promise.all([
-        loadView(),
-        loadDetail(selectedSession.external_userid || ""),
-      ]);
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          notice: input.successMessage,
+        },
+      });
       return true;
     } catch (error) {
-      setNotice(describeSessionActionError(error));
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          notice: describeSessionActionError(error),
+        },
+      });
       return false;
     } finally {
-      setIsSubmitting(false);
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          isSubmitting: false,
+        },
+      });
     }
   };
 
   const handleUpgrade = async () => {
     if (!selectedSession?.external_userid) {
-      setNotice("未选择会话");
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          notice: "未选择会话",
+        },
+      });
       return;
     }
     try {
-      setIsSubmitting(true);
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          isSubmitting: true,
+        },
+      });
       const result = await executeContactSidebarCommand({
         command: "cs_upgrade_to_contact",
         external_userid: selectedSession.external_userid,
@@ -744,33 +787,74 @@ export default function CSCommandCenter() {
           contact_name: selectedSession.name,
         },
       });
-      setNotice((result?.message || "升级命令已提交").trim());
-      setIsUpgradeModalOpen(false);
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          notice: (result?.message || "升级命令已提交").trim(),
+          isUpgradeModalOpen: false,
+        },
+      });
       if (result?.success) {
-        setIsUpgradeSuccess(true);
-        setTimeout(() => setIsUpgradeSuccess(false), 2500);
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            isUpgradeSuccess: true,
+          },
+        });
+        window.setTimeout(() => {
+          dispatch({
+            type: "SET_UI",
+            payload: {
+              isUpgradeSuccess: false,
+            },
+          });
+        }, 2500);
       }
-      await loadView();
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          notice: normalizeErrorMessage(error),
+        },
+      });
     } finally {
-      setIsSubmitting(false);
+      dispatch({
+        type: "SET_UI",
+        payload: {
+          isSubmitting: false,
+        },
+      });
     }
   };
 
   const handleActionClick = async (action: SessionActionDescriptor) => {
     switch (action.key) {
       case "send_to_queue": {
-        setIsQueueModalOpen(true);
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            isQueueModalOpen: true,
+          },
+        });
         return;
       }
       case "transfer_to_human": {
-        setTransferSearch("");
-        setIsTransferModalOpen(true);
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            transferSearch: "",
+            isTransferModalOpen: true,
+          },
+        });
         return;
       }
       case "end_session": {
-        setIsEndModalOpen(true);
+        dispatch({
+          type: "SET_UI",
+          payload: {
+            isEndModalOpen: true,
+          },
+        });
         return;
       }
       default:
@@ -823,7 +907,7 @@ export default function CSCommandCenter() {
   }, [currentSessionMeta, effectiveSessionState, isTransferModalOpen, transferCandidates.length]);
   const queueWaitText = readLiveQueueWaitText(
     currentSessionMeta,
-    detail?.session ? detailFetchedAtMs : viewFetchedAtMs,
+    state.ui.dataUpdatedAtMs,
     nowMs,
   );
   const slaStatusToken = ((selectedSession?.reply_sla_status || "normal").trim() || "normal").toLowerCase();
@@ -849,7 +933,14 @@ export default function CSCommandCenter() {
           </h2>
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as SessionTab)}
+            onValueChange={(value) =>
+              dispatch({
+                type: "SET_UI",
+                payload: {
+                  activeTab: value as SessionTab,
+                },
+              })
+            }
           >
             <TabsList className="w-full grid grid-cols-3 bg-white border border-gray-200">
               <TabsTrigger
@@ -875,7 +966,14 @@ export default function CSCommandCenter() {
             <input
               type="text"
               value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
+              onChange={(event) =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    keyword: event.target.value,
+                  },
+                })
+              }
               placeholder="搜索客户昵称或消息内容..."
               className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -894,7 +992,11 @@ export default function CSCommandCenter() {
                 (session.external_userid || "").trim() ===
                 (selectedSession?.external_userid || "").trim();
               const bucket = resolveSessionBucket(session);
-              const queueWaitText = readLiveQueueWaitText(session, viewFetchedAtMs, nowMs);
+              const queueWaitText = readLiveQueueWaitText(
+                session,
+                state.ui.dataUpdatedAtMs,
+                nowMs,
+              );
               const replyOverdue =
                 session.reply_overdue === true || session.overdue === true;
               const slaStatus = (session.reply_sla_status || "")
@@ -910,11 +1012,15 @@ export default function CSCommandCenter() {
                     "session"
                   ).trim()}
                   className={`p-4 cursor-pointer transition-colors ${selected ? "bg-blue-50/50 border-l-4 border-blue-600" : "hover:bg-gray-50"}`}
-                  onClick={() =>
-                    setSelectedExternalUserID(
-                      (session.external_userid || "").trim(),
-                    )
-                  }
+                  onClick={() => {
+                    const nextExternalUserID = (
+                      session.external_userid || ""
+                    ).trim();
+                    if (!nextExternalUserID || nextExternalUserID === selectedExternalUserID) {
+                      return;
+                    }
+                    void runBootstrap(nextExternalUserID);
+                  }}
                 >
                   <div className="flex items-start justify-between mb-1">
                     <div className="flex items-center gap-2">
@@ -1181,7 +1287,14 @@ export default function CSCommandCenter() {
           <div className="w-[320px] shrink-0 border-l border-gray-200 bg-white">
             <Tabs
               value={detailPanelTab}
-              onValueChange={(value) => setDetailPanelTab(value as DetailPanelTab)}
+              onValueChange={(value) =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    detailPanelTab: value as DetailPanelTab,
+                  },
+                })
+              }
               className="flex h-full min-h-0 flex-col"
             >
               <div className="border-b border-gray-100 px-3 py-3">
@@ -1330,7 +1443,14 @@ export default function CSCommandCenter() {
                   <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-4">
                     <Button
                       className="w-full bg-blue-600 text-xs hover:bg-blue-700"
-                      onClick={() => setIsUpgradeModalOpen(true)}
+                      onClick={() =>
+                        dispatch({
+                          type: "SET_UI",
+                          payload: {
+                            isUpgradeModalOpen: true,
+                          },
+                        })
+                      }
                     >
                       升级为客户
                     </Button>
@@ -1497,7 +1617,14 @@ export default function CSCommandCenter() {
                       <button
                         type="button"
                         className="mt-2 text-[11px] font-medium text-blue-600 hover:underline"
-                        onClick={() => setIsRoutingHistoryExpanded((value) => !value)}
+                        onClick={() =>
+                          dispatch({
+                            type: "SET_UI",
+                            payload: {
+                              isRoutingHistoryExpanded: !isRoutingHistoryExpanded,
+                            },
+                          })
+                        }
                       >
                         {isRoutingHistoryExpanded
                           ? "收起"
@@ -1520,7 +1647,14 @@ export default function CSCommandCenter() {
 
       <Dialog
         isOpen={isUpgradeModalOpen}
-        onClose={() => setIsUpgradeModalOpen(false)}
+        onClose={() =>
+          dispatch({
+            type: "SET_UI",
+            payload: {
+              isUpgradeModalOpen: false,
+            },
+          })
+        }
         title={
           <div className="flex items-center gap-2">
             <UserPlus className="w-5 h-5 text-blue-600" />
@@ -1532,7 +1666,14 @@ export default function CSCommandCenter() {
           <>
             <Button
               variant="outline"
-              onClick={() => setIsUpgradeModalOpen(false)}
+              onClick={() =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    isUpgradeModalOpen: false,
+                  },
+                })
+              }
             >
               取消
             </Button>
@@ -1561,7 +1702,14 @@ export default function CSCommandCenter() {
               </label>
               <input
                 value={upgradeOwner}
-                onChange={(event) => setUpgradeOwner(event.target.value)}
+                onChange={(event) =>
+                  dispatch({
+                    type: "SET_UI",
+                    payload: {
+                      upgradeOwner: event.target.value,
+                    },
+                  })
+                }
                 className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -1574,7 +1722,14 @@ export default function CSCommandCenter() {
                   <Star
                     key={i}
                     className={`w-5 h-5 cursor-pointer ${i <= upgradeStars ? "text-yellow-400 fill-yellow-400" : "text-gray-200"}`}
-                    onClick={() => setUpgradeStars(i)}
+                    onClick={() =>
+                      dispatch({
+                        type: "SET_UI",
+                        payload: {
+                          upgradeStars: i,
+                        },
+                      })
+                    }
                   />
                 ))}
               </div>
@@ -1587,7 +1742,14 @@ export default function CSCommandCenter() {
             </label>
             <input
               value={upgradeReason}
-              onChange={(event) => setUpgradeReason(event.target.value)}
+              onChange={(event) =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    upgradeReason: event.target.value,
+                  },
+                })
+              }
               className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -1599,7 +1761,14 @@ export default function CSCommandCenter() {
             <Textarea
               className="text-sm min-h-[80px]"
               value={upgradeTask}
-              onChange={(event) => setUpgradeTask(event.target.value)}
+              onChange={(event) =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    upgradeTask: event.target.value,
+                  },
+                })
+              }
               placeholder="请输入需要负责人执行的具体任务"
             />
           </div>
@@ -1617,7 +1786,14 @@ export default function CSCommandCenter() {
 
       <Dialog
         isOpen={isTransferModalOpen}
-        onClose={() => setIsTransferModalOpen(false)}
+        onClose={() =>
+          dispatch({
+            type: "SET_UI",
+            payload: {
+              isTransferModalOpen: false,
+            },
+          })
+        }
         title="转给指定人工"
         className="max-w-[640px]"
         footer={
@@ -1625,8 +1801,13 @@ export default function CSCommandCenter() {
             <Button
               variant="outline"
               onClick={() => {
-                setIsTransferModalOpen(false);
-                setTransferSearch("");
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    isTransferModalOpen: false,
+                    transferSearch: "",
+                  },
+                });
               }}
             >
               取消
@@ -1641,8 +1822,13 @@ export default function CSCommandCenter() {
                   successMessage: "会话已转给指定人工。",
                 });
                 if (succeeded) {
-                  setIsTransferModalOpen(false);
-                  setTransferSearch("");
+                  dispatch({
+                    type: "SET_UI",
+                    payload: {
+                      isTransferModalOpen: false,
+                      transferSearch: "",
+                    },
+                  });
                 }
               }}
             >
@@ -1660,7 +1846,14 @@ export default function CSCommandCenter() {
             <input
               type="text"
               value={transferSearch}
-              onChange={(event) => setTransferSearch(event.target.value)}
+              onChange={(event) =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    transferSearch: event.target.value,
+                  },
+                })
+              }
               placeholder="搜索当前接待池中的人工"
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -1687,7 +1880,14 @@ export default function CSCommandCenter() {
                         key={candidate.servicerUserID}
                         type="button"
                         className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors ${selected ? "bg-blue-50" : "hover:bg-gray-50"}`}
-                        onClick={() => setSelectedTransferServicerID(candidate.servicerUserID)}
+                        onClick={() =>
+                          dispatch({
+                            type: "SET_UI",
+                            payload: {
+                              selectedTransferServicerID: candidate.servicerUserID,
+                            },
+                          })
+                        }
                       >
                         <div className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"}`} />
                         <div className="min-w-0 flex-1">
@@ -1721,12 +1921,29 @@ export default function CSCommandCenter() {
 
       <Dialog
         isOpen={isQueueModalOpen}
-        onClose={() => setIsQueueModalOpen(false)}
+        onClose={() =>
+          dispatch({
+            type: "SET_UI",
+            payload: {
+              isQueueModalOpen: false,
+            },
+          })
+        }
         title="送入待接入池"
         className="max-w-[420px]"
         footer={
           <>
-            <Button variant="outline" onClick={() => setIsQueueModalOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    isQueueModalOpen: false,
+                  },
+                })
+              }
+            >
               取消
             </Button>
             <Button
@@ -1738,7 +1955,12 @@ export default function CSCommandCenter() {
                   successMessage: "会话已送入待接入池。",
                 });
                 if (succeeded) {
-                  setIsQueueModalOpen(false);
+                  dispatch({
+                    type: "SET_UI",
+                    payload: {
+                      isQueueModalOpen: false,
+                    },
+                  });
                 }
               }}
             >
@@ -1759,7 +1981,14 @@ export default function CSCommandCenter() {
 
       <Dialog
         isOpen={isEndModalOpen}
-        onClose={() => setIsEndModalOpen(false)}
+        onClose={() =>
+          dispatch({
+            type: "SET_UI",
+            payload: {
+              isEndModalOpen: false,
+            },
+          })
+        }
         title={
           <div className="flex items-center gap-2 text-red-600">
             <AlertTriangle className="w-5 h-5" />
@@ -1769,7 +1998,17 @@ export default function CSCommandCenter() {
         className="max-w-[400px]"
         footer={
           <>
-            <Button variant="outline" onClick={() => setIsEndModalOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() =>
+                dispatch({
+                  type: "SET_UI",
+                  payload: {
+                    isEndModalOpen: false,
+                  },
+                })
+              }
+            >
               暂不结束
             </Button>
             <Button
@@ -1781,7 +2020,12 @@ export default function CSCommandCenter() {
                   successMessage: "会话已结束。",
                 });
                 if (succeeded) {
-                  setIsEndModalOpen(false);
+                  dispatch({
+                    type: "SET_UI",
+                    payload: {
+                      isEndModalOpen: false,
+                    },
+                  });
                 }
               }}
             >

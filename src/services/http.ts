@@ -14,8 +14,11 @@ export type JSONRequestOptions = RequestInit & {
   skipAuthRedirect?: boolean
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim()
-const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000)
+const importMetaEnv = (((import.meta as ImportMeta & {
+  env?: Record<string, string | undefined>
+}).env) ?? {}) as Record<string, string | undefined>
+const API_BASE_URL = (importMetaEnv.VITE_API_BASE_URL || "").trim()
+const API_TIMEOUT_MS = Number(importMetaEnv.VITE_API_TIMEOUT_MS || 15000)
 let redirectingToLogin = false
 
 export async function requestJSON<T>(path: string, init?: JSONRequestOptions): Promise<T> {
