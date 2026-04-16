@@ -80,6 +80,9 @@ export type CommandCenterViewModel = {
 export type CommandCenterMessage = {
   id?: string;
   sender?: string;
+  sender_userid?: string;
+  sender_display_userid?: string;
+  sender_display_fallback?: string;
   content?: string;
   timestamp?: string;
   type?: string;

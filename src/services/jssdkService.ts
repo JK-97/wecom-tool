@@ -6,6 +6,7 @@ const CHECK_JS_API_LIST = [
   "getCurExternalContact",
   "getCurExternalChat",
   "sendChatMessage",
+  "navigateToKfChat",
 ] as const
 const MAIN_WEBVIEW_CHECK_API_LIST = ["getContext", "checkJsApi"] as const
 
@@ -582,6 +583,32 @@ export async function sendTextToCurrentSession(
     }
   } catch (error) {
     throw mapRuntimeError(error, { stage: "send_chat_message", diagnostics: readRuntimeDiagnostics() })
+  }
+}
+
+export async function openWecomKfConversation(target: {
+  open_kfid?: string
+  external_userid?: string
+}): Promise<void> {
+  const openKfId = readString(target?.open_kfid)
+  const externalUserId = readString(target?.external_userid)
+  if (!openKfId) {
+    throw new JSSDKRuntimeError("context_unavailable", "缺少客服账号，无法在企业微信中打开会话。")
+  }
+
+  await ensureRegistered()
+  const apiSupport = await ensureSupportedAPIs()
+  if (!apiSupport.navigateToKfChat || typeof ww.navigateToKfChat !== "function") {
+    throw new JSSDKRuntimeError("api_unsupported", "当前客户端不支持打开微信客服会话。")
+  }
+
+  try {
+    await ww.navigateToKfChat({
+      openKfId,
+      externalUserId: externalUserId || undefined,
+    })
+  } catch (error) {
+    throw mapRuntimeError(error, { stage: "navigate_to_kf_chat", diagnostics: readRuntimeDiagnostics() })
   }
 }
 

@@ -44,6 +44,7 @@ import {
   resolveServicerIdentityView,
   splitIdentityTokens,
 } from "@/services/servicerIdentity";
+import { openWecomKfConversation, toJSSDKErrorMessage } from "@/services/jssdkService";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
@@ -56,6 +57,8 @@ const COMMAND_CENTER_FALLBACK_REFRESH_INTERVAL_MS = 20000;
 const COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX = 36;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
 type DetailLoadMode = "reset" | "prepend_history" | "merge_incremental";
+type LiveRefreshRequest = { refreshView: boolean; refreshDetail: boolean };
+type MessageSenderKind = "customer" | "staff" | "assistant";
 
 type SessionActionDescriptor = {
   key: ActionKey;
@@ -225,6 +228,64 @@ function renderRoutingIdentity(props: {
   );
 }
 
+function resolveMessageSenderKind(message?: CommandCenterMessage | null): MessageSenderKind {
+  const sender = (message?.sender || "").trim().toLowerCase();
+  if (sender === "assistant") return "assistant";
+  if (sender === "staff") return "staff";
+  return "customer";
+}
+
+function shouldRefreshSelectedDetail(
+  payload: CommandCenterRealtimeEnvelope,
+  selectedExternalUserID: string,
+  openKFID: string,
+): boolean {
+  const selected = selectedExternalUserID.trim();
+  if (!selected) return false;
+  const targetOpenKFID = openKFID.trim();
+  return (payload.events || []).some((event) => {
+    const eventExternalUserID = (event.external_userid || "").trim();
+    if (!eventExternalUserID || eventExternalUserID !== selected) return false;
+    const eventOpenKFID = (event.open_kfid || "").trim();
+    if (!targetOpenKFID || !eventOpenKFID) return true;
+    return eventOpenKFID === targetOpenKFID;
+  });
+}
+
+function renderMessageStaffName(props: {
+  message: CommandCenterMessage;
+  corpId: string;
+  identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
+}) {
+  const directDisplayUserID = (props.message.sender_display_userid || "").trim();
+  const senderUserID = (props.message.sender_userid || "").trim();
+  const resolvedIdentity = directDisplayUserID
+    ? null
+    : resolveServicerIdentityToken(senderUserID, props.identityLookup);
+  const displayUserID = (
+    directDisplayUserID ||
+    resolvedIdentity?.displayIdentity ||
+    ""
+  ).trim();
+  const displayFallback = (
+    props.message.sender_display_fallback ||
+    resolvedIdentity?.displayFallback ||
+    senderUserID ||
+    "人工客服"
+  ).trim();
+  if (displayUserID) {
+    return (
+      <WecomOpenDataName
+        userid={displayUserID}
+        corpId={props.corpId}
+        fallback={displayFallback}
+        className="text-[11px] font-medium text-gray-600"
+      />
+    );
+  }
+  return <span className="text-[11px] font-medium text-gray-600">{displayFallback}</span>;
+}
+
 function hasRoutingRecordDetails(
   record?: RoutingRecord,
 ): boolean {
@@ -373,6 +434,7 @@ export default function CSCommandCenter() {
   const [keyword, setKeyword] = useState("");
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isOpeningWecomSession, setIsOpeningWecomSession] = useState(false);
   const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
   const [sessionServicerAssignments, setSessionServicerAssignments] = useState<KFServicerAssignment[]>([]);
   const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
@@ -396,6 +458,8 @@ export default function CSCommandCenter() {
   const refreshTimerRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+  const refreshViewRequestedRef = useRef(false);
+  const refreshDetailRequestedRef = useRef(false);
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const preserveScrollOffsetRef = useRef<number | null>(null);
@@ -551,40 +615,61 @@ export default function CSCommandCenter() {
     return { externalUserID: "", tab: null };
   };
 
-  const refreshLiveSnapshot = async () => {
-    const currentSelected = selectedExternalUserIDRef.current.trim();
-    const currentMessageWindow = messageWindowRef.current;
-    const [viewData, detailData] = await Promise.all([
-      fetchViewSnapshot(),
-      currentSelected
-        ? fetchDetailSnapshot(currentSelected, {
-            sinceVersion: currentMessageWindow.latestVersion,
-            limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
-          })
-        : Promise.resolve(null),
-    ]);
-
+  const applyViewSnapshot = (
+    viewData: CommandCenterViewModel | null,
+    preferredExternalUserID: string,
+  ) => {
     const fetchedAtMs = Date.now();
     setView(viewData);
     setViewFetchedAtMs(fetchedAtMs);
 
-    const resolvedSelected = resolvePreferredSelectedExternalUserID(viewData, currentSelected);
-    if (resolvedSelected.externalUserID !== currentSelected) {
+    const resolvedSelected = resolvePreferredSelectedExternalUserID(
+      viewData,
+      preferredExternalUserID,
+    );
+    if (resolvedSelected.externalUserID !== preferredExternalUserID) {
       if (resolvedSelected.tab) setActiveTab(resolvedSelected.tab);
       setSelectedExternalUserID(resolvedSelected.externalUserID);
       if (!resolvedSelected.externalUserID) {
         applyDetailSnapshot(null, "reset", fetchedAtMs);
       }
-      return;
     }
-
-    if (detailData) {
-      applyDetailSnapshot(detailData, "merge_incremental", fetchedAtMs);
-    }
+    return {
+      fetchedAtMs,
+      resolvedSelected,
+      selectedChanged: resolvedSelected.externalUserID !== preferredExternalUserID,
+    };
   };
 
-  const queueLiveRefresh = () => {
+  const runRefreshCycle = async (request: LiveRefreshRequest) => {
+    const currentSelected = selectedExternalUserIDRef.current.trim();
+    let resolvedSelected = currentSelected;
+    let selectedChanged = false;
+    // 列表是页级真相；详情只在当前选中会话命中更新时增量刷新，避免每次事件都双查。
+    if (request.refreshView) {
+      const viewData = await fetchViewSnapshot();
+      const viewResult = applyViewSnapshot(viewData, currentSelected);
+      resolvedSelected = viewResult?.resolvedSelected.externalUserID || "";
+      selectedChanged = viewResult?.selectedChanged === true;
+    }
+    if (!request.refreshDetail || selectedChanged || !resolvedSelected) {
+      return;
+    }
+    const detailData = await fetchDetailSnapshot(resolvedSelected, {
+      sinceVersion: messageWindowRef.current.latestVersion,
+      limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
+    });
+    applyDetailSnapshot(detailData, "merge_incremental", Date.now());
+  };
+
+  const queueLiveRefresh = (request?: Partial<LiveRefreshRequest>) => {
     if (typeof window === "undefined") return;
+    if (request?.refreshView !== false) {
+      refreshViewRequestedRef.current = true;
+    }
+    if (request?.refreshDetail === true) {
+      refreshDetailRequestedRef.current = true;
+    }
     if (refreshTimerRef.current !== null) {
       window.clearTimeout(refreshTimerRef.current);
     }
@@ -594,16 +679,29 @@ export default function CSCommandCenter() {
         refreshQueuedRef.current = true;
         return;
       }
+      const nextRequest: LiveRefreshRequest = {
+        refreshView: refreshViewRequestedRef.current,
+        refreshDetail: refreshDetailRequestedRef.current,
+      };
+      if (!nextRequest.refreshView && !nextRequest.refreshDetail) {
+        return;
+      }
+      refreshViewRequestedRef.current = false;
+      refreshDetailRequestedRef.current = false;
       refreshInFlightRef.current = true;
-      void refreshLiveSnapshot()
+      void runRefreshCycle(nextRequest)
         .catch(() => {
           // Keep the current render stable and rely on the next refresh tick.
         })
         .finally(() => {
           refreshInFlightRef.current = false;
-          if (refreshQueuedRef.current) {
+          if (
+            refreshQueuedRef.current ||
+            refreshViewRequestedRef.current ||
+            refreshDetailRequestedRef.current
+          ) {
             refreshQueuedRef.current = false;
-            queueLiveRefresh();
+            queueLiveRefresh({ refreshView: false, refreshDetail: false });
           }
         });
     }, COMMAND_CENTER_REFRESH_DEBOUNCE_MS);
@@ -616,6 +714,13 @@ export default function CSCommandCenter() {
   useEffect(() => {
     messageWindowRef.current = messageWindow;
   }, [messageWindow]);
+
+  useEffect(() => {
+    chatStreamVersionRef.current = 0;
+    opsStreamVersionRef.current = 0;
+    refreshViewRequestedRef.current = false;
+    refreshDetailRequestedRef.current = false;
+  }, [queryOpenKFID]);
 
   useEffect(() => {
     setIsRoutingHistoryExpanded(false);
@@ -672,14 +777,7 @@ export default function CSCommandCenter() {
     void fetchViewSnapshot()
       .then((data) => {
         if (!alive) return;
-        setView(data);
-        setViewFetchedAtMs(Date.now());
-        const resolved = resolvePreferredSelectedExternalUserID(
-          data,
-          selectedExternalUserIDRef.current,
-        );
-        if (resolved.tab) setActiveTab(resolved.tab);
-        setSelectedExternalUserID(resolved.externalUserID);
+        applyViewSnapshot(data, selectedExternalUserIDRef.current);
       })
       .catch(() => {
         if (!alive) return;
@@ -718,7 +816,7 @@ export default function CSCommandCenter() {
     if (typeof window === "undefined") return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
-      queueLiveRefresh();
+      queueLiveRefresh({ refreshDetail: false });
     }, COMMAND_CENTER_FALLBACK_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [queryOpenKFID]);
@@ -727,7 +825,9 @@ export default function CSCommandCenter() {
     if (typeof document === "undefined") return;
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
-      queueLiveRefresh();
+      queueLiveRefresh({
+        refreshDetail: selectedExternalUserIDRef.current.trim() !== "",
+      });
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -747,7 +847,13 @@ export default function CSCommandCenter() {
             chatStreamVersionRef.current,
             Number(payload.latest_version || 0),
           );
-          queueLiveRefresh();
+          queueLiveRefresh({
+            refreshDetail: shouldRefreshSelectedDetail(
+              payload,
+              selectedExternalUserIDRef.current,
+              queryOpenKFID,
+            ),
+          });
         },
       }),
       openCommandCenterRealtimeSocket({
@@ -759,7 +865,13 @@ export default function CSCommandCenter() {
             opsStreamVersionRef.current,
             Number(payload.latest_version || 0),
           );
-          queueLiveRefresh();
+          queueLiveRefresh({
+            refreshDetail: shouldRefreshSelectedDetail(
+              payload,
+              selectedExternalUserIDRef.current,
+              queryOpenKFID,
+            ),
+          });
         },
       }),
     ];
@@ -983,7 +1095,7 @@ export default function CSCommandCenter() {
         servicer_userid: input.servicerUserID,
       });
       setNotice(input.successMessage);
-      await refreshLiveSnapshot();
+      await runRefreshCycle({ refreshView: true, refreshDetail: true });
       return true;
     } catch (error) {
       setNotice(describeSessionActionError(error));
@@ -1019,11 +1131,29 @@ export default function CSCommandCenter() {
         setIsUpgradeSuccess(true);
         setTimeout(() => setIsUpgradeSuccess(false), 2500);
       }
-      await refreshLiveSnapshot();
+      await runRefreshCycle({ refreshView: true, refreshDetail: true });
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleOpenInWeCom = async () => {
+    if (!selectedSession?.open_kfid || !selectedSession?.external_userid) {
+      setNotice("当前会话缺少企业微信跳转参数");
+      return;
+    }
+    try {
+      setIsOpeningWecomSession(true);
+      await openWecomKfConversation({
+        open_kfid: selectedSession.open_kfid,
+        external_userid: selectedSession.external_userid,
+      });
+    } catch (error) {
+      setNotice(toJSSDKErrorMessage(error));
+    } finally {
+      setIsOpeningWecomSession(false);
     }
   };
 
@@ -1076,7 +1206,7 @@ export default function CSCommandCenter() {
   const latestRoutingRecord = routingRecords[0];
   const latestMatchedRoutingRecord =
     routingRecords.find((item) => readRoutingRuleName(item) !== "") || latestRoutingRecord;
-  const currentSessionMeta = detail?.session || selectedSession;
+  const currentSessionMeta = selectedSession || detail?.session;
   const effectiveSessionState = Number(currentSessionMeta?.session_state || 0);
   const actionPanel = useMemo(() => {
     if (!currentSessionMeta) {
@@ -1092,7 +1222,7 @@ export default function CSCommandCenter() {
   }, [currentSessionMeta, effectiveSessionState, isTransferModalOpen, transferCandidates.length]);
   const queueWaitText = readLiveQueueWaitText(
     currentSessionMeta,
-    detail?.session ? detailFetchedAtMs : viewFetchedAtMs,
+    selectedSession ? viewFetchedAtMs : detailFetchedAtMs,
     nowMs,
   );
   const slaStatusToken = ((selectedSession?.reply_sla_status || "normal").trim() || "normal").toLowerCase();
@@ -1308,6 +1438,20 @@ export default function CSCommandCenter() {
                 )}
               </span>
             </div>
+            <div className="ml-auto shrink-0">
+              <Button
+                variant="outline"
+                className="h-9 rounded-full px-4 text-xs"
+                disabled={
+                  isOpeningWecomSession ||
+                  !selectedSession?.open_kfid ||
+                  !selectedSession?.external_userid
+                }
+                onClick={() => void handleOpenInWeCom()}
+              >
+                {isOpeningWecomSession ? "正在打开..." : "在企业微信中打开会话"}
+              </Button>
+            </div>
           </div>
 
           <div className="px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px]">
@@ -1398,38 +1542,62 @@ export default function CSCommandCenter() {
                   <div className="text-sm text-gray-500">暂无会话消息</div>
                 ) : (
                   orderedMessages.map((message, index) => {
-                    const outgoing = (message.sender || "").trim() !== "customer";
+                    const senderKind = resolveMessageSenderKind(message);
+                    const outgoing = senderKind !== "customer";
+                    const isAssistantMessage = senderKind === "assistant";
+                    const isStaffMessage = senderKind === "staff";
                     return (
                       <div
                         key={getCommandCenterMessageKey(message, index)}
                         className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
                       >
                         {outgoing ? (
-                          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                            <span className="text-xs font-bold text-blue-600">
-                              AI
+                          <div
+                            className={`flex h-8 min-w-8 items-center justify-center rounded-full px-2 shrink-0 ${
+                              isAssistantMessage
+                                ? "bg-blue-100 text-blue-600"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            <span className="text-[10px] font-bold">
+                              {isAssistantMessage ? "AI" : "客服"}
                             </span>
                           </div>
                         ) : (
                           <Avatar src="" size="sm" />
                         )}
-                        <div
-                          className={`px-4 py-2.5 max-w-[70%] shadow-sm rounded-2xl ${
-                            outgoing
-                              ? "bg-blue-600 text-white rounded-tr-none"
-                              : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
-                          }`}
-                        >
-                          <p className="text-sm">
-                            {(message.content || "").trim()}
-                          </p>
-                          <p
-                            className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+                        <div className="flex max-w-[70%] flex-col">
+                          {outgoing ? (
+                            <div className="mb-1 flex justify-end">
+                              {isAssistantMessage ? (
+                                <span className="text-[11px] font-medium text-blue-600">AI 助手</span>
+                              ) : isStaffMessage ? (
+                                renderMessageStaffName({
+                                  message,
+                                  corpId: corpID,
+                                  identityLookup: sessionServicerLookup,
+                                })
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <div
+                            className={`px-4 py-2.5 shadow-sm rounded-2xl ${
+                              outgoing
+                                ? "bg-blue-600 text-white rounded-tr-none"
+                                : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
+                            }`}
                           >
-                            {(message.timestamp || "")
-                              .replace("T", " ")
-                              .slice(0, 16)}
-                          </p>
+                            <p className="text-sm">
+                              {(message.content || "").trim()}
+                            </p>
+                            <p
+                              className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+                            >
+                              {(message.timestamp || "")
+                                .replace("T", " ")
+                                .slice(0, 16)}
+                            </p>
+                          </div>
                         </div>
                       </div>
                     );
@@ -2397,6 +2565,7 @@ function getCommandCenterMessageKey(
   if (stableID) return stableID;
   return [
     (message.sender || "").trim(),
+    (message.sender_userid || "").trim(),
     (message.type || "").trim(),
     (message.timestamp || "").trim(),
     (message.content || "").trim(),
