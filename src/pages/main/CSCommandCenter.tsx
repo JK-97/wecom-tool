@@ -15,6 +15,7 @@ import {
   UserPlus,
   Info,
   ChevronRight,
+  ChevronsDown,
   Star,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -23,8 +24,11 @@ import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import {
   getCSCommandCenterSessionDetail,
   getCSCommandCenterView,
+  markCommandCenterSessionRead,
+  openCommandCenterRealtimeSocket,
   transitionKFServiceState,
   type CommandCenterMessage,
+  type CommandCenterRealtimeEnvelope,
   type CommandCenterSession,
   type CommandCenterSessionDetail,
   type CommandCenterViewModel,
@@ -46,9 +50,12 @@ import { useAuth } from "@/context/AuthContext";
 
 type SessionTab = "queue" | "active" | "closed";
 type DetailPanelTab = "monitor" | "upgrade" | "session";
-const COMMAND_CENTER_SESSION_POLL_INTERVAL_MS = 5000;
-const COMMAND_CENTER_VIEW_POLL_INTERVAL_MS = 15000;
+const COMMAND_CENTER_MESSAGE_PAGE_SIZE = 30;
+const COMMAND_CENTER_REFRESH_DEBOUNCE_MS = 250;
+const COMMAND_CENTER_FALLBACK_REFRESH_INTERVAL_MS = 20000;
+const COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX = 36;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
+type DetailLoadMode = "reset" | "prepend_history" | "merge_incremental";
 
 type SessionActionDescriptor = {
   key: ActionKey;
@@ -84,12 +91,28 @@ type SessionStatusPresentation = {
   badgeClassName: string;
 };
 
+type MessageWindowState = {
+  messages: CommandCenterMessage[];
+  nextCursor: string;
+  nextToken: string;
+  latestVersion: number;
+};
+
+const EMPTY_MESSAGE_WINDOW: MessageWindowState = {
+  messages: [],
+  nextCursor: "",
+  nextToken: "",
+  latestVersion: 0,
+};
+
 function resolveSessionBucket(session: CommandCenterSession): SessionTab {
+  const state = Number(session.session_state || 0);
+  // 智能助手（state=1）归入接待中，优先于 state_bucket（后端当前将其标记为 queue）
+  if (state === 1) return "active";
   const bucket = (session.state_bucket || "").trim().toLowerCase();
   if (bucket === "active") return "active";
   if (bucket === "closed") return "closed";
   if (bucket === "queue") return "queue";
-  const state = Number(session.session_state || 0);
   if (state === 3) return "active";
   if (state === 4) return "closed";
   return "queue";
@@ -307,16 +330,17 @@ function resolveSessionStatusPresentation(
       badgeClassName: "bg-gray-100 text-gray-600 border-gray-200",
     };
   }
-  if (bucket === "active" || state === 3) {
-    return {
-      label: "人工接待",
-      badgeClassName: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    };
-  }
+  // 智能助手单独展示，即使 bucket 已归入 active
   if (state === 1) {
     return {
       label: "智能助手",
       badgeClassName: "bg-blue-50 text-blue-700 border-blue-200",
+    };
+  }
+  if (bucket === "active" || state === 3) {
+    return {
+      label: "人工接待",
+      badgeClassName: "bg-emerald-50 text-emerald-700 border-emerald-200",
     };
   }
   if (bucket === "queue" || state === 2) {
@@ -342,6 +366,7 @@ export default function CSCommandCenter() {
 
   const [view, setView] = useState<CommandCenterViewModel | null>(null);
   const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null);
+  const [messageWindow, setMessageWindow] = useState<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
   const [selectedExternalUserID, setSelectedExternalUserID] = useState("");
   const [activeTab, setActiveTab] = useState<SessionTab>("queue");
   const [detailPanelTab, setDetailPanelTab] = useState<DetailPanelTab>("monitor");
@@ -353,6 +378,9 @@ export default function CSCommandCenter() {
   const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
   const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [showBackToLatest, setShowBackToLatest] = useState(false);
+  const [isBrowsingHistory, setIsBrowsingHistory] = useState(false);
   const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
   const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -361,6 +389,16 @@ export default function CSCommandCenter() {
   const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
   const servicerAssignmentsCacheRef = useRef(new Map<string, KFServicerAssignment[]>());
   const selectedExternalUserIDRef = useRef("");
+  const prevSelectedBucketRef = useRef<string>("");
+  const messageWindowRef = useRef<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
+  const chatStreamVersionRef = useRef(0);
+  const opsStreamVersionRef = useRef(0);
+  const refreshTimerRef = useRef<number | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const preserveScrollOffsetRef = useRef<number | null>(null);
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
   const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
@@ -395,12 +433,199 @@ export default function CSCommandCenter() {
     return { label: "未知渠道", title: token };
   };
 
+  const scrollToLatestMessage = (behavior: ScrollBehavior = "auto") => {
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior });
+    shouldStickToBottomRef.current = true;
+    setIsBrowsingHistory(false);
+    setShowBackToLatest(false);
+  };
+
+  const syncScrollState = () => {
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    const distanceToBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isNearBottom = distanceToBottom <= COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX;
+    shouldStickToBottomRef.current = isNearBottom;
+    setIsBrowsingHistory(!isNearBottom);
+    setShowBackToLatest(!isNearBottom);
+  };
+
+  const applyDetailSnapshot = (
+    data: CommandCenterSessionDetail | null,
+    mode: DetailLoadMode,
+    fetchedAtMs: number,
+  ) => {
+    setDetail(data);
+    setDetailFetchedAtMs(fetchedAtMs);
+    if (!data) {
+      setMessageWindow(EMPTY_MESSAGE_WINDOW);
+      return;
+    }
+    setMessageWindow((previous) => {
+      const incomingMessages = sortCommandCenterMessages(data.messages || []);
+      if (mode === "reset") {
+        return {
+          messages: incomingMessages,
+          nextCursor: (data.next_cursor || "").trim(),
+          nextToken: (data.next_token || "").trim(),
+          latestVersion: Number(data.latest_version || 0),
+        };
+      }
+      if (mode === "prepend_history") {
+        return {
+          messages: mergeCommandCenterMessages(previous.messages, incomingMessages, mode),
+          nextCursor: (data.next_cursor || "").trim(),
+          nextToken: (data.next_token || "").trim(),
+          latestVersion: Math.max(previous.latestVersion, Number(data.latest_version || 0)),
+        };
+      }
+      return {
+        messages: mergeCommandCenterMessages(previous.messages, incomingMessages, mode),
+        nextCursor: previous.nextCursor,
+        nextToken: previous.nextToken,
+        latestVersion: Math.max(previous.latestVersion, Number(data.latest_version || 0)),
+      };
+    });
+  };
+
+  const fetchViewSnapshot = async () =>
+    getCSCommandCenterView({
+      open_kfid: queryOpenKFID,
+      limit: 200,
+    });
+
+  const fetchDetailSnapshot = async (
+    externalUserID: string,
+    params?: {
+      cursor?: string;
+      token?: string;
+      sinceVersion?: number;
+      limit?: number;
+    },
+  ) => {
+    const selected = (externalUserID || "").trim();
+    if (!selected) return null;
+    return getCSCommandCenterSessionDetail({
+      open_kfid: queryOpenKFID,
+      external_userid: selected,
+      limit: params?.limit || COMMAND_CENTER_MESSAGE_PAGE_SIZE,
+      cursor: params?.cursor,
+      token: params?.token,
+      since_version: params?.sinceVersion,
+    });
+  };
+
+  const resolvePreferredSelectedExternalUserID = (
+    viewData: CommandCenterViewModel | null,
+    preferredExternalUserID: string,
+  ): { externalUserID: string; tab: SessionTab | null } => {
+    const preferred = preferredExternalUserID.trim();
+    const sessions = viewData?.sessions || [];
+    // 优先级1：保持已选中的会话（不改变 tab）
+    if (
+      preferred &&
+      sessions.some(
+        (item) => (item.external_userid || "").trim() === preferred,
+      )
+    ) {
+      return { externalUserID: preferred, tab: null };
+    }
+    // 优先级2：接待中（含智能助手）的第一个
+    const firstActive = sessions.find(
+      (item) => resolveSessionBucket(item) === "active",
+    );
+    if (firstActive?.external_userid) {
+      return { externalUserID: firstActive.external_userid.trim(), tab: "active" };
+    }
+    // 优先级3：排队中的第一个
+    const firstQueue = sessions.find(
+      (item) => resolveSessionBucket(item) === "queue",
+    );
+    if (firstQueue?.external_userid) {
+      return { externalUserID: firstQueue.external_userid.trim(), tab: "queue" };
+    }
+    // 无可用会话 → 空状态
+    return { externalUserID: "", tab: null };
+  };
+
+  const refreshLiveSnapshot = async () => {
+    const currentSelected = selectedExternalUserIDRef.current.trim();
+    const currentMessageWindow = messageWindowRef.current;
+    const [viewData, detailData] = await Promise.all([
+      fetchViewSnapshot(),
+      currentSelected
+        ? fetchDetailSnapshot(currentSelected, {
+            sinceVersion: currentMessageWindow.latestVersion,
+            limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const fetchedAtMs = Date.now();
+    setView(viewData);
+    setViewFetchedAtMs(fetchedAtMs);
+
+    const resolvedSelected = resolvePreferredSelectedExternalUserID(viewData, currentSelected);
+    if (resolvedSelected.externalUserID !== currentSelected) {
+      if (resolvedSelected.tab) setActiveTab(resolvedSelected.tab);
+      setSelectedExternalUserID(resolvedSelected.externalUserID);
+      if (!resolvedSelected.externalUserID) {
+        applyDetailSnapshot(null, "reset", fetchedAtMs);
+      }
+      return;
+    }
+
+    if (detailData) {
+      applyDetailSnapshot(detailData, "merge_incremental", fetchedAtMs);
+    }
+  };
+
+  const queueLiveRefresh = () => {
+    if (typeof window === "undefined") return;
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      if (refreshInFlightRef.current) {
+        refreshQueuedRef.current = true;
+        return;
+      }
+      refreshInFlightRef.current = true;
+      void refreshLiveSnapshot()
+        .catch(() => {
+          // Keep the current render stable and rely on the next refresh tick.
+        })
+        .finally(() => {
+          refreshInFlightRef.current = false;
+          if (refreshQueuedRef.current) {
+            refreshQueuedRef.current = false;
+            queueLiveRefresh();
+          }
+        });
+    }, COMMAND_CENTER_REFRESH_DEBOUNCE_MS);
+  };
+
   useEffect(() => {
     selectedExternalUserIDRef.current = selectedExternalUserID.trim();
   }, [selectedExternalUserID]);
 
   useEffect(() => {
+    messageWindowRef.current = messageWindow;
+  }, [messageWindow]);
+
+  useEffect(() => {
     setIsRoutingHistoryExpanded(false);
+  }, [selectedExternalUserID]);
+
+  useEffect(() => {
+    shouldStickToBottomRef.current = true;
+    preserveScrollOffsetRef.current = null;
+    setIsBrowsingHistory(false);
+    setShowBackToLatest(false);
   }, [selectedExternalUserID]);
 
   useEffect(() => {
@@ -442,53 +667,24 @@ export default function CSCommandCenter() {
     };
   }, []);
 
-  const loadView = async () => {
-    const data = await getCSCommandCenterView({
-      open_kfid: queryOpenKFID,
-      limit: 200,
-    });
-    setView(data);
-    setViewFetchedAtMs(Date.now());
-    const selectedID = (
-      data?.selected?.external_userid ||
-      data?.sessions?.[0]?.external_userid ||
-      ""
-    ).trim();
-    setSelectedExternalUserID((prev) => prev || selectedID);
-  };
-
-  const loadDetail = async (externalUserID: string) => {
-    const selected = (externalUserID || "").trim();
-    if (!selected) {
-      setDetail(null);
-      return;
-    }
-    const data = await getCSCommandCenterSessionDetail({
-      open_kfid: queryOpenKFID,
-      external_userid: selected,
-      limit: 200,
-    });
-    setDetail(data);
-    setDetailFetchedAtMs(Date.now());
-  };
-
   useEffect(() => {
     let alive = true;
-    void getCSCommandCenterView({ open_kfid: queryOpenKFID, limit: 200 })
+    void fetchViewSnapshot()
       .then((data) => {
         if (!alive) return;
         setView(data);
         setViewFetchedAtMs(Date.now());
-        const selectedID = (
-          data?.selected?.external_userid ||
-          data?.sessions?.[0]?.external_userid ||
-          ""
-        ).trim();
-        setSelectedExternalUserID(selectedID);
+        const resolved = resolvePreferredSelectedExternalUserID(
+          data,
+          selectedExternalUserIDRef.current,
+        );
+        if (resolved.tab) setActiveTab(resolved.tab);
+        setSelectedExternalUserID(resolved.externalUserID);
       })
       .catch(() => {
         if (!alive) return;
         setView(null);
+        applyDetailSnapshot(null, "reset", Date.now());
       });
     return () => {
       alive = false;
@@ -498,22 +694,20 @@ export default function CSCommandCenter() {
   useEffect(() => {
     let alive = true;
     if (!selectedExternalUserID) {
-      setDetail(null);
+      applyDetailSnapshot(null, "reset", Date.now());
       return;
     }
-    void getCSCommandCenterSessionDetail({
-      open_kfid: queryOpenKFID,
-      external_userid: selectedExternalUserID,
-      limit: 200,
+    applyDetailSnapshot(null, "reset", Date.now());
+    void fetchDetailSnapshot(selectedExternalUserID, {
+      limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
     })
       .then((data) => {
         if (!alive) return;
-        setDetail(data);
-        setDetailFetchedAtMs(Date.now());
+        applyDetailSnapshot(data, "reset", Date.now());
       })
       .catch(() => {
         if (!alive) return;
-        setDetail(null);
+        applyDetailSnapshot(null, "reset", Date.now());
       });
     return () => {
       alive = false;
@@ -524,20 +718,8 @@ export default function CSCommandCenter() {
     if (typeof window === "undefined") return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
-      void loadView();
-    }, COMMAND_CENTER_VIEW_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [queryOpenKFID]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      const currentExternalUserID = selectedExternalUserIDRef.current;
-      if (currentExternalUserID !== "") {
-        void loadDetail(currentExternalUserID);
-      }
-    }, COMMAND_CENTER_SESSION_POLL_INTERVAL_MS);
+      queueLiveRefresh();
+    }, COMMAND_CENTER_FALLBACK_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [queryOpenKFID]);
 
@@ -545,15 +727,52 @@ export default function CSCommandCenter() {
     if (typeof document === "undefined") return;
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
-      void loadView();
-      const currentExternalUserID = selectedExternalUserIDRef.current;
-      if (currentExternalUserID !== "") {
-        void loadDetail(currentExternalUserID);
-      }
+      queueLiveRefresh();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [queryOpenKFID]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sockets = [
+      openCommandCenterRealtimeSocket({
+        topic: "chat",
+        open_kfid: queryOpenKFID,
+        since_version: chatStreamVersionRef.current,
+        onMessage: (payload: CommandCenterRealtimeEnvelope) => {
+          chatStreamVersionRef.current = Math.max(
+            chatStreamVersionRef.current,
+            Number(payload.latest_version || 0),
+          );
+          queueLiveRefresh();
+        },
+      }),
+      openCommandCenterRealtimeSocket({
+        topic: "ops",
+        open_kfid: queryOpenKFID,
+        since_version: opsStreamVersionRef.current,
+        onMessage: (payload: CommandCenterRealtimeEnvelope) => {
+          opsStreamVersionRef.current = Math.max(
+            opsStreamVersionRef.current,
+            Number(payload.latest_version || 0),
+          );
+          queueLiveRefresh();
+        },
+      }),
+    ];
+    return () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      sockets.forEach((socket) => {
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+      });
     };
   }, [queryOpenKFID]);
 
@@ -566,6 +785,21 @@ export default function CSCommandCenter() {
     );
     return found || sessions[0];
   }, [selectedExternalUserID, sessions]);
+
+  // Task 4: 选中会话状态变化时，左侧 tab 自动跟随
+  // 只在同一会话的 bucket 发生改变时切换（排队 → 接待中 → 已结束）
+  useEffect(() => {
+    if (!selectedSession) {
+      prevSelectedBucketRef.current = "";
+      return;
+    }
+    const newBucket = resolveSessionBucket(selectedSession);
+    const prevBucket = prevSelectedBucketRef.current;
+    if (prevBucket && prevBucket !== newBucket) {
+      setActiveTab(newBucket);
+    }
+    prevSelectedBucketRef.current = newBucket;
+  }, [selectedExternalUserID, selectedSession?.session_state, selectedSession?.state_bucket]);
 
   useEffect(() => {
     const openKFID = (selectedSession?.open_kfid || "").trim();
@@ -664,18 +898,32 @@ export default function CSCommandCenter() {
   }, [activeTab, channelDisplayMap, hasLoadedChannelDisplayMap, keyword, sessions]);
 
   const orderedMessages = useMemo(() => {
-    return (detail?.messages || [])
-      .map((message, index) => ({ message, index }))
-      .sort((left, right) =>
-        compareCommandCenterMessages(
-          left.message,
-          right.message,
-          left.index,
-          right.index,
-        ),
-      )
-      .map((item) => item.message);
-  }, [detail?.messages]);
+    return sortCommandCenterMessages(messageWindow.messages);
+  }, [messageWindow.messages]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    if (preserveScrollOffsetRef.current !== null) {
+      const offsetFromBottom = preserveScrollOffsetRef.current;
+      preserveScrollOffsetRef.current = null;
+      window.requestAnimationFrame(() => {
+        const currentContainer = chatScrollContainerRef.current;
+        if (!currentContainer) return;
+        currentContainer.scrollTop = Math.max(
+          0,
+          currentContainer.scrollHeight - offsetFromBottom,
+        );
+        syncScrollState();
+      });
+      return;
+    }
+    if (!shouldStickToBottomRef.current) return;
+    window.requestAnimationFrame(() => {
+      scrollToLatestMessage();
+    });
+  }, [orderedMessages, selectedExternalUserID]);
 
   const queueCount = useMemo(
     () =>
@@ -692,6 +940,30 @@ export default function CSCommandCenter() {
       sessions.filter((item) => resolveSessionBucket(item) === "closed").length,
     [sessions],
   );
+  const hasOlderMessages =
+    messageWindow.nextCursor.trim() !== "" || messageWindow.nextToken.trim() !== "";
+
+  const handleLoadOlderMessages = async () => {
+    if (!selectedExternalUserID || isLoadingOlderMessages || !hasOlderMessages) return;
+    const container = chatScrollContainerRef.current;
+    if (container) {
+      preserveScrollOffsetRef.current = container.scrollHeight - container.scrollTop;
+    }
+    try {
+      setIsLoadingOlderMessages(true);
+      const data = await fetchDetailSnapshot(selectedExternalUserID, {
+        cursor: messageWindow.nextCursor,
+        token: messageWindow.nextToken,
+        limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
+      });
+      applyDetailSnapshot(data, "prepend_history", Date.now());
+    } catch (error) {
+      setNotice(normalizeErrorMessage(error));
+      preserveScrollOffsetRef.current = null;
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  };
 
   const runRealSessionTransition = async (input: {
     serviceState: 2 | 3 | 4;
@@ -711,10 +983,7 @@ export default function CSCommandCenter() {
         servicer_userid: input.servicerUserID,
       });
       setNotice(input.successMessage);
-      await Promise.all([
-        loadView(),
-        loadDetail(selectedSession.external_userid || ""),
-      ]);
+      await refreshLiveSnapshot();
       return true;
     } catch (error) {
       setNotice(describeSessionActionError(error));
@@ -750,7 +1019,7 @@ export default function CSCommandCenter() {
         setIsUpgradeSuccess(true);
         setTimeout(() => setIsUpgradeSuccess(false), 2500);
       }
-      await loadView();
+      await refreshLiveSnapshot();
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
     } finally {
@@ -910,11 +1179,16 @@ export default function CSCommandCenter() {
                     "session"
                   ).trim()}
                   className={`p-4 cursor-pointer transition-colors ${selected ? "bg-blue-50/50 border-l-4 border-blue-600" : "hover:bg-gray-50"}`}
-                  onClick={() =>
-                    setSelectedExternalUserID(
-                      (session.external_userid || "").trim(),
-                    )
-                  }
+                  onClick={() => {
+                    const uid = (session.external_userid || "").trim();
+                    setSelectedExternalUserID(uid);
+                    if (uid) {
+                      // 标记已读，忽略失败（不阻断交互），随后刷新列表使未读数归零
+                      void markCommandCenterSessionRead({ external_userid: uid })
+                        .catch(() => {})
+                        .finally(() => { queueLiveRefresh(); });
+                    }
+                  }}
                 >
                   <div className="flex items-start justify-between mb-1">
                     <div className="flex items-center gap-2">
@@ -1092,18 +1366,42 @@ export default function CSCommandCenter() {
 
         <div className="flex-1 flex min-h-0">
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex-1 overflow-y-auto bg-[#F5F7FA] p-6">
-              <div className="flex flex-col gap-6">
+            <div className="relative flex-1 min-h-0">
+              {!selectedExternalUserID ? (
+                <div className="h-full flex flex-col items-center justify-center gap-3 bg-[#F5F7FA]">
+                  <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
+                    <Search className="w-6 h-6 text-gray-400" />
+                  </div>
+                  <p className="text-sm text-gray-400">当前没有活跃会话</p>
+                </div>
+              ) : (
+              <>
+              <div
+                ref={chatScrollContainerRef}
+                className="h-full overflow-y-auto bg-[#F5F7FA] p-6"
+                onScroll={syncScrollState}
+              >
+                <div className="flex flex-col gap-6">
+                {hasOlderMessages ? (
+                  <div className="flex justify-center">
+                    <Button
+                      variant="outline"
+                      className="h-9 rounded-full border-dashed bg-white/90 px-4 text-xs text-gray-600 shadow-sm hover:bg-white"
+                      disabled={isLoadingOlderMessages}
+                      onClick={() => void handleLoadOlderMessages()}
+                    >
+                      {isLoadingOlderMessages ? "正在加载更早消息..." : "查看更多"}
+                    </Button>
+                  </div>
+                ) : null}
                 {orderedMessages.length === 0 ? (
                   <div className="text-sm text-gray-500">暂无会话消息</div>
                 ) : (
-                  orderedMessages.map((message) => {
+                  orderedMessages.map((message, index) => {
                     const outgoing = (message.sender || "").trim() !== "customer";
                     return (
                       <div
-                        key={
-                          message.id || `${message.timestamp}-${message.content}`
-                        }
+                        key={getCommandCenterMessageKey(message, index)}
                         className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
                       >
                         {outgoing ? (
@@ -1139,12 +1437,27 @@ export default function CSCommandCenter() {
                 )}
               </div>
             </div>
+              {showBackToLatest ? (
+                <button
+                  type="button"
+                  className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-xs font-medium text-white shadow-lg transition hover:bg-blue-700"
+                  onClick={() => scrollToLatestMessage("smooth")}
+                >
+                  <ChevronsDown className="h-4 w-4" />
+                  回到最新消息
+                </button>
+              ) : null}
+              </>
+              )}
+            </div>
 
             <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
               {selectedSession ? (
                 <div className="mb-3 flex items-center justify-between gap-3 text-[11px]">
                   <div className="min-w-0 text-gray-500">
-                    {actionPanel.description}
+                    {isBrowsingHistory
+                      ? "正在查看历史消息，新的消息不会打断当前位置。"
+                      : actionPanel.description}
                   </div>
                   <div className="shrink-0 font-medium text-gray-900">
                     {sessionStatus.label}
@@ -2074,6 +2387,52 @@ function getEmotionPresentation(
         width: Math.max(baseWidth, 46),
       };
   }
+}
+
+function getCommandCenterMessageKey(
+  message: CommandCenterMessage,
+  fallbackIndex = 0,
+): string {
+  const stableID = (message.id || "").trim();
+  if (stableID) return stableID;
+  return [
+    (message.sender || "").trim(),
+    (message.type || "").trim(),
+    (message.timestamp || "").trim(),
+    (message.content || "").trim(),
+    (message.delivered_at || message.last_attempt_at || message.next_retry_at || "").trim(),
+    String(fallbackIndex),
+  ].join("|");
+}
+
+function sortCommandCenterMessages(messages: CommandCenterMessage[]): CommandCenterMessage[] {
+  return [...(messages || [])]
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) =>
+      compareCommandCenterMessages(
+        left.message,
+        right.message,
+        left.index,
+        right.index,
+      ),
+    )
+    .map((item) => item.message);
+}
+
+function mergeCommandCenterMessages(
+  existingMessages: CommandCenterMessage[],
+  incomingMessages: CommandCenterMessage[],
+  mode: DetailLoadMode,
+): CommandCenterMessage[] {
+  const merged = new Map<string, CommandCenterMessage>();
+  const seed =
+    mode === "prepend_history"
+      ? [...incomingMessages, ...existingMessages]
+      : [...existingMessages, ...incomingMessages];
+  seed.forEach((message, index) => {
+    merged.set(getCommandCenterMessageKey(message, index), message);
+  });
+  return sortCommandCenterMessages(Array.from(merged.values()));
 }
 
 function compareCommandCenterMessages(

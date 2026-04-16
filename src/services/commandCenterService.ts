@@ -124,6 +124,31 @@ export type CommandCenterSessionDetail = {
   messages?: CommandCenterMessage[];
   monitor?: CommandCenterViewModel["monitor"];
   warnings?: string[];
+  next_cursor?: string;
+  next_token?: string;
+  latest_version?: number;
+};
+
+export type CommandCenterRealtimeEvent = {
+  open_kfid?: string;
+  update_version?: number;
+  event_id?: string;
+  event_type?: string;
+  external_userid?: string;
+  session_state?: number;
+  routing_rule_id?: number;
+  execution_status?: string;
+  occurred_at?: string;
+  payload_json?: string;
+  topic?: string;
+};
+
+export type CommandCenterRealtimeEnvelope = {
+  code?: number;
+  message?: string;
+  events?: CommandCenterRealtimeEvent[];
+  latest_version?: number;
+  request_id?: string;
 };
 
 export type CommandCenterCommandResult = {
@@ -159,6 +184,9 @@ export async function getCSCommandCenterSessionDetail(params: {
   open_kfid?: string;
   external_userid?: string;
   limit?: number;
+  cursor?: string;
+  token?: string;
+  since_version?: number;
 }): Promise<CommandCenterSessionDetail | null> {
   const search = new URLSearchParams();
   if (params.open_kfid) search.set("open_kfid", params.open_kfid);
@@ -166,10 +194,66 @@ export async function getCSCommandCenterSessionDetail(params: {
     search.set("external_userid", params.external_userid);
   if (params.limit && params.limit > 0)
     search.set("limit", String(params.limit));
+  if (params.cursor) search.set("cursor", params.cursor);
+  if (params.token) search.set("token", params.token);
+  if (params.since_version && params.since_version > 0)
+    search.set("since_version", String(params.since_version));
   const payload = await requestJSON<APIReply<CommandCenterSessionDetail>>(
     `/api/v1/main/cs-command-center/session?${search.toString()}`,
   );
   return payload?.data || null;
+}
+
+export function openCommandCenterRealtimeSocket(input: {
+  topic: "chat" | "ops";
+  open_kfid?: string;
+  since_version?: number;
+  onMessage: (payload: CommandCenterRealtimeEnvelope) => void;
+  onClose?: () => void;
+  onError?: (event: Event) => void;
+}): WebSocket {
+  const url = buildRealtimeSocketURL(input.topic, {
+    open_kfid: input.open_kfid,
+    since_version: input.since_version,
+  });
+  const socket = new WebSocket(url);
+  socket.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(String(event.data || "")) as CommandCenterRealtimeEnvelope;
+      input.onMessage(payload);
+    } catch {
+      // Ignore malformed payloads and keep the stream alive.
+    }
+  };
+  if (input.onClose) {
+    socket.onclose = () => input.onClose?.();
+  }
+  if (input.onError) {
+    socket.onerror = input.onError;
+  }
+  return socket;
+}
+
+function buildRealtimeSocketURL(
+  topic: "chat" | "ops",
+  params?: { open_kfid?: string; since_version?: number },
+): string {
+  const base =
+    (import.meta.env.VITE_API_BASE_URL || "").trim() ||
+    (typeof window !== "undefined" ? window.location.origin : "http://localhost");
+  const url = new URL(`/api/v1/realtime/${topic}/ws`, base);
+  if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  } else {
+    url.protocol = "ws:";
+  }
+  if (params?.open_kfid) {
+    url.searchParams.set("open_kfid", params.open_kfid);
+  }
+  if (params?.since_version && params.since_version > 0) {
+    url.searchParams.set("since_version", String(params.since_version));
+  }
+  return url.toString();
 }
 
 export async function executeCSCommandCenterCommand(input: {
@@ -216,4 +300,15 @@ export async function transitionKFServiceState(input: {
     request_id: payload?.request_id,
     data: payload?.data,
   };
+}
+
+export async function markCommandCenterSessionRead(params: {
+  external_userid?: string;
+}): Promise<void> {
+  const customerID = (params.external_userid || "").trim();
+  if (!customerID) return;
+  await requestJSON<unknown>("/api/v1/chat/conversations/read", {
+    method: "POST",
+    body: JSON.stringify({ customer_id: customerID }),
+  });
 }
