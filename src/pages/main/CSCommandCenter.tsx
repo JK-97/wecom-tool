@@ -374,6 +374,21 @@ function readLiveQueueWaitText(
   return (session.queue_wait_text || "").trim();
 }
 
+// 接待中会话的"未回复时长"：从 last_active 开始计时，unread_count=0 时不显示
+function readLivePendingReplyText(
+  session: CommandCenterSession | null | undefined,
+  nowMs: number,
+): string {
+  if (!session) return "";
+  if ((session.unread_count || 0) <= 0) return "";
+  const lastActive = (session.last_active || "").trim();
+  if (!lastActive) return "";
+  const baseMs = Date.parse(lastActive.replace(" ", "T"));
+  if (Number.isNaN(baseMs)) return "";
+  const totalSeconds = Math.max(0, Math.floor((nowMs - baseMs) / 1000));
+  return formatQueueWaitDuration(totalSeconds);
+}
+
 function resolveSessionStatusPresentation(
   session?: CommandCenterSession | null,
 ): SessionStatusPresentation {
@@ -645,10 +660,11 @@ export default function CSCommandCenter() {
     const currentSelected = selectedExternalUserIDRef.current.trim();
     let resolvedSelected = currentSelected;
     let selectedChanged = false;
+    let latestViewData: CommandCenterViewModel | null = null;
     // 列表是页级真相；详情只在当前选中会话命中更新时增量刷新，避免每次事件都双查。
     if (request.refreshView) {
-      const viewData = await fetchViewSnapshot();
-      const viewResult = applyViewSnapshot(viewData, currentSelected);
+      latestViewData = await fetchViewSnapshot();
+      const viewResult = applyViewSnapshot(latestViewData, currentSelected);
       resolvedSelected = viewResult?.resolvedSelected.externalUserID || "";
       selectedChanged = viewResult?.selectedChanged === true;
     }
@@ -660,6 +676,19 @@ export default function CSCommandCenter() {
       limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
     });
     applyDetailSnapshot(detailData, "merge_incremental", Date.now());
+    // Issue 3: 用户正在查看该会话时，新消息自动标记已读
+    if (
+      typeof document !== "undefined" &&
+      document.visibilityState !== "hidden" &&
+      resolvedSelected
+    ) {
+      const viewedSession = (latestViewData?.sessions || []).find(
+        (s) => (s.external_userid || "").trim() === resolvedSelected,
+      );
+      if ((viewedSession?.unread_count || 0) > 0) {
+        void markCommandCenterSessionRead({ external_userid: resolvedSelected }).catch(() => {});
+      }
+    }
   };
 
   const queueLiveRefresh = (request?: Partial<LiveRefreshRequest>) => {
@@ -1225,6 +1254,9 @@ export default function CSCommandCenter() {
     selectedSession ? viewFetchedAtMs : detailFetchedAtMs,
     nowMs,
   );
+  // 底部信息栏：只对排队中显示"排队:"，接待中改为"未回复:"
+  const selectedBucket = resolveSessionBucket(currentSessionMeta || ({} as CommandCenterSession));
+  const pendingReplyTextForPanel = readLivePendingReplyText(currentSessionMeta, nowMs);
   const slaStatusToken = ((selectedSession?.reply_sla_status || "normal").trim() || "normal").toLowerCase();
   const slaBadgeLabel =
     selectedSession?.reply_overdue === true || selectedSession?.overdue === true
@@ -1294,11 +1326,13 @@ export default function CSCommandCenter() {
                 (selectedSession?.external_userid || "").trim();
               const bucket = resolveSessionBucket(session);
               const queueWaitText = readLiveQueueWaitText(session, viewFetchedAtMs, nowMs);
+              const pendingReplyText = readLivePendingReplyText(session, nowMs);
               const replyOverdue =
                 session.reply_overdue === true || session.overdue === true;
               const slaStatus = (session.reply_sla_status || "")
                 .trim()
                 .toLowerCase();
+              const unreadCount = session.unread_count || 0;
               const assignedDisplay = resolveAssignedDisplay(session);
               const sessionStatus = resolveSessionStatusPresentation(session);
               return (
@@ -1357,12 +1391,13 @@ export default function CSCommandCenter() {
                           <Clock className="w-3 h-3 mr-1" /> 排队{" "}
                           {queueWaitText || "-"}
                         </div>
-                      ) : (
-                        <div className="flex items-center text-[10px] font-medium text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded">
-                          <Clock className="w-3 h-3 mr-1" />{" "}
-                          {session.unread_count || 0} 未读
+                      ) : bucket === "active" && unreadCount > 0 ? (
+                        // 接待中：显示未回复时长（= 客户最后发消息至今），有多少条未读
+                        <div className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}>
+                          <Clock className="w-3 h-3 mr-1" />
+                          {pendingReplyText ? `未回复 ${pendingReplyText}` : `${unreadCount} 未读`}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                   <p className="text-xs text-gray-600 line-clamp-1 mb-2">
@@ -1491,10 +1526,15 @@ export default function CSCommandCenter() {
                 </Badge>
               </div>
             ) : null}
-            {queueWaitText ? (
+            {selectedBucket === "queue" && queueWaitText ? (
               <div className="flex items-center gap-1.5 text-gray-500">
                 <span className="font-medium">排队:</span>
                 <span className="text-gray-900">{queueWaitText}</span>
+              </div>
+            ) : selectedBucket === "active" && pendingReplyTextForPanel ? (
+              <div className="flex items-center gap-1.5 text-gray-500">
+                <span className="font-medium">未回复:</span>
+                <span className="text-gray-900">{pendingReplyTextForPanel}</span>
               </div>
             ) : null}
             {isUpgradeSuccess ? (
