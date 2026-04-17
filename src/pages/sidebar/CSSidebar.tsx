@@ -19,6 +19,7 @@ import {
   regenerateKFToolbarSuggestions,
   sendKFToolbarReplyFeedback,
   type KFToolbarBootstrap,
+  type KFToolbarSuggestionBatch,
   type KFToolbarSuggestion,
 } from "@/services/toolbarService";
 import {
@@ -120,12 +121,87 @@ function formatToolbarSelectionTime(value?: string): string {
   return new Date(millis).toLocaleString("zh-CN", { hour12: false });
 }
 
+function buildToolbarSessionKey(input?: {
+  open_kfid?: string;
+  external_userid?: string;
+  selection_required?: boolean;
+}): string {
+  const openKFID = (input?.open_kfid || "").trim();
+  const externalUserID = (input?.external_userid || "").trim();
+  if (input?.selection_required) return `selection::${externalUserID}`;
+  if (!openKFID || !externalUserID) return "";
+  return `${openKFID}\u001f${externalUserID}`;
+}
+
+function sanitizeToolbarNotice(error: unknown): string {
+  const raw = normalizeErrorMessage(error).trim();
+  if (!raw) return "建议回复暂时不可用，请稍后再试";
+  const lowered = raw.toLowerCase();
+  if (
+    lowered.includes("followup_task_empty") ||
+    lowered.includes("follow_up_task_empty") ||
+    lowered.includes("followup") ||
+    lowered.includes("follow_up")
+  ) {
+    return "本次未生成到分步回复建议，你可以换一批再试";
+  }
+  if (lowered.includes("deadline exceeded") || lowered.includes("timeout")) {
+    return "建议回复生成超时，请稍后再试";
+  }
+  if (lowered.includes("empty result")) {
+    return "本次未生成到有效建议，请换一批重试";
+  }
+  return raw;
+}
+
+function compactToolbarFacts(items?: string[], limit = 3): string[] {
+  const next = Array.from(
+    new Set((items || []).map((item) => (item || "").trim()).filter(Boolean)),
+  );
+  return next.slice(0, limit);
+}
+
+function normalizeToolbarSummaryStatus(raw?: string): string {
+  const value = (raw || "").trim();
+  if (!value) return "pending";
+  if (value === "succeeded") return "ready";
+  if (value === "selection_required") return "待选择";
+  if (value === "running") return "分析中";
+  if (value === "queued") return "排队中";
+  if (value === "failed") return "失败";
+  if (value === "ready" || value === "pending") return value;
+  return value;
+}
+
+function shouldRefreshToolbarSuggestions(
+  payload: CommandCenterRealtimeEnvelope,
+  openKFID: string,
+  externalUserID: string,
+): boolean {
+  const targetOpenKFID = openKFID.trim();
+  const targetExternalUserID = externalUserID.trim();
+  if (!targetOpenKFID || !targetExternalUserID) return false;
+  return (payload.events || []).some((event) => {
+    const eventExternalUserID = (event.external_userid || "").trim();
+    const eventOpenKFID = (event.open_kfid || "").trim();
+    const eventType = (event.event_type || "").trim().toLowerCase();
+    if (!eventExternalUserID || eventExternalUserID !== targetExternalUserID)
+      return false;
+    if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
+    return (
+      eventType === "chat.message.received" ||
+      eventType === "chat.session_analysis.updated"
+    );
+  });
+}
+
 export default function CSSidebar() {
   const [bootstrap, setBootstrap] = useState<KFToolbarBootstrap | null>(null);
   const [notice, setNotice] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isResolvingContext, setIsResolvingContext] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgraded, setIsUpgraded] = useState(false);
@@ -137,7 +213,10 @@ export default function CSSidebar() {
     Record<string, string>
   >({});
   const refreshTimerRef = useRef<number | null>(null);
+  const suggestionRefreshTimerRef = useRef<number | null>(null);
   const realtimeVersionRef = useRef(0);
+  const bootstrapSessionKeyRef = useRef("");
+  const suggestionRequestSeqRef = useRef(0);
 
   const query = useMemo(() => {
     if (typeof window === "undefined")
@@ -217,6 +296,102 @@ export default function CSSidebar() {
     };
   }, []);
 
+  const loadSuggestions = async (input?: {
+    entry?: string;
+    open_kfid?: string;
+    external_userid?: string;
+    seed_reply_id?: string;
+    reason?: string;
+    silentNotice?: boolean;
+    manual?: boolean;
+  }) => {
+    const entry = (
+      input?.entry ||
+      bootstrap?.entry ||
+      sessionLocator.entry ||
+      query.entry ||
+      "single_kf_tools"
+    ).trim();
+    const openKFID = (
+      input?.open_kfid ||
+      bootstrap?.open_kfid ||
+      sessionLocator.open_kfid ||
+      query.open_kfid ||
+      ""
+    ).trim();
+    const externalUserID = (
+      input?.external_userid ||
+      bootstrap?.external_userid ||
+      sessionLocator.external_userid ||
+      query.external_userid ||
+      ""
+    ).trim();
+    if (!openKFID || !externalUserID) {
+      setIsLoadingSuggestions(false);
+      return;
+    }
+
+    const requestSeq = suggestionRequestSeqRef.current + 1;
+    suggestionRequestSeqRef.current = requestSeq;
+    if (input?.manual) {
+      setIsRegenerating(true);
+    } else {
+      setIsLoadingSuggestions(true);
+    }
+
+    try {
+      const batch = await regenerateKFToolbarSuggestions({
+        entry,
+        open_kfid: openKFID,
+        external_userid: externalUserID,
+        seed_reply_id: (input?.seed_reply_id || "").trim(),
+        reason: (input?.reason || "bootstrap").trim(),
+      });
+      if (suggestionRequestSeqRef.current !== requestSeq) return;
+      const nextBatch: KFToolbarSuggestionBatch = batch || { batch_id: "", items: [] };
+      setBootstrap((prev) => {
+        if (!prev) return prev;
+        const prevSessionKey = buildToolbarSessionKey({
+          open_kfid: prev.open_kfid,
+          external_userid: prev.external_userid,
+          selection_required: prev.selection?.required,
+        });
+        const nextSessionKey = buildToolbarSessionKey({
+          open_kfid: openKFID,
+          external_userid: externalUserID,
+        });
+        if (!prevSessionKey || prevSessionKey !== nextSessionKey) {
+          return prev;
+        }
+        return {
+          ...prev,
+          suggestions: nextBatch,
+        };
+      });
+      if (input?.manual) {
+        setNotice("已更新一组新的建议回复");
+      }
+    } catch (error) {
+      if (suggestionRequestSeqRef.current !== requestSeq) return;
+      if (!input?.silentNotice) {
+        setNotice(sanitizeToolbarNotice(error));
+      }
+      setBootstrap((prev) =>
+        prev
+          ? {
+              ...prev,
+              suggestions: { batch_id: "", items: [] },
+            }
+          : prev,
+      );
+    } finally {
+      if (suggestionRequestSeqRef.current === requestSeq) {
+        setIsLoadingSuggestions(false);
+        setIsRegenerating(false);
+      }
+    }
+  };
+
   const loadBootstrap = async (options?: {
     preserveNotice?: boolean;
     silent?: boolean;
@@ -251,16 +426,62 @@ export default function CSSidebar() {
         open_kfid: openKFID,
         external_userid: externalUserID,
       });
-      setBootstrap(data);
+      const nextSessionKey = buildToolbarSessionKey({
+        open_kfid: data?.open_kfid,
+        external_userid: data?.external_userid,
+        selection_required: data?.selection?.required,
+      });
+      const sessionChanged =
+        nextSessionKey !== bootstrapSessionKeyRef.current;
+      bootstrapSessionKeyRef.current = nextSessionKey;
+      setBootstrap((prev) => {
+        if (!data) return null;
+        return {
+          ...data,
+          suggestions:
+            !sessionChanged && prev?.suggestions ? prev.suggestions : data.suggestions,
+        };
+      });
       realtimeVersionRef.current = Number(data?.version || 0);
-      setUpgradeNote((data?.summary?.current_round || "").trim());
+      setUpgradeNote(
+        (
+          data?.summary?.headline ||
+          data?.summary?.customer_goal ||
+          ""
+        ).trim(),
+      );
       if (!options?.preserveNotice) {
         setNotice("");
+      }
+      if (data?.selection?.required) {
+        setIsLoadingSuggestions(false);
+        setBootstrap((prev) =>
+          prev
+            ? {
+                ...prev,
+                suggestions: { batch_id: "", items: [] },
+              }
+            : prev,
+        );
+        return;
+      }
+      if (
+        sessionChanged &&
+        (data?.open_kfid || "").trim() &&
+        (data?.external_userid || "").trim()
+      ) {
+        void loadSuggestions({
+          entry: data?.entry || entry,
+          open_kfid: data?.open_kfid,
+          external_userid: data?.external_userid,
+          reason: "bootstrap",
+          silentNotice: true,
+        });
       }
     } catch (error) {
       if (!options?.silent) {
         setBootstrap(null);
-        setNotice(normalizeErrorMessage(error));
+        setNotice(sanitizeToolbarNotice(error));
       }
     } finally {
       if (!options?.silent) {
@@ -315,6 +536,22 @@ export default function CSSidebar() {
       }, 180);
     };
 
+    const queueSuggestionRefresh = () => {
+      if (suggestionRefreshTimerRef.current !== null) {
+        window.clearTimeout(suggestionRefreshTimerRef.current);
+      }
+      suggestionRefreshTimerRef.current = window.setTimeout(() => {
+        suggestionRefreshTimerRef.current = null;
+        void loadSuggestions({
+          entry: bootstrap?.entry || sessionLocator.entry || query.entry,
+          open_kfid: openKFID,
+          external_userid: externalUserID,
+          reason: "realtime_refresh",
+          silentNotice: true,
+        });
+      }, 360);
+    };
+
     const handleMessage = (payload: CommandCenterRealtimeEnvelope) => {
       realtimeVersionRef.current = Math.max(
         realtimeVersionRef.current,
@@ -323,6 +560,9 @@ export default function CSSidebar() {
       if (!shouldRefreshToolbarSession(payload, openKFID, externalUserID))
         return;
       queueRefresh();
+      if (shouldRefreshToolbarSuggestions(payload, openKFID, externalUserID)) {
+        queueSuggestionRefresh();
+      }
     };
 
     const connect = () => {
@@ -351,6 +591,10 @@ export default function CSSidebar() {
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
+      }
+      if (suggestionRefreshTimerRef.current !== null) {
+        window.clearTimeout(suggestionRefreshTimerRef.current);
+        suggestionRefreshTimerRef.current = null;
       }
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
@@ -394,6 +638,20 @@ export default function CSSidebar() {
   const header = bootstrap?.header;
   const summary = bootstrap?.summary;
   const selection = bootstrap?.selection;
+  const summaryBlockingIssues = compactToolbarFacts(summary?.blocking_issues, 3);
+  const summaryDecisionSignals = compactToolbarFacts(
+    summary?.decision_signals,
+    3,
+  );
+  const summaryNextBestActions = compactToolbarFacts(
+    summary?.next_best_actions,
+    3,
+  );
+  const summaryReplyGuardrails = compactToolbarFacts(
+    summary?.reply_guardrails,
+    3,
+  );
+  const summaryProfileFacts = compactToolbarFacts(summary?.profile_facts, 3);
   const canUpgrade = Boolean(
     header?.can_upgrade_contact &&
     bootstrap?.external_userid &&
@@ -493,7 +751,7 @@ export default function CSSidebar() {
         await navigator.clipboard.writeText(text);
         setNotice(`${message}，已降级为复制，请手动粘贴发送`);
       } catch {
-        setNotice(message || normalizeErrorMessage(error));
+        setNotice(message || sanitizeToolbarNotice(error));
       }
     } finally {
       setIsSubmitting(false);
@@ -507,41 +765,23 @@ export default function CSSidebar() {
       !(bootstrap.open_kfid || sessionLocator.open_kfid || query.open_kfid)
     )
       return;
-    try {
-      setIsRegenerating(true);
-      const batch = await regenerateKFToolbarSuggestions({
-        entry: bootstrap.entry || sessionLocator.entry || query.entry,
-        open_kfid:
-          bootstrap.open_kfid || sessionLocator.open_kfid || query.open_kfid,
-        external_userid:
-          bootstrap.external_userid ||
-          sessionLocator.external_userid ||
-          query.external_userid,
-        seed_reply_id: suggestions[0]?.id || "",
-        reason: "manual_refresh",
-      });
-      if (batch) {
-        setBootstrap((prev) =>
-          prev
-            ? {
-                ...prev,
-                suggestions: batch,
-                version: Date.now(),
-              }
-            : prev,
-        );
-        setNotice("已更新一组新的建议回复");
-        void safeFeedback({
-          reply_id: suggestions[0]?.id,
-          action: "regenerate",
-          step: 0,
-        });
-      }
-    } catch (error) {
-      setNotice(normalizeErrorMessage(error));
-    } finally {
-      setIsRegenerating(false);
-    }
+    await loadSuggestions({
+      entry: bootstrap.entry || sessionLocator.entry || query.entry,
+      open_kfid:
+        bootstrap.open_kfid || sessionLocator.open_kfid || query.open_kfid,
+      external_userid:
+        bootstrap.external_userid ||
+        sessionLocator.external_userid ||
+        query.external_userid,
+      seed_reply_id: suggestions[0]?.id || "",
+      reason: "manual_refresh",
+      manual: true,
+    });
+    void safeFeedback({
+      reply_id: suggestions[0]?.id,
+      action: "regenerate",
+      step: 0,
+    });
   };
 
   const handleUpgrade = async () => {
@@ -573,7 +813,7 @@ export default function CSSidebar() {
       setIsUpgradeModalOpen(false);
       await loadBootstrap({ preserveNotice: true });
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      setNotice(sanitizeToolbarNotice(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -761,36 +1001,174 @@ export default function CSSidebar() {
                       <div className={sidebarSectionLabel}>会话摘要</div>
                       <Badge
                         variant={
-                          (summary?.status || "") === "ready"
+                          normalizeToolbarSummaryStatus(summary?.status) ===
+                          "ready"
                             ? "success"
                             : "secondary"
                         }
                         className="px-2 py-0.5 text-[10px]"
                       >
-                        {(summary?.status || "pending").trim()}
+                        {normalizeToolbarSummaryStatus(summary?.status)}
                       </Badge>
                     </div>
                     <p className="wecom-toolbar-summary-text m-0 text-slate-800">
-                      {(
-                        summary?.current_round || "正在整理本轮会话重点..."
-                      ).trim()}
+                      {(summary?.headline || "正在整理当前会话分析...").trim()}
                     </p>
                   </div>
                 </div>
 
-                {(summary?.history_highlights || []).length > 0 ? (
-                  <div className="space-y-2 rounded-2xl bg-slate-50/90 p-3">
-                    {(summary?.history_highlights || []).map((item, idx) => (
-                      <div
-                        key={`${item}-${idx}`}
-                        className="flex items-start gap-2 text-[12px] text-slate-600"
+                <div className="space-y-3 rounded-2xl bg-slate-50/90 p-3">
+                  <div className="flex flex-wrap gap-2">
+                    {summary?.journey_stage ? (
+                      <Badge
+                        variant="secondary"
+                        className="border-none bg-white text-[10px] text-slate-600"
                       >
-                        <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                        <span>{item}</span>
-                      </div>
-                    ))}
+                        阶段：{summary.journey_stage}
+                      </Badge>
+                    ) : null}
+                    {summary?.relationship_stage ? (
+                      <Badge
+                        variant="secondary"
+                        className="border-none bg-white text-[10px] text-slate-600"
+                      >
+                        关系：{summary.relationship_stage}
+                      </Badge>
+                    ) : null}
+                    {summary?.priority ? (
+                      <Badge
+                        variant="secondary"
+                        className="border-none bg-white text-[10px] text-slate-600"
+                      >
+                        优先级：{summary.priority}
+                      </Badge>
+                    ) : null}
+                    {summary?.opportunity_level ? (
+                      <Badge
+                        variant="secondary"
+                        className="border-none bg-white text-[10px] text-slate-600"
+                      >
+                        机会：{summary.opportunity_level}
+                      </Badge>
+                    ) : null}
                   </div>
-                ) : null}
+
+                  {summary?.customer_goal ? (
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        当前目标
+                      </div>
+                      <div className="text-[12px] leading-6 text-slate-700">
+                        {summary.customer_goal.trim()}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {summaryBlockingIssues.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        阻塞点
+                      </div>
+                      <div className="space-y-1">
+                        {summaryBlockingIssues.map((item, idx) => (
+                          <div
+                            key={`${item}-${idx}`}
+                            className="flex items-start gap-2 text-[12px] text-slate-600"
+                          >
+                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {summaryNextBestActions.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        下一步建议
+                      </div>
+                      <div className="space-y-1">
+                        {summaryNextBestActions.map((item, idx) => (
+                          <div
+                            key={`${item}-${idx}`}
+                            className="flex items-start gap-2 text-[12px] text-slate-600"
+                          >
+                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {summaryDecisionSignals.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        成交/决策信号
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {summaryDecisionSignals.map((item) => (
+                          <Badge
+                            key={item}
+                            variant="secondary"
+                            className="border-none bg-white text-[10px] text-slate-600"
+                          >
+                            {item}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {summaryReplyGuardrails.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        回复注意
+                      </div>
+                      <div className="space-y-1">
+                        {summaryReplyGuardrails.map((item, idx) => (
+                          <div
+                            key={`${item}-${idx}`}
+                            className="flex items-start gap-2 text-[12px] text-slate-600"
+                          >
+                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                            <span>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {summaryProfileFacts.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-slate-500">
+                        长期画像
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {summaryProfileFacts.map((item) => (
+                          <Badge
+                            key={item}
+                            variant="secondary"
+                            className="border-none bg-white text-[10px] text-slate-600"
+                          >
+                            {item}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {summaryBlockingIssues.length === 0 &&
+                  summaryNextBestActions.length === 0 &&
+                  summaryDecisionSignals.length === 0 &&
+                  summaryReplyGuardrails.length === 0 &&
+                  summaryProfileFacts.length === 0 &&
+                  !summary?.customer_goal ? (
+                    <div className="text-[12px] text-slate-500">
+                      当前结构化分析仍在整理中，稍后会补齐更完整的客户判断。
+                    </div>
+                  ) : null}
+                </div>
               </Card>
 
               <Card className="wecom-toolbar-panel rounded-2xl border-slate-200 bg-white/95">
@@ -802,7 +1180,7 @@ export default function CSSidebar() {
                     <div>
                       <div className={sidebarSectionLabel}>AI 建议回复</div>
                       <div className={`${sidebarMeta} mt-0.5`}>
-                        默认先展示首句，分步建议可继续逐句填入
+                        支持单句直发，也支持分步逐句填入
                       </div>
                     </div>
                   </div>
@@ -823,7 +1201,9 @@ export default function CSSidebar() {
                 <div className="rounded-2xl border border-slate-100 bg-slate-50/45">
                   {suggestions.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[12px] text-slate-500">
-                      AI 正在组织更合适的回复...
+                      {isLoadingSuggestions
+                        ? "AI 正在组织更合适的回复..."
+                        : "暂未生成建议回复，可点击换一批重试"}
                     </div>
                   ) : (
                     suggestions.map((item, idx) => {
@@ -831,22 +1211,12 @@ export default function CSSidebar() {
                         threadSteps[item.id] || 0,
                         item.sentences.length,
                       );
-                      const currentSentence =
-                        item.sentences[
-                          Math.min(currentStep, item.sentences.length - 1)
-                        ] || item.text;
-                      const completedSentences = item.sentences.slice(
-                        0,
-                        Math.min(currentStep, item.sentences.length),
-                      );
-                      const remainingCount = Math.max(
-                        item.sentences.length - currentStep - 1,
-                        0,
-                      );
                       const isFinished = currentStep >= item.sentences.length;
                       const primaryLabel = isFinished
                         ? "已完成本组回复"
-                        : currentStep === 0
+                        : !item.hasFollowups
+                          ? "填入回复"
+                          : currentStep === 0
                           ? "填入首句"
                           : item.nextStepLabel;
 
@@ -870,65 +1240,55 @@ export default function CSSidebar() {
                               >
                                 {item.hasFollowups ? "分步发送" : "直接回复"}
                               </Badge>
-                              {item.hasFollowups ? (
-                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                                  {Math.min(
-                                    currentStep + 1,
-                                    item.sentences.length,
-                                  )}
-                                  /{item.sentences.length}
-                                </span>
-                              ) : null}
-                              {item.source ? (
-                                <span className="truncate text-[10px] uppercase tracking-[0.08em] text-slate-400">
-                                  {item.source}
-                                </span>
-                              ) : null}
-                            </div>
-                            <div
-                              className={`${sidebarMeta} max-w-[44%] text-right`}
-                            >
-                              {item.reason ? <div>{item.reason}</div> : null}
+                              <span className="text-[10px] text-slate-400">
+                                已填 {Math.min(currentStep, item.sentences.length)}/
+                                {item.sentences.length}
+                              </span>
                             </div>
                           </div>
 
-                          {completedSentences.length > 0 &&
-                          item.hasFollowups ? (
-                            <div className="mb-2 space-y-1 rounded-xl bg-white px-2.5 py-2 shadow-[inset_0_0_0_1px_rgba(191,219,254,0.55)]">
-                              {completedSentences.map(
-                                (sentence, sentenceIdx) => (
-                                  <div
-                                    key={`${item.id}-done-${sentenceIdx}`}
-                                    className="flex items-start gap-2 text-[11px] text-slate-500"
-                                  >
-                                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                                    <span>{sentence}</span>
+                          <div className="mb-2 space-y-1.5 rounded-xl bg-white/90 px-2.5 py-2.5 shadow-[inset_0_0_0_1px_rgba(226,232,240,0.9)]">
+                            {item.sentences.map((sentence, sentenceIdx) => {
+                              const isSent = sentenceIdx < currentStep;
+                              const isCurrent =
+                                !isFinished && sentenceIdx === currentStep;
+                              return (
+                                <div
+                                  key={`${item.id}-sentence-${sentenceIdx}`}
+                                  className="flex items-start gap-2"
+                                >
+                                  <div className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center">
+                                    {isSent ? (
+                                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                                    ) : (
+                                      <span
+                                        className={`block h-1.5 w-1.5 rounded-full ${
+                                          isCurrent
+                                            ? "bg-blue-500"
+                                            : "bg-slate-300"
+                                        }`}
+                                      />
+                                    )}
                                   </div>
-                                ),
-                              )}
-                            </div>
-                          ) : null}
+                                  <div
+                                    className={`min-w-0 text-[11.5px] leading-5 transition-colors duration-200 ${
+                                      isSent
+                                        ? "text-slate-500"
+                                        : isCurrent
+                                          ? "font-medium text-slate-800"
+                                          : "text-slate-400"
+                                    }`}
+                                  >
+                                    {sentence}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
 
-                          {!isFinished ? (
-                            <div className="mb-2 text-[12.5px] leading-6 text-slate-800">
-                              {currentSentence}
-                            </div>
-                          ) : (
-                            <div className="mb-2 rounded-xl bg-emerald-50 px-3 py-2 text-[12px] text-emerald-700">
-                              这组建议已全部填入完成，可直接发送或切换下一组建议。
-                            </div>
-                          )}
-
-                          {item.hasFollowups && !isFinished ? (
-                            <div className="mb-2 flex items-center justify-between rounded-xl border border-blue-100 bg-blue-50/80 px-2.5 py-1.5 text-[11px] text-blue-700">
-                              <span>
-                                {currentStep === 0
-                                  ? "这条建议还有下一句"
-                                  : `后续还有 ${remainingCount} 句可继续发送`}
-                              </span>
-                              <span className="font-medium">
-                                {item.nextStepLabel}
-                              </span>
+                          {isFinished ? (
+                            <div className="mb-2 text-[11px] text-emerald-700">
+                              这组建议已填入完成。
                             </div>
                           ) : null}
 

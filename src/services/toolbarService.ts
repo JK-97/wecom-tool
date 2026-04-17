@@ -36,8 +36,17 @@ export type KFToolbarBootstrap = {
   };
   summary?: {
     status?: string;
-    current_round?: string;
-    history_highlights?: string[];
+    headline?: string;
+    customer_goal?: string;
+    journey_stage?: string;
+    relationship_stage?: string;
+    priority?: string;
+    opportunity_level?: string;
+    blocking_issues?: string[];
+    decision_signals?: string[];
+    next_best_actions?: string[];
+    reply_guardrails?: string[];
+    profile_facts?: string[];
   };
   suggestions?: KFToolbarSuggestionBatch;
   capabilities?: {

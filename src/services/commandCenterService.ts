@@ -54,6 +54,21 @@ export type CommandCenterViewModel = {
       customer_intent?: string;
       priority?: string;
       suggested_focus?: string;
+      customer_goal?: string;
+      journey_stage?: string;
+      relationship_stage?: string;
+      confidence?: string;
+      profile_summary?: string;
+      blocking_issues?: string[];
+      decision_signals?: string[];
+      required_information?: string[];
+      next_best_actions?: string[];
+      reply_guardrails?: string[];
+      opportunity_level?: string;
+      opportunity_signals?: string[];
+      recommended_offer?: string;
+      handoff_recommendation?: string;
+      handoff_reason?: string;
     };
     compliance?: {
       status?: string;

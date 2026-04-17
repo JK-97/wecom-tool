@@ -944,7 +944,7 @@ export default function CSCommandCenter() {
     return () => {
       alive = false;
     };
-  }, [queryOpenKFID, selectedSessionKey, view?.sessions]);
+  }, [queryOpenKFID, selectedSessionKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1366,6 +1366,50 @@ export default function CSCommandCenter() {
     activeMonitor?.summary ||
     "暂无会话摘要"
   ).trim();
+  const analysisFacts = {
+    blockingIssues: Array.from(
+      new Set(
+        (activeMonitor?.summary_detail?.blocking_issues || [])
+          .map((item) => (item || "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 4),
+    decisionSignals: Array.from(
+      new Set(
+        (activeMonitor?.summary_detail?.decision_signals || [])
+          .map((item) => (item || "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 4),
+    requiredInformation: Array.from(
+      new Set(
+        (activeMonitor?.summary_detail?.required_information || [])
+          .map((item) => (item || "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 4),
+    nextBestActions: Array.from(
+      new Set(
+        (activeMonitor?.summary_detail?.next_best_actions || [])
+          .map((item) => (item || "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 4),
+    replyGuardrails: Array.from(
+      new Set(
+        (activeMonitor?.summary_detail?.reply_guardrails || [])
+          .map((item) => (item || "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 4),
+    opportunitySignals: Array.from(
+      new Set(
+        (activeMonitor?.summary_detail?.opportunity_signals || [])
+          .map((item) => (item || "").trim())
+          .filter(Boolean),
+      ),
+    ).slice(0, 4),
+  };
   const complianceRisk =
     (activeMonitor?.compliance?.status || "").trim().toLowerCase() === "risk" ||
     activeMonitor?.compliance_pass === false;
@@ -1994,29 +2038,132 @@ export default function CSCommandCenter() {
                       <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">
                         {summaryText}
                       </div>
-                      {activeMonitor?.summary_detail?.customer_intent ||
-                      activeMonitor?.summary_detail?.suggested_focus ? (
-                        <div className="mt-2 space-y-1 text-[11px] text-gray-500">
-                          {activeMonitor?.summary_detail?.customer_intent ? (
-                            <div>
-                              客户诉求：
-                              {activeMonitor.summary_detail.customer_intent.trim()}
-                            </div>
-                          ) : null}
-                          {activeMonitor?.summary_detail?.priority ? (
-                            <div>
-                              优先级：
-                              {activeMonitor.summary_detail.priority.trim()}
-                            </div>
-                          ) : null}
-                          {activeMonitor?.summary_detail?.suggested_focus ? (
-                            <div>
-                              跟进重点：
-                              {activeMonitor.summary_detail.suggested_focus.trim()}
+                      <div className="mt-3 space-y-3">
+                        <div>
+                          <div className="mb-2 text-[11px] text-gray-500">
+                            经营判断
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {activeMonitor?.summary_detail?.customer_intent ? (
+                              <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
+                                诉求：{activeMonitor.summary_detail.customer_intent.trim()}
+                              </Badge>
+                            ) : null}
+                            {activeMonitor?.summary_detail?.customer_goal ? (
+                              <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
+                                目标：{activeMonitor.summary_detail.customer_goal.trim()}
+                              </Badge>
+                            ) : null}
+                            {activeMonitor?.summary_detail?.journey_stage ? (
+                              <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
+                                阶段：{activeMonitor.summary_detail.journey_stage.trim()}
+                              </Badge>
+                            ) : null}
+                            {activeMonitor?.summary_detail?.relationship_stage ? (
+                              <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
+                                关系：{activeMonitor.summary_detail.relationship_stage.trim()}
+                              </Badge>
+                            ) : null}
+                            {activeMonitor?.summary_detail?.priority ? (
+                              <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
+                                优先级：{activeMonitor.summary_detail.priority.trim()}
+                              </Badge>
+                            ) : null}
+                            {activeMonitor?.summary_detail?.confidence ? (
+                              <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
+                                置信度：{activeMonitor.summary_detail.confidence.trim()}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          {activeMonitor?.summary_detail?.profile_summary ? (
+                            <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                              {activeMonitor.summary_detail.profile_summary.trim()}
                             </div>
                           ) : null}
                         </div>
-                      ) : null}
+
+                        {analysisFacts.blockingIssues.length > 0 ||
+                        analysisFacts.decisionSignals.length > 0 ||
+                        activeMonitor?.summary_detail?.opportunity_level ||
+                        analysisFacts.opportunitySignals.length > 0 ? (
+                          <div>
+                            <div className="mb-2 text-[11px] text-gray-500">
+                              机会与阻塞
+                            </div>
+                            <div className="space-y-1 text-[11px] text-gray-500">
+                              {analysisFacts.blockingIssues.length > 0 ? (
+                                <div>
+                                  阻塞点：{analysisFacts.blockingIssues.join("；")}
+                                </div>
+                              ) : null}
+                              {analysisFacts.decisionSignals.length > 0 ? (
+                                <div>
+                                  决策信号：
+                                  {analysisFacts.decisionSignals.join("；")}
+                                </div>
+                              ) : null}
+                              {activeMonitor?.summary_detail?.opportunity_level ? (
+                                <div>
+                                  机会等级：
+                                  {activeMonitor.summary_detail.opportunity_level.trim()}
+                                </div>
+                              ) : null}
+                              {analysisFacts.opportunitySignals.length > 0 ? (
+                                <div>
+                                  机会线索：
+                                  {analysisFacts.opportunitySignals.join("；")}
+                                </div>
+                              ) : null}
+                              {activeMonitor?.summary_detail?.recommended_offer ? (
+                                <div>
+                                  推荐策略：
+                                  {activeMonitor.summary_detail.recommended_offer.trim()}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {analysisFacts.nextBestActions.length > 0 ||
+                        analysisFacts.requiredInformation.length > 0 ||
+                        analysisFacts.replyGuardrails.length > 0 ||
+                        activeMonitor?.summary_detail?.handoff_recommendation ? (
+                          <div>
+                            <div className="mb-2 text-[11px] text-gray-500">
+                              下一步动作
+                            </div>
+                            <div className="space-y-1 text-[11px] text-gray-500">
+                              {analysisFacts.nextBestActions.length > 0 ? (
+                                <div>
+                                  建议动作：
+                                  {analysisFacts.nextBestActions.join("；")}
+                                </div>
+                              ) : null}
+                              {analysisFacts.requiredInformation.length > 0 ? (
+                                <div>
+                                  仍需确认：
+                                  {analysisFacts.requiredInformation.join("；")}
+                                </div>
+                              ) : null}
+                              {analysisFacts.replyGuardrails.length > 0 ? (
+                                <div>
+                                  回复注意：
+                                  {analysisFacts.replyGuardrails.join("；")}
+                                </div>
+                              ) : null}
+                              {activeMonitor?.summary_detail?.handoff_recommendation ? (
+                                <div>
+                                  转人工建议：
+                                  {activeMonitor.summary_detail.handoff_recommendation.trim()}
+                                  {activeMonitor?.summary_detail?.handoff_reason
+                                    ? `，${activeMonitor.summary_detail.handoff_reason.trim()}`
+                                    : ""}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
 
                     <div>
