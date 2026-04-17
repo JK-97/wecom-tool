@@ -44,7 +44,10 @@ import {
   resolveServicerIdentityView,
   splitIdentityTokens,
 } from "@/services/servicerIdentity";
-import { openWecomKfConversation, toJSSDKErrorMessage } from "@/services/jssdkService";
+import {
+  openWecomKfConversation,
+  toJSSDKErrorMessage,
+} from "@/services/jssdkService";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
@@ -88,7 +91,9 @@ type TransferCandidate = {
   rawID: string;
 };
 
-type RoutingRecord = NonNullable<CommandCenterSessionDetail["routing_records"]>[number];
+type RoutingRecord = NonNullable<
+  CommandCenterSessionDetail["routing_records"]
+>[number];
 type SessionStatusPresentation = {
   label: string;
   badgeClassName: string;
@@ -144,12 +149,12 @@ function renderServicerValue(props: {
   return (
     <span className="inline-flex flex-wrap items-center justify-end gap-2">
       {tokens.map((token) => {
-        const identity = resolveServicerIdentityToken(token, props.identityLookup);
+        const identity = resolveServicerIdentityToken(
+          token,
+          props.identityLookup,
+        );
         const displayIdentity = (identity?.displayIdentity || "").trim();
-        const displayFallback = (
-          identity?.displayFallback ||
-          token
-        ).trim();
+        const displayFallback = (identity?.displayFallback || token).trim();
         const rawID = (identity?.rawServicerUserID || "").trim();
         return (
           <span
@@ -211,11 +216,16 @@ function renderRoutingIdentity(props: {
     ...splitIdentityTokens(props.fallback || ""),
   ].filter(Boolean);
   const resolvedToken =
-    candidates.find((item) => resolveServicerIdentityToken(item, props.identityLookup)) ||
+    candidates.find((item) =>
+      resolveServicerIdentityToken(item, props.identityLookup),
+    ) ||
     candidates[0] ||
     "";
   if (!resolvedToken) return <span>{fallback}</span>;
-  const identity = resolveServicerIdentityToken(resolvedToken, props.identityLookup);
+  const identity = resolveServicerIdentityToken(
+    resolvedToken,
+    props.identityLookup,
+  );
   const displayIdentity = (identity?.displayIdentity || resolvedToken).trim();
   const displayFallback = (identity?.displayFallback || fallback).trim();
   return (
@@ -228,27 +238,53 @@ function renderRoutingIdentity(props: {
   );
 }
 
-function resolveMessageSenderKind(message?: CommandCenterMessage | null): MessageSenderKind {
+function resolveMessageSenderKind(
+  message?: CommandCenterMessage | null,
+): MessageSenderKind {
   const sender = (message?.sender || "").trim().toLowerCase();
   if (sender === "assistant") return "assistant";
   if (sender === "staff") return "staff";
   return "customer";
 }
 
+function buildCommandCenterSessionKey(
+  input?: {
+    open_kfid?: string;
+    external_userid?: string;
+  } | null,
+): string {
+  const openKFID = (input?.open_kfid || "").trim();
+  const externalUserID = (input?.external_userid || "").trim();
+  if (!openKFID || !externalUserID) return "";
+  return `${openKFID}\u001f${externalUserID}`;
+}
+
+function findCommandCenterSessionByKey(
+  sessions: CommandCenterSession[],
+  sessionKey: string,
+): CommandCenterSession | null {
+  const normalizedKey = sessionKey.trim();
+  if (!normalizedKey) return null;
+  return (
+    sessions.find(
+      (item) => buildCommandCenterSessionKey(item) === normalizedKey,
+    ) || null
+  );
+}
+
 function shouldRefreshSelectedDetail(
   payload: CommandCenterRealtimeEnvelope,
-  selectedExternalUserID: string,
-  openKFID: string,
+  selectedSessionKey: string,
 ): boolean {
-  const selected = selectedExternalUserID.trim();
+  const selected = selectedSessionKey.trim();
   if (!selected) return false;
-  const targetOpenKFID = openKFID.trim();
   return (payload.events || []).some((event) => {
-    const eventExternalUserID = (event.external_userid || "").trim();
-    if (!eventExternalUserID || eventExternalUserID !== selected) return false;
-    const eventOpenKFID = (event.open_kfid || "").trim();
-    if (!targetOpenKFID || !eventOpenKFID) return true;
-    return eventOpenKFID === targetOpenKFID;
+    return (
+      buildCommandCenterSessionKey({
+        open_kfid: event.open_kfid,
+        external_userid: event.external_userid,
+      }) === selected
+    );
   });
 }
 
@@ -257,7 +293,9 @@ function renderMessageStaffName(props: {
   corpId: string;
   identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
 }) {
-  const directDisplayUserID = (props.message.sender_display_userid || "").trim();
+  const directDisplayUserID = (
+    props.message.sender_display_userid || ""
+  ).trim();
   const senderUserID = (props.message.sender_userid || "").trim();
   const resolvedIdentity = directDisplayUserID
     ? null
@@ -283,12 +321,14 @@ function renderMessageStaffName(props: {
       />
     );
   }
-  return <span className="text-[11px] font-medium text-gray-600">{displayFallback}</span>;
+  return (
+    <span className="text-[11px] font-medium text-gray-600">
+      {displayFallback}
+    </span>
+  );
 }
 
-function hasRoutingRecordDetails(
-  record?: RoutingRecord,
-): boolean {
+function hasRoutingRecordDetails(record?: RoutingRecord): boolean {
   const details = record?.details;
   if (!details) return false;
   return [
@@ -307,12 +347,18 @@ function shouldShowRoutingReason(record?: RoutingRecord): boolean {
   const reason = (record?.details?.reason_summary || "").trim();
   if (!reason) return false;
   const action = (record?.action_text || "").trim();
-  const target = (record?.target_label || record?.details?.target_label || "").trim();
+  const target = (
+    record?.target_label ||
+    record?.details?.target_label ||
+    ""
+  ).trim();
   const normalizedReason = reason.replace(/\s+/g, "");
   const normalizedAction = action.replace(/\s+/g, "");
   const normalizedTarget = target.replace(/\s+/g, "");
-  if (normalizedAction && normalizedReason.includes(normalizedAction)) return false;
-  if (normalizedTarget && normalizedReason.includes(normalizedTarget)) return false;
+  if (normalizedAction && normalizedReason.includes(normalizedAction))
+    return false;
+  if (normalizedTarget && normalizedReason.includes(normalizedTarget))
+    return false;
   return true;
 }
 
@@ -368,7 +414,10 @@ function readLiveQueueWaitText(
   if (!session) return "";
   const baseSeconds = Number(session.queue_wait_secs || 0);
   if (baseSeconds > 0 && fetchedAtMs > 0) {
-    const elapsedSeconds = Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000));
+    const elapsedSeconds = Math.max(
+      0,
+      Math.floor((nowMs - fetchedAtMs) / 1000),
+    );
     return formatQueueWaitDuration(baseSeconds + elapsedSeconds);
   }
   return (session.queue_wait_text || "").trim();
@@ -438,23 +487,34 @@ export default function CSCommandCenter() {
   const [isEndModalOpen, setIsEndModalOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgradeSuccess, setIsUpgradeSuccess] = useState(false);
-  const [isRoutingHistoryExpanded, setIsRoutingHistoryExpanded] = useState(false);
+  const [isRoutingHistoryExpanded, setIsRoutingHistoryExpanded] =
+    useState(false);
 
   const [view, setView] = useState<CommandCenterViewModel | null>(null);
   const [detail, setDetail] = useState<CommandCenterSessionDetail | null>(null);
-  const [messageWindow, setMessageWindow] = useState<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
-  const [selectedExternalUserID, setSelectedExternalUserID] = useState("");
+  const [messageWindow, setMessageWindow] =
+    useState<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
+  const [selectedSessionKey, setSelectedSessionKey] = useState("");
   const [activeTab, setActiveTab] = useState<SessionTab>("queue");
-  const [detailPanelTab, setDetailPanelTab] = useState<DetailPanelTab>("monitor");
+  const [detailPanelTab, setDetailPanelTab] =
+    useState<DetailPanelTab>("monitor");
   const [keyword, setKeyword] = useState("");
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOpeningWecomSession, setIsOpeningWecomSession] = useState(false);
-  const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
-  const [sessionServicerAssignments, setSessionServicerAssignments] = useState<KFServicerAssignment[]>([]);
-  const [channelDisplayMap, setChannelDisplayMap] = useState<Record<string, string>>({});
-  const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
-  const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
+  const [transferCandidates, setTransferCandidates] = useState<
+    TransferCandidate[]
+  >([]);
+  const [sessionServicerAssignments, setSessionServicerAssignments] = useState<
+    KFServicerAssignment[]
+  >([]);
+  const [channelDisplayMap, setChannelDisplayMap] = useState<
+    Record<string, string>
+  >({});
+  const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] =
+    useState(false);
+  const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] =
+    useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [showBackToLatest, setShowBackToLatest] = useState(false);
@@ -463,10 +523,16 @@ export default function CSCommandCenter() {
   const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [transferSearch, setTransferSearch] = useState("");
-  const [selectedTransferServicerID, setSelectedTransferServicerID] = useState("");
-  const transferCandidatesCacheRef = useRef(new Map<string, TransferCandidate[]>());
-  const servicerAssignmentsCacheRef = useRef(new Map<string, KFServicerAssignment[]>());
-  const selectedExternalUserIDRef = useRef("");
+  const [selectedTransferServicerID, setSelectedTransferServicerID] =
+    useState("");
+  const transferCandidatesCacheRef = useRef(
+    new Map<string, TransferCandidate[]>(),
+  );
+  const servicerAssignmentsCacheRef = useRef(
+    new Map<string, KFServicerAssignment[]>(),
+  );
+  const selectedSessionKeyRef = useRef("");
+  const sessionsRef = useRef<CommandCenterSession[]>([]);
   const prevSelectedBucketRef = useRef<string>("");
   const messageWindowRef = useRef<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
   const chatStreamVersionRef = useRef(0);
@@ -527,7 +593,8 @@ export default function CSCommandCenter() {
     if (!container) return;
     const distanceToBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
-    const isNearBottom = distanceToBottom <= COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX;
+    const isNearBottom =
+      distanceToBottom <= COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX;
     shouldStickToBottomRef.current = isNearBottom;
     setIsBrowsingHistory(!isNearBottom);
     setShowBackToLatest(!isNearBottom);
@@ -556,17 +623,31 @@ export default function CSCommandCenter() {
       }
       if (mode === "prepend_history") {
         return {
-          messages: mergeCommandCenterMessages(previous.messages, incomingMessages, mode),
+          messages: mergeCommandCenterMessages(
+            previous.messages,
+            incomingMessages,
+            mode,
+          ),
           nextCursor: (data.next_cursor || "").trim(),
           nextToken: (data.next_token || "").trim(),
-          latestVersion: Math.max(previous.latestVersion, Number(data.latest_version || 0)),
+          latestVersion: Math.max(
+            previous.latestVersion,
+            Number(data.latest_version || 0),
+          ),
         };
       }
       return {
-        messages: mergeCommandCenterMessages(previous.messages, incomingMessages, mode),
+        messages: mergeCommandCenterMessages(
+          previous.messages,
+          incomingMessages,
+          mode,
+        ),
         nextCursor: previous.nextCursor,
         nextToken: previous.nextToken,
-        latestVersion: Math.max(previous.latestVersion, Number(data.latest_version || 0)),
+        latestVersion: Math.max(
+          previous.latestVersion,
+          Number(data.latest_version || 0),
+        ),
       };
     });
   };
@@ -578,7 +659,7 @@ export default function CSCommandCenter() {
     });
 
   const fetchDetailSnapshot = async (
-    externalUserID: string,
+    session: Pick<CommandCenterSession, "open_kfid" | "external_userid"> | null,
     params?: {
       cursor?: string;
       token?: string;
@@ -586,11 +667,12 @@ export default function CSCommandCenter() {
       limit?: number;
     },
   ) => {
-    const selected = (externalUserID || "").trim();
-    if (!selected) return null;
+    const openKFID = (session?.open_kfid || "").trim();
+    const externalUserID = (session?.external_userid || "").trim();
+    if (!openKFID || !externalUserID) return null;
     return getCSCommandCenterSessionDetail({
-      open_kfid: queryOpenKFID,
-      external_userid: selected,
+      open_kfid: openKFID,
+      external_userid: externalUserID,
       limit: params?.limit || COMMAND_CENTER_MESSAGE_PAGE_SIZE,
       cursor: params?.cursor,
       token: params?.token,
@@ -598,67 +680,71 @@ export default function CSCommandCenter() {
     });
   };
 
-  const resolvePreferredSelectedExternalUserID = (
+  const resolvePreferredSelectedSessionKey = (
     viewData: CommandCenterViewModel | null,
-    preferredExternalUserID: string,
-  ): { externalUserID: string; tab: SessionTab | null } => {
-    const preferred = preferredExternalUserID.trim();
+    preferredSessionKey: string,
+  ): { sessionKey: string; tab: SessionTab | null } => {
+    const preferred = preferredSessionKey.trim();
     const sessions = viewData?.sessions || [];
     // 优先级1：保持已选中的会话（不改变 tab）
     if (
       preferred &&
-      sessions.some(
-        (item) => (item.external_userid || "").trim() === preferred,
-      )
+      sessions.some((item) => buildCommandCenterSessionKey(item) === preferred)
     ) {
-      return { externalUserID: preferred, tab: null };
+      return { sessionKey: preferred, tab: null };
     }
     // 优先级2：接待中（含智能助手）的第一个
     const firstActive = sessions.find(
       (item) => resolveSessionBucket(item) === "active",
     );
-    if (firstActive?.external_userid) {
-      return { externalUserID: firstActive.external_userid.trim(), tab: "active" };
+    if (firstActive) {
+      return {
+        sessionKey: buildCommandCenterSessionKey(firstActive),
+        tab: "active",
+      };
     }
     // 优先级3：排队中的第一个
     const firstQueue = sessions.find(
       (item) => resolveSessionBucket(item) === "queue",
     );
-    if (firstQueue?.external_userid) {
-      return { externalUserID: firstQueue.external_userid.trim(), tab: "queue" };
+    if (firstQueue) {
+      return {
+        sessionKey: buildCommandCenterSessionKey(firstQueue),
+        tab: "queue",
+      };
     }
     // 无可用会话 → 空状态
-    return { externalUserID: "", tab: null };
+    return { sessionKey: "", tab: null };
   };
 
   const applyViewSnapshot = (
     viewData: CommandCenterViewModel | null,
-    preferredExternalUserID: string,
+    preferredSessionKey: string,
   ) => {
     const fetchedAtMs = Date.now();
     setView(viewData);
     setViewFetchedAtMs(fetchedAtMs);
 
-    const resolvedSelected = resolvePreferredSelectedExternalUserID(
+    const resolvedSelected = resolvePreferredSelectedSessionKey(
       viewData,
-      preferredExternalUserID,
+      preferredSessionKey,
     );
-    if (resolvedSelected.externalUserID !== preferredExternalUserID) {
+    if (resolvedSelected.sessionKey !== preferredSessionKey) {
       if (resolvedSelected.tab) setActiveTab(resolvedSelected.tab);
-      setSelectedExternalUserID(resolvedSelected.externalUserID);
-      if (!resolvedSelected.externalUserID) {
+      setSelectedSessionKey(resolvedSelected.sessionKey);
+      if (!resolvedSelected.sessionKey) {
         applyDetailSnapshot(null, "reset", fetchedAtMs);
       }
     }
     return {
       fetchedAtMs,
       resolvedSelected,
-      selectedChanged: resolvedSelected.externalUserID !== preferredExternalUserID,
+      selectedChanged: resolvedSelected.sessionKey !== preferredSessionKey,
     };
   };
 
   const runRefreshCycle = async (request: LiveRefreshRequest) => {
-    const currentSelected = selectedExternalUserIDRef.current.trim();
+    const currentSelected = selectedSessionKeyRef.current.trim();
     let resolvedSelected = currentSelected;
     let selectedChanged = false;
     let latestViewData: CommandCenterViewModel | null = null;
@@ -666,13 +752,18 @@ export default function CSCommandCenter() {
     if (request.refreshView) {
       latestViewData = await fetchViewSnapshot();
       const viewResult = applyViewSnapshot(latestViewData, currentSelected);
-      resolvedSelected = viewResult?.resolvedSelected.externalUserID || "";
+      resolvedSelected = viewResult?.resolvedSelected.sessionKey || "";
       selectedChanged = viewResult?.selectedChanged === true;
     }
     if (!request.refreshDetail || selectedChanged || !resolvedSelected) {
       return;
     }
-    const detailData = await fetchDetailSnapshot(resolvedSelected, {
+    const selectedThread = findCommandCenterSessionByKey(
+      (latestViewData?.sessions ||
+        sessionsRef.current) as CommandCenterSession[],
+      resolvedSelected,
+    );
+    const detailData = await fetchDetailSnapshot(selectedThread, {
       sinceVersion: messageWindowRef.current.latestVersion,
       limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
     });
@@ -681,13 +772,13 @@ export default function CSCommandCenter() {
     if (
       typeof document !== "undefined" &&
       document.visibilityState !== "hidden" &&
-      resolvedSelected
+      selectedThread
     ) {
-      const viewedSession = (latestViewData?.sessions || []).find(
-        (s) => (s.external_userid || "").trim() === resolvedSelected,
-      );
-      if ((viewedSession?.unread_count || 0) > 0) {
-        void markCommandCenterSessionRead({ external_userid: resolvedSelected }).catch(() => {});
+      if ((selectedThread?.unread_count || 0) > 0) {
+        void markCommandCenterSessionRead({
+          open_kfid: selectedThread.open_kfid,
+          external_userid: selectedThread.external_userid,
+        }).catch(() => {});
       }
     }
   };
@@ -738,8 +829,8 @@ export default function CSCommandCenter() {
   };
 
   useEffect(() => {
-    selectedExternalUserIDRef.current = selectedExternalUserID.trim();
-  }, [selectedExternalUserID]);
+    selectedSessionKeyRef.current = selectedSessionKey.trim();
+  }, [selectedSessionKey]);
 
   useEffect(() => {
     messageWindowRef.current = messageWindow;
@@ -754,14 +845,14 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     setIsRoutingHistoryExpanded(false);
-  }, [selectedExternalUserID]);
+  }, [selectedSessionKey]);
 
   useEffect(() => {
     shouldStickToBottomRef.current = true;
     preserveScrollOffsetRef.current = null;
     setIsBrowsingHistory(false);
     setShowBackToLatest(false);
-  }, [selectedExternalUserID]);
+  }, [selectedSessionKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -807,7 +898,7 @@ export default function CSCommandCenter() {
     void fetchViewSnapshot()
       .then((data) => {
         if (!alive) return;
-        applyViewSnapshot(data, selectedExternalUserIDRef.current);
+        applyViewSnapshot(data, selectedSessionKeyRef.current);
       })
       .catch(() => {
         if (!alive) return;
@@ -821,14 +912,23 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     let alive = true;
-    if (!selectedExternalUserID) {
+    if (!selectedSessionKey) {
+      setIsLoadingDetail(false);
+      applyDetailSnapshot(null, "reset", Date.now());
+      return;
+    }
+    const currentSelectedSession = findCommandCenterSessionByKey(
+      sessions,
+      selectedSessionKey,
+    );
+    if (!currentSelectedSession) {
       setIsLoadingDetail(false);
       applyDetailSnapshot(null, "reset", Date.now());
       return;
     }
     setIsLoadingDetail(true);
     applyDetailSnapshot(null, "reset", Date.now());
-    void fetchDetailSnapshot(selectedExternalUserID, {
+    void fetchDetailSnapshot(currentSelectedSession, {
       limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
     })
       .then((data) => {
@@ -844,7 +944,7 @@ export default function CSCommandCenter() {
     return () => {
       alive = false;
     };
-  }, [queryOpenKFID, selectedExternalUserID]);
+  }, [queryOpenKFID, selectedSessionKey, view?.sessions]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -860,7 +960,7 @@ export default function CSCommandCenter() {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
       queueLiveRefresh({
-        refreshDetail: selectedExternalUserIDRef.current.trim() !== "",
+        refreshDetail: selectedSessionKeyRef.current.trim() !== "",
       });
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -884,8 +984,7 @@ export default function CSCommandCenter() {
           queueLiveRefresh({
             refreshDetail: shouldRefreshSelectedDetail(
               payload,
-              selectedExternalUserIDRef.current,
-              queryOpenKFID,
+              selectedSessionKeyRef.current,
             ),
           });
         },
@@ -902,8 +1001,7 @@ export default function CSCommandCenter() {
           queueLiveRefresh({
             refreshDetail: shouldRefreshSelectedDetail(
               payload,
-              selectedExternalUserIDRef.current,
-              queryOpenKFID,
+              selectedSessionKeyRef.current,
             ),
           });
         },
@@ -915,7 +1013,10 @@ export default function CSCommandCenter() {
         refreshTimerRef.current = null;
       }
       sockets.forEach((socket) => {
-        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) {
           socket.close();
         }
       });
@@ -923,30 +1024,32 @@ export default function CSCommandCenter() {
   }, [queryOpenKFID]);
 
   const sessions = useMemo(() => view?.sessions || [], [view?.sessions]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
   const selectedSession = useMemo(() => {
-    const selectedID = selectedExternalUserID.trim();
-    if (!selectedID || sessions.length === 0) return null;
-    const found = sessions.find(
-      (item) => (item.external_userid || "").trim() === selectedID,
-    );
-    return found || null;
-  }, [selectedExternalUserID, sessions]);
+    return findCommandCenterSessionByKey(sessions, selectedSessionKey);
+  }, [selectedSessionKey, sessions]);
 
   useEffect(() => {
-    const currentSelected = selectedExternalUserID.trim();
-    const currentSelectedSession = sessions.find(
-      (item) => (item.external_userid || "").trim() === currentSelected,
+    const currentSelected = selectedSessionKey.trim();
+    const currentSelectedSession = findCommandCenterSessionByKey(
+      sessions,
+      currentSelected,
     );
-    if (currentSelectedSession && resolveSessionBucket(currentSelectedSession) === activeTab) {
+    if (
+      currentSelectedSession &&
+      resolveSessionBucket(currentSelectedSession) === activeTab
+    ) {
       return;
     }
     const firstSessionInActiveTab = sessions.find(
       (item) => resolveSessionBucket(item) === activeTab,
     );
-    const nextSelected = (firstSessionInActiveTab?.external_userid || "").trim();
+    const nextSelected = buildCommandCenterSessionKey(firstSessionInActiveTab);
     if (nextSelected === currentSelected) return;
-    setSelectedExternalUserID(nextSelected);
-  }, [activeTab, selectedExternalUserID, sessions]);
+    setSelectedSessionKey(nextSelected);
+  }, [activeTab, selectedSessionKey, sessions]);
 
   // Task 4: 选中会话状态变化时，左侧 tab 自动跟随
   // 只在同一会话的 bucket 发生改变时切换（排队 → 接待中 → 已结束）
@@ -961,7 +1064,11 @@ export default function CSCommandCenter() {
       setActiveTab(newBucket);
     }
     prevSelectedBucketRef.current = newBucket;
-  }, [selectedExternalUserID, selectedSession?.session_state, selectedSession?.state_bucket]);
+  }, [
+    selectedSessionKey,
+    selectedSession?.session_state,
+    selectedSession?.state_bucket,
+  ]);
 
   useEffect(() => {
     const openKFID = (selectedSession?.open_kfid || "").trim();
@@ -1018,7 +1125,10 @@ export default function CSCommandCenter() {
         transferCandidatesCacheRef.current.set(openKFID, nextCandidates);
         setTransferCandidates(nextCandidates);
         setSelectedTransferServicerID((prev) => {
-          if (prev && nextCandidates.some((item) => item.servicerUserID === prev)) {
+          if (
+            prev &&
+            nextCandidates.some((item) => item.servicerUserID === prev)
+          ) {
             return prev;
           }
           return nextCandidates[0]?.servicerUserID || "";
@@ -1057,7 +1167,13 @@ export default function CSCommandCenter() {
         `${item.name || ""} ${item.last_message || ""} ${resolveChannelPresentation(item.source).label} ${item.source || ""}`.toLowerCase();
       return joined.includes(q);
     });
-  }, [activeTab, channelDisplayMap, hasLoadedChannelDisplayMap, keyword, sessions]);
+  }, [
+    activeTab,
+    channelDisplayMap,
+    hasLoadedChannelDisplayMap,
+    keyword,
+    sessions,
+  ]);
 
   const orderedMessages = useMemo(() => {
     return sortCommandCenterMessages(messageWindow.messages);
@@ -1085,7 +1201,7 @@ export default function CSCommandCenter() {
     window.requestAnimationFrame(() => {
       scrollToLatestMessage();
     });
-  }, [orderedMessages, selectedExternalUserID]);
+  }, [orderedMessages, selectedSessionKey]);
 
   const queueCount = useMemo(
     () =>
@@ -1103,17 +1219,19 @@ export default function CSCommandCenter() {
     [sessions],
   );
   const hasOlderMessages =
-    messageWindow.nextCursor.trim() !== "" || messageWindow.nextToken.trim() !== "";
+    messageWindow.nextCursor.trim() !== "" ||
+    messageWindow.nextToken.trim() !== "";
 
   const handleLoadOlderMessages = async () => {
-    if (!selectedExternalUserID || isLoadingOlderMessages || !hasOlderMessages) return;
+    if (!selectedSession || isLoadingOlderMessages || !hasOlderMessages) return;
     const container = chatScrollContainerRef.current;
     if (container) {
-      preserveScrollOffsetRef.current = container.scrollHeight - container.scrollTop;
+      preserveScrollOffsetRef.current =
+        container.scrollHeight - container.scrollTop;
     }
     try {
       setIsLoadingOlderMessages(true);
-      const data = await fetchDetailSnapshot(selectedExternalUserID, {
+      const data = await fetchDetailSnapshot(selectedSession, {
         cursor: messageWindow.nextCursor,
         token: messageWindow.nextToken,
         limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
@@ -1227,8 +1345,12 @@ export default function CSCommandCenter() {
     }
   };
 
-  const hasSelectedSession = Boolean(selectedSession && selectedExternalUserID.trim());
-  const activeMonitor = hasSelectedSession ? detail?.monitor || view?.monitor : null;
+  const hasSelectedSession = Boolean(
+    selectedSession && selectedSessionKey.trim(),
+  );
+  const activeMonitor = hasSelectedSession
+    ? detail?.monitor || view?.monitor
+    : null;
   const emotionCode = normalizeEmotionCode(
     activeMonitor?.emotion?.code || activeMonitor?.mood || "neutral",
   );
@@ -1247,8 +1369,12 @@ export default function CSCommandCenter() {
   const complianceRisk =
     (activeMonitor?.compliance?.status || "").trim().toLowerCase() === "risk" ||
     activeMonitor?.compliance_pass === false;
-  const assignedDisplayForHeader = resolveAssignedDisplay(selectedSession || undefined);
-  const selectedSourcePresentation = resolveChannelPresentation(selectedSession?.source);
+  const assignedDisplayForHeader = resolveAssignedDisplay(
+    selectedSession || undefined,
+  );
+  const selectedSourcePresentation = resolveChannelPresentation(
+    selectedSession?.source,
+  );
   const routingRecords = detail?.routing_records || [];
   const routingHistoryRecords = routingRecords.slice(0, 10);
   const visibleRoutingRecords = isRoutingHistoryExpanded
@@ -1256,8 +1382,11 @@ export default function CSCommandCenter() {
     : routingHistoryRecords.slice(0, 3);
   const latestRoutingRecord = routingRecords[0];
   const latestMatchedRoutingRecord =
-    routingRecords.find((item) => readRoutingRuleName(item) !== "") || latestRoutingRecord;
-  const currentSessionMeta = hasSelectedSession ? selectedSession || detail?.session : null;
+    routingRecords.find((item) => readRoutingRuleName(item) !== "") ||
+    latestRoutingRecord;
+  const currentSessionMeta = hasSelectedSession
+    ? selectedSession || detail?.session
+    : null;
   const effectiveSessionState = Number(currentSessionMeta?.session_state || 0);
   const actionPanel = useMemo(() => {
     if (!currentSessionMeta) {
@@ -1268,18 +1397,32 @@ export default function CSCommandCenter() {
         secondaryActions: [],
       } satisfies SessionActionPanel;
     }
-    const poolCandidateCount = isTransferModalOpen ? transferCandidates.length : null;
+    const poolCandidateCount = isTransferModalOpen
+      ? transferCandidates.length
+      : null;
     return buildSessionActionPanel(effectiveSessionState, poolCandidateCount);
-  }, [currentSessionMeta, effectiveSessionState, isTransferModalOpen, transferCandidates.length]);
+  }, [
+    currentSessionMeta,
+    effectiveSessionState,
+    isTransferModalOpen,
+    transferCandidates.length,
+  ]);
   const queueWaitText = readLiveQueueWaitText(
     currentSessionMeta,
     selectedSession ? viewFetchedAtMs : detailFetchedAtMs,
     nowMs,
   );
   // 底部信息栏：只对排队中显示"排队:"，接待中改为"未回复:"
-  const selectedBucket = resolveSessionBucket(currentSessionMeta || ({} as CommandCenterSession));
-  const pendingReplyTextForPanel = readLivePendingReplyText(currentSessionMeta, nowMs);
-  const slaStatusToken = ((selectedSession?.reply_sla_status || "normal").trim() || "normal").toLowerCase();
+  const selectedBucket = resolveSessionBucket(
+    currentSessionMeta || ({} as CommandCenterSession),
+  );
+  const pendingReplyTextForPanel = readLivePendingReplyText(
+    currentSessionMeta,
+    nowMs,
+  );
+  const slaStatusToken = (
+    (selectedSession?.reply_sla_status || "normal").trim() || "normal"
+  ).toLowerCase();
   const slaBadgeLabel =
     selectedSession?.reply_overdue === true || selectedSession?.overdue === true
       ? "超时"
@@ -1343,11 +1486,15 @@ export default function CSCommandCenter() {
             <div className="p-4 text-sm text-gray-500">当前筛选下暂无会话</div>
           ) : (
             filteredSessions.map((session) => {
+              const sessionKey = buildCommandCenterSessionKey(session);
               const selected =
-                (session.external_userid || "").trim() ===
-                (selectedSession?.external_userid || "").trim();
+                sessionKey !== "" && sessionKey === selectedSessionKey;
               const bucket = resolveSessionBucket(session);
-              const queueWaitText = readLiveQueueWaitText(session, viewFetchedAtMs, nowMs);
+              const queueWaitText = readLiveQueueWaitText(
+                session,
+                viewFetchedAtMs,
+                nowMs,
+              );
               const pendingReplyText = readLivePendingReplyText(session, nowMs);
               const replyOverdue =
                 session.reply_overdue === true || session.overdue === true;
@@ -1359,20 +1506,20 @@ export default function CSCommandCenter() {
               const sessionStatus = resolveSessionStatusPresentation(session);
               return (
                 <div
-                  key={(
-                    session.external_userid ||
-                    session.name ||
-                    "session"
-                  ).trim()}
+                  key={sessionKey || (session.name || "session").trim()}
                   className={`p-4 cursor-pointer transition-colors ${selected ? "bg-blue-50/50 border-l-4 border-blue-600" : "hover:bg-gray-50"}`}
                   onClick={() => {
-                    const uid = (session.external_userid || "").trim();
-                    setSelectedExternalUserID(uid);
-                    if (uid) {
+                    setSelectedSessionKey(sessionKey);
+                    if (sessionKey) {
                       // 标记已读，忽略失败（不阻断交互），随后刷新列表使未读数归零
-                      void markCommandCenterSessionRead({ external_userid: uid })
+                      void markCommandCenterSessionRead({
+                        open_kfid: session.open_kfid,
+                        external_userid: session.external_userid,
+                      })
                         .catch(() => {})
-                        .finally(() => { queueLiveRefresh(); });
+                        .finally(() => {
+                          queueLiveRefresh();
+                        });
                     }
                   }}
                 >
@@ -1384,18 +1531,24 @@ export default function CSCommandCenter() {
                           {(session.name || "未命名客户").trim()}
                         </span>
                         <div className="flex items-center gap-1 mt-0.5">
-              {(() => {
-                const sourcePresentation = resolveChannelPresentation(session.source);
-                return (
+                          {(() => {
+                            const sourcePresentation =
+                              resolveChannelPresentation(session.source);
+                            return (
+                              <Badge
+                                className="max-w-[120px] truncate text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none"
+                                title={
+                                  sourcePresentation.title ||
+                                  sourcePresentation.label
+                                }
+                              >
+                                {sourcePresentation.label}
+                              </Badge>
+                            );
+                          })()}
                           <Badge
-                            className="max-w-[120px] truncate text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none"
-                            title={sourcePresentation.title || sourcePresentation.label}
+                            className={`text-[9px] px-1 py-0 border-none ${sessionStatus.badgeClassName}`}
                           >
-                            {sourcePresentation.label}
-                          </Badge>
-                );
-              })()}
-                          <Badge className={`text-[9px] px-1 py-0 border-none ${sessionStatus.badgeClassName}`}>
                             {sessionStatus.label}
                           </Badge>
                         </div>
@@ -1415,9 +1568,13 @@ export default function CSCommandCenter() {
                         </div>
                       ) : bucket === "active" && unreadCount > 0 ? (
                         // 接待中：显示未回复时长（= 客户最后发消息至今），有多少条未读
-                        <div className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}>
+                        <div
+                          className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}
+                        >
                           <Clock className="w-3 h-3 mr-1" />
-                          {pendingReplyText ? `未回复 ${pendingReplyText}` : `${unreadCount} 未读`}
+                          {pendingReplyText
+                            ? `未回复 ${pendingReplyText}`
+                            : `${unreadCount} 未读`}
                         </div>
                       ) : null}
                     </div>
@@ -1429,18 +1586,26 @@ export default function CSCommandCenter() {
                     <span className="flex items-center gap-1">
                       <GitBranch className="w-3 h-3" />{" "}
                       {assignedDisplay.displayUserID ? (
-                        <span title={assignedDisplay.rawID || assignedDisplay.displayFallback}>
-                            <WecomOpenDataName
-                              userid={assignedDisplay.displayUserID}
-                              corpId={corpID}
-                              fallback={assignedDisplay.displayFallback}
-                              className="truncate text-[10px] text-gray-700"
-                            />
+                        <span
+                          title={
+                            assignedDisplay.rawID ||
+                            assignedDisplay.displayFallback
+                          }
+                        >
+                          <WecomOpenDataName
+                            userid={assignedDisplay.displayUserID}
+                            corpId={corpID}
+                            fallback={assignedDisplay.displayFallback}
+                            className="truncate text-[10px] text-gray-700"
+                          />
                         </span>
                       ) : assignedDisplay.displayFallback ? (
                         <span
                           className="truncate text-[10px] text-gray-700"
-                          title={assignedDisplay.rawID || assignedDisplay.displayFallback}
+                          title={
+                            assignedDisplay.rawID ||
+                            assignedDisplay.displayFallback
+                          }
                         >
                           {assignedDisplay.displayFallback}
                         </span>
@@ -1469,9 +1634,7 @@ export default function CSCommandCenter() {
                 {(selectedSession?.name || "未选择会话").trim()}
               </h3>
               {sessionStatus.label ? (
-                <Badge
-                  className={sessionStatus.badgeClassName}
-                >
+                <Badge className={sessionStatus.badgeClassName}>
                   {sessionStatus.label}
                 </Badge>
               ) : null}
@@ -1537,7 +1700,11 @@ export default function CSCommandCenter() {
             <div className="flex items-center gap-1.5 text-gray-500">
               <span className="font-medium">当前状态:</span>
               <span className="text-gray-900">
-                {(sessionStatus.label || latestRoutingRecord?.details?.result_state_label || "-").trim()}
+                {(
+                  sessionStatus.label ||
+                  latestRoutingRecord?.details?.result_state_label ||
+                  "-"
+                ).trim()}
               </span>
             </div>
             {slaBadgeLabel ? (
@@ -1556,7 +1723,9 @@ export default function CSCommandCenter() {
             ) : selectedBucket === "active" && pendingReplyTextForPanel ? (
               <div className="flex items-center gap-1.5 text-gray-500">
                 <span className="font-medium">未回复:</span>
-                <span className="text-gray-900">{pendingReplyTextForPanel}</span>
+                <span className="text-gray-900">
+                  {pendingReplyTextForPanel}
+                </span>
               </div>
             ) : null}
             {isUpgradeSuccess ? (
@@ -1581,107 +1750,113 @@ export default function CSCommandCenter() {
                   <p className="text-sm text-gray-400">当前没有活跃会话</p>
                 </div>
               ) : (
-              <>
-              <div
-                ref={chatScrollContainerRef}
-                className="h-full overflow-y-auto bg-[#F5F7FA] p-6"
-                onScroll={syncScrollState}
-              >
-                <div className="flex flex-col gap-6">
-                {hasOlderMessages ? (
-                  <div className="flex justify-center">
-                    <Button
-                      variant="outline"
-                      className="h-9 rounded-full border-dashed bg-white/90 px-4 text-xs text-gray-600 shadow-sm hover:bg-white"
-                      disabled={isLoadingOlderMessages}
-                      onClick={() => void handleLoadOlderMessages()}
-                    >
-                      {isLoadingOlderMessages ? "正在加载更早消息..." : "查看更多"}
-                    </Button>
-                  </div>
-                ) : null}
-                {orderedMessages.length === 0 ? (
-                  <div className="flex min-h-[320px] items-center justify-center">
-                    {!isLoadingDetail ? (
-                      <div className="text-sm text-gray-500">暂无会话消息</div>
-                    ) : null}
-                  </div>
-                ) : (
-                  orderedMessages.map((message, index) => {
-                    const senderKind = resolveMessageSenderKind(message);
-                    const outgoing = senderKind !== "customer";
-                    const isAssistantMessage = senderKind === "assistant";
-                    const isStaffMessage = senderKind === "staff";
-                    return (
-                      <div
-                        key={getCommandCenterMessageKey(message, index)}
-                        className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
-                      >
-                        {outgoing ? (
-                          <div
-                            className={`flex h-8 min-w-8 items-center justify-center rounded-full px-2 shrink-0 ${
-                              isAssistantMessage
-                                ? "bg-blue-100 text-blue-600"
-                                : "bg-slate-100 text-slate-600"
-                            }`}
+                <>
+                  <div
+                    ref={chatScrollContainerRef}
+                    className="h-full overflow-y-auto bg-[#F5F7FA] p-6"
+                    onScroll={syncScrollState}
+                  >
+                    <div className="flex flex-col gap-6">
+                      {hasOlderMessages ? (
+                        <div className="flex justify-center">
+                          <Button
+                            variant="outline"
+                            className="h-9 rounded-full border-dashed bg-white/90 px-4 text-xs text-gray-600 shadow-sm hover:bg-white"
+                            disabled={isLoadingOlderMessages}
+                            onClick={() => void handleLoadOlderMessages()}
                           >
-                            <span className="text-[10px] font-bold">
-                              {isAssistantMessage ? "AI" : "客服"}
-                            </span>
-                          </div>
-                        ) : (
-                          <Avatar src="" size="sm" />
-                        )}
-                        <div className="flex max-w-[70%] flex-col">
-                          {outgoing ? (
-                            <div className="mb-1 flex justify-end">
-                              {isAssistantMessage ? (
-                                <span className="text-[11px] font-medium text-blue-600">AI 助手</span>
-                              ) : isStaffMessage ? (
-                                renderMessageStaffName({
-                                  message,
-                                  corpId: corpID,
-                                  identityLookup: sessionServicerLookup,
-                                })
-                              ) : null}
+                            {isLoadingOlderMessages
+                              ? "正在加载更早消息..."
+                              : "查看更多"}
+                          </Button>
+                        </div>
+                      ) : null}
+                      {orderedMessages.length === 0 ? (
+                        <div className="flex min-h-[320px] items-center justify-center">
+                          {!isLoadingDetail ? (
+                            <div className="text-sm text-gray-500">
+                              暂无会话消息
                             </div>
                           ) : null}
-                          <div
-                            className={`px-4 py-2.5 shadow-sm rounded-2xl ${
-                              outgoing
-                                ? "bg-blue-600 text-white rounded-tr-none"
-                                : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
-                            }`}
-                          >
-                            <p className="text-sm">
-                              {(message.content || "").trim()}
-                            </p>
-                            <p
-                              className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
-                            >
-                              {(message.timestamp || "")
-                                .replace("T", " ")
-                                .slice(0, 16)}
-                            </p>
-                          </div>
                         </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-              {showBackToLatest ? (
-                <button
-                  type="button"
-                  className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-xs font-medium text-white shadow-lg transition hover:bg-blue-700"
-                  onClick={() => scrollToLatestMessage("smooth")}
-                >
-                  <ChevronsDown className="h-4 w-4" />
-                  回到最新消息
-                </button>
-              ) : null}
-              </>
+                      ) : (
+                        orderedMessages.map((message, index) => {
+                          const senderKind = resolveMessageSenderKind(message);
+                          const outgoing = senderKind !== "customer";
+                          const isAssistantMessage = senderKind === "assistant";
+                          const isStaffMessage = senderKind === "staff";
+                          return (
+                            <div
+                              key={getCommandCenterMessageKey(message, index)}
+                              className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
+                            >
+                              {outgoing ? (
+                                <div
+                                  className={`flex h-8 min-w-8 items-center justify-center rounded-full px-2 shrink-0 ${
+                                    isAssistantMessage
+                                      ? "bg-blue-100 text-blue-600"
+                                      : "bg-slate-100 text-slate-600"
+                                  }`}
+                                >
+                                  <span className="text-[10px] font-bold">
+                                    {isAssistantMessage ? "AI" : "客服"}
+                                  </span>
+                                </div>
+                              ) : (
+                                <Avatar src="" size="sm" />
+                              )}
+                              <div className="flex max-w-[70%] flex-col">
+                                {outgoing ? (
+                                  <div className="mb-1 flex justify-end">
+                                    {isAssistantMessage ? (
+                                      <span className="text-[11px] font-medium text-blue-600">
+                                        AI 助手
+                                      </span>
+                                    ) : isStaffMessage ? (
+                                      renderMessageStaffName({
+                                        message,
+                                        corpId: corpID,
+                                        identityLookup: sessionServicerLookup,
+                                      })
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                <div
+                                  className={`px-4 py-2.5 shadow-sm rounded-2xl ${
+                                    outgoing
+                                      ? "bg-blue-600 text-white rounded-tr-none"
+                                      : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
+                                  }`}
+                                >
+                                  <p className="text-sm">
+                                    {(message.content || "").trim()}
+                                  </p>
+                                  <p
+                                    className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+                                  >
+                                    {(message.timestamp || "")
+                                      .replace("T", " ")
+                                      .slice(0, 16)}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                  {showBackToLatest ? (
+                    <button
+                      type="button"
+                      className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-xs font-medium text-white shadow-lg transition hover:bg-blue-700"
+                      onClick={() => scrollToLatestMessage("smooth")}
+                    >
+                      <ChevronsDown className="h-4 w-4" />
+                      回到最新消息
+                    </button>
+                  ) : null}
+                </>
               )}
             </div>
 
@@ -1703,7 +1878,9 @@ export default function CSCommandCenter() {
                   {actionButtons.map((action) => (
                     <Button
                       key={action.key}
-                      variant={action.tone === "primary" ? undefined : "outline"}
+                      variant={
+                        action.tone === "primary" ? undefined : "outline"
+                      }
                       className={`h-9 w-full ${resolveActionButtonClassName(action)}`}
                       disabled={isSubmitting || action.disabled}
                       onClick={() => void handleActionClick(action)}
@@ -1728,343 +1905,419 @@ export default function CSCommandCenter() {
           </div>
 
           {hasSelectedSession ? (
-          <div className="w-[320px] shrink-0 border-l border-gray-200 bg-white">
-            <Tabs
-              value={detailPanelTab}
-              onValueChange={(value) => setDetailPanelTab(value as DetailPanelTab)}
-              className="flex h-full min-h-0 flex-col"
-            >
-              <div className="border-b border-gray-100 px-3 py-3">
-                <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1">
-                  <TabsTrigger
-                    value="monitor"
-                    className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
-                  >
-                    <ShieldAlert className="h-4 w-4" />
-                    <span>AI 实时监控</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="upgrade"
-                    className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    <span>客户升级</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="session"
-                    className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
-                  >
-                    <GitBranch className="h-4 w-4" />
-                    <span>来源与路由</span>
-                  </TabsTrigger>
-                </TabsList>
-              </div>
+            <div className="w-[320px] shrink-0 border-l border-gray-200 bg-white">
+              <Tabs
+                value={detailPanelTab}
+                onValueChange={(value) =>
+                  setDetailPanelTab(value as DetailPanelTab)
+                }
+                className="flex h-full min-h-0 flex-col"
+              >
+                <div className="border-b border-gray-100 px-3 py-3">
+                  <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1">
+                    <TabsTrigger
+                      value="monitor"
+                      className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
+                    >
+                      <ShieldAlert className="h-4 w-4" />
+                      <span>AI 实时监控</span>
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="upgrade"
+                      className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
+                    >
+                      <UserPlus className="h-4 w-4" />
+                      <span>客户升级</span>
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="session"
+                      className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
+                    >
+                      <GitBranch className="h-4 w-4" />
+                      <span>来源与路由</span>
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
 
-              <TabsContent value="monitor" className="mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
-                <div className="space-y-6">
-                  <div>
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-xs text-gray-500">客户情绪</div>
-                      {analysisStatus === "running" || analysisStatus === "queued" ? (
-                        <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">
-                          进行中
-                        </Badge>
-                      ) : analysisStatus === "failed" ? (
-                        <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
-                          分析失败
-                        </Badge>
-                      ) : analysisStatus === "succeeded" ? (
-                        <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
-                          最近已完成
-                        </Badge>
-                      ) : (
-                        <Badge className="bg-gray-100 text-gray-600 border-none text-[10px] px-1.5 py-0">
-                          未启动
-                        </Badge>
-                      )}
+                <TabsContent
+                  value="monitor"
+                  className="mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
+                >
+                  <div className="space-y-6">
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-xs text-gray-500">客户情绪</div>
+                        {analysisStatus === "running" ||
+                        analysisStatus === "queued" ? (
+                          <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">
+                            进行中
+                          </Badge>
+                        ) : analysisStatus === "failed" ? (
+                          <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
+                            分析失败
+                          </Badge>
+                        ) : analysisStatus === "succeeded" ? (
+                          <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
+                            最近已完成
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-gray-100 text-gray-600 border-none text-[10px] px-1.5 py-0">
+                            未启动
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">
+                          {emotionPresentation.emoji}
+                        </span>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+                          <div
+                            className={`h-full ${emotionPresentation.barClass}`}
+                            style={{ width: `${emotionPresentation.width}%` }}
+                          />
+                        </div>
+                        <span
+                          className={`text-xs font-medium ${emotionPresentation.textClass}`}
+                        >
+                          {activeMonitor?.emotion?.label?.trim() || "中性"}
+                        </span>
+                      </div>
+                      {activeMonitor?.emotion?.reason ? (
+                        <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                          {activeMonitor.emotion.reason.trim()}
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl">{emotionPresentation.emoji}</span>
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
-                        <div
-                          className={`h-full ${emotionPresentation.barClass}`}
-                          style={{ width: `${emotionPresentation.width}%` }}
+
+                    <div>
+                      <div className="mb-2 text-xs text-gray-500">会话摘要</div>
+                      <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">
+                        {summaryText}
+                      </div>
+                      {activeMonitor?.summary_detail?.customer_intent ||
+                      activeMonitor?.summary_detail?.suggested_focus ? (
+                        <div className="mt-2 space-y-1 text-[11px] text-gray-500">
+                          {activeMonitor?.summary_detail?.customer_intent ? (
+                            <div>
+                              客户诉求：
+                              {activeMonitor.summary_detail.customer_intent.trim()}
+                            </div>
+                          ) : null}
+                          {activeMonitor?.summary_detail?.priority ? (
+                            <div>
+                              优先级：
+                              {activeMonitor.summary_detail.priority.trim()}
+                            </div>
+                          ) : null}
+                          {activeMonitor?.summary_detail?.suggested_focus ? (
+                            <div>
+                              跟进重点：
+                              {activeMonitor.summary_detail.suggested_focus.trim()}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-xs text-gray-500">合规质检</div>
+                      {complianceRisk ? (
+                        <div className="flex items-center gap-2 rounded-md border border-red-100 bg-red-50 p-2 text-sm text-red-600">
+                          <AlertTriangle className="h-4 w-4" />{" "}
+                          检测到潜在风险话术
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 rounded-md border border-green-100 bg-green-50 p-2 text-sm text-green-600">
+                          <CheckCircle2 className="h-4 w-4" /> 未发现违规话术
+                        </div>
+                      )}
+                      {activeMonitor?.compliance?.reason ? (
+                        <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                          {activeMonitor.compliance.reason.trim()}
+                        </div>
+                      ) : null}
+                      {activeMonitor?.compliance?.risk_tags &&
+                      activeMonitor.compliance.risk_tags.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {activeMonitor.compliance.risk_tags.map((tag) => (
+                            <Badge
+                              key={tag}
+                              className="bg-amber-100 text-amber-700 border-none text-[10px] px-1.5 py-0"
+                            >
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : null}
+                      {activeMonitor?.compliance?.recommended_action ? (
+                        <div className="mt-2 text-[11px] text-gray-500">
+                          建议动作：
+                          {activeMonitor.compliance.recommended_action.trim()}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent
+                  value="upgrade"
+                  className="mt-0 flex-1 overflow-y-auto px-4 py-4"
+                >
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        客户升级
+                      </div>
+                      <div className="mt-1 text-xs text-gray-500">
+                        进入客户联系流程
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-4">
+                      <Button
+                        className="w-full bg-blue-600 text-xs hover:bg-blue-700"
+                        onClick={() => setIsUpgradeModalOpen(true)}
+                      >
+                        升级为客户
+                      </Button>
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent
+                  value="session"
+                  className="mt-0 flex-1 overflow-y-auto px-4 py-4"
+                >
+                  <div className="space-y-6">
+                    <div>
+                      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
+                        <Info className="h-4 w-4 text-blue-600" /> 会话来源
+                      </div>
+                      <div className="space-y-2 border-b border-gray-100 pb-1">
+                        <SessionEntryContextRow
+                          label="场景"
+                          value={(detail?.entry_context?.scene || "").trim()}
+                        />
+                        <SessionEntryContextRow
+                          label="场景参数"
+                          value={(
+                            detail?.entry_context?.scene_param || ""
+                          ).trim()}
+                        />
+                        <SessionEntryContextRow
+                          label="来源昵称"
+                          value={(
+                            detail?.entry_context?.wechat_channels_nickname ||
+                            ""
+                          ).trim()}
+                        />
+                        <SessionEntryContextRow
+                          label="欢迎码"
+                          value={(
+                            detail?.entry_context?.welcome_code || ""
+                          ).trim()}
                         />
                       </div>
-                      <span className={`text-xs font-medium ${emotionPresentation.textClass}`}>
-                        {activeMonitor?.emotion?.label?.trim() || "中性"}
-                      </span>
                     </div>
-                    {activeMonitor?.emotion?.reason ? (
-                      <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
-                        {activeMonitor.emotion.reason.trim()}
-                      </div>
-                    ) : null}
-                  </div>
 
-                  <div>
-                    <div className="mb-2 text-xs text-gray-500">会话摘要</div>
-                    <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">
-                      {summaryText}
-                    </div>
-                    {activeMonitor?.summary_detail?.customer_intent ||
-                    activeMonitor?.summary_detail?.suggested_focus ? (
-                      <div className="mt-2 space-y-1 text-[11px] text-gray-500">
-                        {activeMonitor?.summary_detail?.customer_intent ? (
-                          <div>
-                            客户诉求：
-                            {activeMonitor.summary_detail.customer_intent.trim()}
-                          </div>
-                        ) : null}
-                        {activeMonitor?.summary_detail?.priority ? (
-                          <div>
-                            优先级：{activeMonitor.summary_detail.priority.trim()}
-                          </div>
-                        ) : null}
-                        {activeMonitor?.summary_detail?.suggested_focus ? (
-                          <div>
-                            跟进重点：
-                            {activeMonitor.summary_detail.suggested_focus.trim()}
-                          </div>
-                        ) : null}
+                    <div>
+                      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
+                        <GitBranch className="h-4 w-4 text-blue-600" /> 路由历史
                       </div>
-                    ) : null}
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-xs text-gray-500">合规质检</div>
-                    {complianceRisk ? (
-                      <div className="flex items-center gap-2 rounded-md border border-red-100 bg-red-50 p-2 text-sm text-red-600">
-                        <AlertTriangle className="h-4 w-4" /> 检测到潜在风险话术
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 rounded-md border border-green-100 bg-green-50 p-2 text-sm text-green-600">
-                        <CheckCircle2 className="h-4 w-4" /> 未发现违规话术
-                      </div>
-                    )}
-                    {activeMonitor?.compliance?.reason ? (
-                      <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
-                        {activeMonitor.compliance.reason.trim()}
-                      </div>
-                    ) : null}
-                    {activeMonitor?.compliance?.risk_tags &&
-                    activeMonitor.compliance.risk_tags.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {activeMonitor.compliance.risk_tags.map((tag) => (
-                          <Badge
-                            key={tag}
-                            className="bg-amber-100 text-amber-700 border-none text-[10px] px-1.5 py-0"
-                          >
-                            {tag}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
-                    {activeMonitor?.compliance?.recommended_action ? (
-                      <div className="mt-2 text-[11px] text-gray-500">
-                        建议动作：
-                        {activeMonitor.compliance.recommended_action.trim()}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-              </TabsContent>
-
-              <TabsContent value="upgrade" className="mt-0 flex-1 overflow-y-auto px-4 py-4">
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">客户升级</div>
-                    <div className="mt-1 text-xs text-gray-500">进入客户联系流程</div>
-                  </div>
-                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-4">
-                    <Button
-                      className="w-full bg-blue-600 text-xs hover:bg-blue-700"
-                      onClick={() => setIsUpgradeModalOpen(true)}
-                    >
-                      升级为客户
-                    </Button>
-                  </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="session" className="mt-0 flex-1 overflow-y-auto px-4 py-4">
-                <div className="space-y-6">
-                  <div>
-                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
-                      <Info className="h-4 w-4 text-blue-600" /> 会话来源
-                    </div>
-                    <div className="space-y-2 border-b border-gray-100 pb-1">
-                      <SessionEntryContextRow
-                        label="场景"
-                        value={(detail?.entry_context?.scene || "").trim()}
-                      />
-                      <SessionEntryContextRow
-                        label="场景参数"
-                        value={(detail?.entry_context?.scene_param || "").trim()}
-                      />
-                      <SessionEntryContextRow
-                        label="来源昵称"
-                        value={(detail?.entry_context?.wechat_channels_nickname || "").trim()}
-                      />
-                      <SessionEntryContextRow
-                        label="欢迎码"
-                        value={(detail?.entry_context?.welcome_code || "").trim()}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
-                      <GitBranch className="h-4 w-4 text-blue-600" /> 路由历史
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                      {routingHistoryRecords.length > 0 ? (
-                        visibleRoutingRecords.map((record, index) => (
-                          <div
-                            key={`${record.occurred_at || ""}-${record.actor_userid || record.actor_label || ""}-${index}`}
-                            className="py-2.5"
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className="w-11 shrink-0 pt-0.5 text-[11px] font-medium text-gray-400">
-                                {formatRoutingEventTime(record.occurred_at)}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="text-sm leading-6 text-gray-900">
-                                  {record.actor_type === "system" ? (
-                                    <span className="font-medium">系统</span>
-                                  ) : record.actor_type === "customer" ? (
-                                    <span className="font-medium text-gray-900">
-                                      {(record.actor_label || "买家").trim()}
+                      <div className="divide-y divide-gray-100">
+                        {routingHistoryRecords.length > 0 ? (
+                          visibleRoutingRecords.map((record, index) => (
+                            <div
+                              key={`${record.occurred_at || ""}-${record.actor_userid || record.actor_label || ""}-${index}`}
+                              className="py-2.5"
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className="w-11 shrink-0 pt-0.5 text-[11px] font-medium text-gray-400">
+                                  {formatRoutingEventTime(record.occurred_at)}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm leading-6 text-gray-900">
+                                    {record.actor_type === "system" ? (
+                                      <span className="font-medium">系统</span>
+                                    ) : record.actor_type === "customer" ? (
+                                      <span className="font-medium text-gray-900">
+                                        {(record.actor_label || "买家").trim()}
+                                      </span>
+                                    ) : (
+                                      renderRoutingIdentity({
+                                        userid: record.actor_userid,
+                                        fallback: record.actor_label,
+                                        corpId: corpID,
+                                        identityLookup: sessionServicerLookup,
+                                      })
+                                    )}
+                                    <span className="mx-1.5">
+                                      {readRoutingActionHeadline(record)}
                                     </span>
-                                  ) : (
-                                    renderRoutingIdentity({
-                                      userid: record.actor_userid,
-                                      fallback: record.actor_label,
-                                      corpId: corpID,
-                                      identityLookup: sessionServicerLookup,
-                                    })
-                                  )}
-                                  <span className="mx-1.5">
-                                    {readRoutingActionHeadline(record)}
-                                  </span>
-                                  {shouldShowRoutingHeadlineTarget(record) && (record.target_label || "").trim() ? (
-                                    renderRoutingIdentity({
-                                      userid: record.target_userid,
-                                      fallback: record.target_label,
-                                      corpId: corpID,
-                                      identityLookup: sessionServicerLookup,
-                                    })
+                                    {shouldShowRoutingHeadlineTarget(record) &&
+                                    (record.target_label || "").trim()
+                                      ? renderRoutingIdentity({
+                                          userid: record.target_userid,
+                                          fallback: record.target_label,
+                                          corpId: corpID,
+                                          identityLookup: sessionServicerLookup,
+                                        })
+                                      : null}
+                                  </div>
+                                  {readRoutingRuleName(record) ? (
+                                    <div className="mt-0.5">
+                                      <Link
+                                        to={readRoutingRuleLink(record)}
+                                        className="text-xs text-blue-600 hover:underline"
+                                      >
+                                        按路由：{readRoutingRuleName(record)}
+                                      </Link>
+                                    </div>
+                                  ) : null}
+                                  {hasRoutingRecordDetails(record) ? (
+                                    <details className="mt-1 text-[11px] text-gray-500">
+                                      <summary className="cursor-pointer list-none select-none text-gray-400 hover:text-gray-600">
+                                        查看处理细节
+                                      </summary>
+                                      <div className="mt-2 space-y-2 border-l border-gray-100 pl-3">
+                                        <SessionEntryContextRow
+                                          label="触发来源"
+                                          value={(
+                                            record.details?.trigger_label || "-"
+                                          ).trim()}
+                                        />
+                                        {(
+                                          record.details?.rule_name || ""
+                                        ).trim() ? (
+                                          <SessionEntryContextRow
+                                            label="命中规则"
+                                            value={(
+                                              record.details?.rule_name || ""
+                                            ).trim()}
+                                          />
+                                        ) : null}
+                                        <SessionEntryContextRow
+                                          label="执行结果"
+                                          value={(
+                                            record.details
+                                              ?.execution_result_label || "-"
+                                          ).trim()}
+                                        />
+                                        <SessionEntryContextRow
+                                          label="当前状态"
+                                          value={(
+                                            record.details
+                                              ?.result_state_label || "-"
+                                          ).trim()}
+                                        />
+                                        {(
+                                          record.details?.target_label || ""
+                                        ).trim() ? (
+                                          <SessionEntryContextRow
+                                            label="当前目标"
+                                            value={renderRoutingIdentity({
+                                              userid:
+                                                record.details?.target_userid,
+                                              fallback:
+                                                record.details?.target_label,
+                                              corpId: corpID,
+                                              identityLookup:
+                                                sessionServicerLookup,
+                                            })}
+                                          />
+                                        ) : null}
+                                        {shouldShowRoutingReason(record) ? (
+                                          <SessionEntryContextRow
+                                            label="说明"
+                                            value={(
+                                              record.details?.reason_summary ||
+                                              ""
+                                            ).trim()}
+                                          />
+                                        ) : null}
+                                        {(
+                                          record.details
+                                            ?.dispatch_strategy_label || ""
+                                        ).trim() ? (
+                                          <SessionEntryContextRow
+                                            label="分配策略"
+                                            value={(
+                                              record.details
+                                                ?.dispatch_strategy_label || ""
+                                            ).trim()}
+                                          />
+                                        ) : null}
+                                        {(
+                                          record.details
+                                            ?.action_boundary_label || ""
+                                        ).trim() ? (
+                                          <SessionEntryContextRow
+                                            label="动作边界"
+                                            value={(
+                                              record.details
+                                                ?.action_boundary_label || ""
+                                            ).trim()}
+                                          />
+                                        ) : null}
+                                        {(
+                                          record.details?.trace_id || ""
+                                        ).trim() ? (
+                                          <SessionEntryContextRow
+                                            label="追踪 ID"
+                                            value={(
+                                              record.details?.trace_id || ""
+                                            ).trim()}
+                                          />
+                                        ) : null}
+                                        {(
+                                          record.details
+                                            ?.target_raw_servicer_userid || ""
+                                        ).trim() ? (
+                                          <SessionEntryContextRow
+                                            label="原始目标 ID"
+                                            value={(
+                                              record.details
+                                                ?.target_raw_servicer_userid ||
+                                              ""
+                                            ).trim()}
+                                          />
+                                        ) : null}
+                                      </div>
+                                    </details>
                                   ) : null}
                                 </div>
-                                {readRoutingRuleName(record) ? (
-                                  <div className="mt-0.5">
-                                    <Link
-                                      to={readRoutingRuleLink(record)}
-                                      className="text-xs text-blue-600 hover:underline"
-                                    >
-                                      按路由：{readRoutingRuleName(record)}
-                                    </Link>
-                                  </div>
-                                ) : null}
-                                {hasRoutingRecordDetails(record) ? (
-                                  <details className="mt-1 text-[11px] text-gray-500">
-                                    <summary className="cursor-pointer list-none select-none text-gray-400 hover:text-gray-600">
-                                      查看处理细节
-                                    </summary>
-                                    <div className="mt-2 space-y-2 border-l border-gray-100 pl-3">
-                                      <SessionEntryContextRow
-                                        label="触发来源"
-                                        value={(record.details?.trigger_label || "-").trim()}
-                                      />
-                                      {(record.details?.rule_name || "").trim() ? (
-                                        <SessionEntryContextRow
-                                          label="命中规则"
-                                          value={(record.details?.rule_name || "").trim()}
-                                        />
-                                      ) : null}
-                                      <SessionEntryContextRow
-                                        label="执行结果"
-                                        value={(record.details?.execution_result_label || "-").trim()}
-                                      />
-                                      <SessionEntryContextRow
-                                        label="当前状态"
-                                        value={(record.details?.result_state_label || "-").trim()}
-                                      />
-                                      {(record.details?.target_label || "").trim() ? (
-                                        <SessionEntryContextRow
-                                          label="当前目标"
-                                          value={renderRoutingIdentity({
-                                            userid: record.details?.target_userid,
-                                            fallback: record.details?.target_label,
-                                            corpId: corpID,
-                                            identityLookup: sessionServicerLookup,
-                                          })}
-                                        />
-                                      ) : null}
-                                      {shouldShowRoutingReason(record) ? (
-                                        <SessionEntryContextRow
-                                          label="说明"
-                                          value={(record.details?.reason_summary || "").trim()}
-                                        />
-                                      ) : null}
-                                      {(record.details?.dispatch_strategy_label || "").trim() ? (
-                                        <SessionEntryContextRow
-                                          label="分配策略"
-                                          value={(record.details?.dispatch_strategy_label || "").trim()}
-                                        />
-                                      ) : null}
-                                      {(record.details?.action_boundary_label || "").trim() ? (
-                                        <SessionEntryContextRow
-                                          label="动作边界"
-                                          value={(record.details?.action_boundary_label || "").trim()}
-                                        />
-                                      ) : null}
-                                      {(record.details?.trace_id || "").trim() ? (
-                                        <SessionEntryContextRow
-                                          label="追踪 ID"
-                                          value={(record.details?.trace_id || "").trim()}
-                                        />
-                                      ) : null}
-                                      {(record.details?.target_raw_servicer_userid || "").trim() ? (
-                                        <SessionEntryContextRow
-                                          label="原始目标 ID"
-                                          value={(record.details?.target_raw_servicer_userid || "").trim()}
-                                        />
-                                      ) : null}
-                                    </div>
-                                  </details>
-                                ) : null}
                               </div>
                             </div>
+                          ))
+                        ) : (
+                          <div className="py-2.5 text-xs text-gray-500">
+                            暂无主要 routing 变动
                           </div>
-                        ))
-                      ) : (
-                        <div className="py-2.5 text-xs text-gray-500">暂无主要 routing 变动</div>
-                      )}
-                    </div>
-                    {routingHistoryRecords.length > 3 ? (
-                      <button
-                        type="button"
-                        className="mt-2 text-[11px] font-medium text-blue-600 hover:underline"
-                        onClick={() => setIsRoutingHistoryExpanded((value) => !value)}
+                        )}
+                      </div>
+                      {routingHistoryRecords.length > 3 ? (
+                        <button
+                          type="button"
+                          className="mt-2 text-[11px] font-medium text-blue-600 hover:underline"
+                          onClick={() =>
+                            setIsRoutingHistoryExpanded((value) => !value)
+                          }
+                        >
+                          {isRoutingHistoryExpanded
+                            ? "收起"
+                            : `更多 (${routingHistoryRecords.length - visibleRoutingRecords.length})`}
+                        </button>
+                      ) : null}
+                      <Link
+                        to="/main/routing-rules"
+                        className="mt-3 inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
                       >
-                        {isRoutingHistoryExpanded
-                          ? "收起"
-                          : `更多 (${routingHistoryRecords.length - visibleRoutingRecords.length})`}
-                      </button>
-                    ) : null}
-                    <Link
-                      to="/main/routing-rules"
-                      className="mt-3 inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
-                    >
-                      前往调整路由规则 <ChevronRight className="h-3 w-3" />
-                    </Link>
+                        前往调整路由规则 <ChevronRight className="h-3 w-3" />
+                      </Link>
+                    </div>
                   </div>
-                </div>
-              </TabsContent>
-            </Tabs>
-          </div>
+                </TabsContent>
+              </Tabs>
+            </div>
           ) : null}
         </div>
       </div>
@@ -2207,7 +2460,9 @@ export default function CSCommandCenter() {
             只能从当前接待池中选择一个人工接待人员。确认后会发起企业微信真实转接，不再使用本地投影命令。
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">选择接待人员</label>
+            <label className="text-sm font-medium text-gray-700">
+              选择接待人员
+            </label>
             <input
               type="text"
               value={transferSearch}
@@ -2224,23 +2479,34 @@ export default function CSCommandCenter() {
             </div>
             <div className="max-h-[320px] overflow-y-auto">
               {isLoadingTransferCandidates ? (
-                <div className="px-4 py-10 text-sm text-gray-500">正在加载可选接待人员...</div>
+                <div className="px-4 py-10 text-sm text-gray-500">
+                  正在加载可选接待人员...
+                </div>
               ) : transferCandidatesFiltered.length === 0 ? (
                 <div className="px-4 py-10 text-sm text-gray-500">
-                  {poolCandidateCount > 0 ? "没有匹配的接待人员" : "当前接待池没有可转接人工"}
+                  {poolCandidateCount > 0
+                    ? "没有匹配的接待人员"
+                    : "当前接待池没有可转接人工"}
                 </div>
               ) : (
                 <div className="divide-y divide-gray-100">
                   {transferCandidatesFiltered.map((candidate) => {
-                    const selected = candidate.servicerUserID === selectedTransferServicerID;
+                    const selected =
+                      candidate.servicerUserID === selectedTransferServicerID;
                     return (
                       <button
                         key={candidate.servicerUserID}
                         type="button"
                         className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors ${selected ? "bg-blue-50" : "hover:bg-gray-50"}`}
-                        onClick={() => setSelectedTransferServicerID(candidate.servicerUserID)}
+                        onClick={() =>
+                          setSelectedTransferServicerID(
+                            candidate.servicerUserID,
+                          )
+                        }
                       >
-                        <div className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"}`} />
+                        <div
+                          className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"}`}
+                        />
                         <div className="min-w-0 flex-1">
                           <WecomOpenDataName
                             userid={candidate.displayUserID}
@@ -2277,7 +2543,10 @@ export default function CSCommandCenter() {
         className="max-w-[420px]"
         footer={
           <>
-            <Button variant="outline" onClick={() => setIsQueueModalOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setIsQueueModalOpen(false)}
+            >
               取消
             </Button>
             <Button
@@ -2349,13 +2618,9 @@ export default function CSCommandCenter() {
   );
 }
 
-function normalizeEmotionCode(value?: string):
-  | "stable"
-  | "neutral"
-  | "positive"
-  | "anxious"
-  | "angry"
-  | "negative" {
+function normalizeEmotionCode(
+  value?: string,
+): "stable" | "neutral" | "positive" | "anxious" | "angry" | "negative" {
   const normalized = (value || "").trim().toLowerCase();
   switch (normalized) {
     case "stable":
@@ -2370,7 +2635,9 @@ function normalizeEmotionCode(value?: string):
   }
 }
 
-function buildTransferCandidates(assignments: KFServicerAssignment[]): TransferCandidate[] {
+function buildTransferCandidates(
+  assignments: KFServicerAssignment[],
+): TransferCandidate[] {
   const deduped = new Map<string, TransferCandidate>();
   for (const assignment of assignments || []) {
     const identity = resolveServicerIdentityView(assignment);
@@ -2381,7 +2648,8 @@ function buildTransferCandidates(assignments: KFServicerAssignment[]): TransferC
     const role = (assignment.role || "").trim();
     const displayUserID = identity.displayIdentity;
     const displayFallback = identity.displayFallback;
-    const searchText = `${displayFallback} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
+    const searchText =
+      `${displayFallback} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
     deduped.set(servicerUserID, {
       servicerUserID,
       userid,
@@ -2403,7 +2671,8 @@ function buildSessionActionPanel(
   poolCandidateCount: number | null,
 ): SessionActionPanel {
   const hasKnownCandidates = poolCandidateCount !== null;
-  const hasHumanCandidates = poolCandidateCount === null || poolCandidateCount > 0;
+  const hasHumanCandidates =
+    poolCandidateCount === null || poolCandidateCount > 0;
   const transferAction: SessionActionDescriptor = {
     key: "transfer_to_human",
     label: "转给指定人工",
@@ -2411,7 +2680,9 @@ function buildSessionActionPanel(
     tone: "primary",
     disabled: !hasHumanCandidates,
     disabledReason:
-      hasHumanCandidates || !hasKnownCandidates ? "" : "当前接待池没有可转接人工",
+      hasHumanCandidates || !hasKnownCandidates
+        ? ""
+        : "当前接待池没有可转接人工",
   };
   const queueAction: SessionActionDescriptor = {
     key: "send_to_queue",
@@ -2433,9 +2704,10 @@ function buildSessionActionPanel(
         description: "可以先送入待接入池，也可以直接转给当前接待池中的人工。",
         primaryAction: queueAction,
         secondaryActions: [transferAction],
-        emptyHint: !hasKnownCandidates || hasHumanCandidates
-          ? ""
-          : "当前接待池没有可选人工，建议先送入待接入池。",
+        emptyHint:
+          !hasKnownCandidates || hasHumanCandidates
+            ? ""
+            : "当前接待池没有可选人工，建议先送入待接入池。",
       };
     case 1:
       return {
@@ -2443,9 +2715,10 @@ function buildSessionActionPanel(
         description: "需要人工介入时，可直接转给指定人工，或先送入待接入池。",
         primaryAction: transferAction,
         secondaryActions: [queueAction],
-        emptyHint: !hasKnownCandidates || hasHumanCandidates
-          ? ""
-          : "当前接待池没有可选人工，只能先送入待接入池。",
+        emptyHint:
+          !hasKnownCandidates || hasHumanCandidates
+            ? ""
+            : "当前接待池没有可选人工，只能先送入待接入池。",
       };
     case 2:
       return {
@@ -2472,7 +2745,8 @@ function buildSessionActionPanel(
     case 4:
       return {
         title: "当前会话已结束",
-        description: "已结束会话不再提供后台流转动作。如需重新接入，请在企业微信客户端中执行。",
+        description:
+          "已结束会话不再提供后台流转动作。如需重新接入，请在企业微信客户端中执行。",
         primaryAction: null,
         secondaryActions: [],
       };
@@ -2512,7 +2786,11 @@ function buildFlatSessionActions(
     tone: "secondary",
     disabled: sessionState === 2 || sessionState === 4,
     disabledReason:
-      sessionState === 2 ? "当前已在待接入池中" : sessionState === 4 ? "当前会话已结束" : "",
+      sessionState === 2
+        ? "当前已在待接入池中"
+        : sessionState === 4
+          ? "当前会话已结束"
+          : "",
   };
   const endAction: SessionActionDescriptor = {
     key: "end_session",
@@ -2521,7 +2799,11 @@ function buildFlatSessionActions(
     tone: "danger",
     disabled: sessionState !== 3,
     disabledReason:
-      sessionState === 4 ? "当前会话已结束" : sessionState === 3 ? "" : "当前状态不支持直接结束会话",
+      sessionState === 4
+        ? "当前会话已结束"
+        : sessionState === 3
+          ? ""
+          : "当前状态不支持直接结束会话",
   };
   if (sessionState === 3) {
     queueAction.disabled = true;
@@ -2541,8 +2823,11 @@ function resolveActionButtonClassName(action: SessionActionDescriptor): string {
 }
 
 function readActionDisabledMessage(panel: SessionActionPanel): string {
-  if (panel.primaryAction?.disabledReason) return panel.primaryAction.disabledReason;
-  const disabledSecondary = panel.secondaryActions.find((item) => item.disabledReason);
+  if (panel.primaryAction?.disabledReason)
+    return panel.primaryAction.disabledReason;
+  const disabledSecondary = panel.secondaryActions.find(
+    (item) => item.disabledReason,
+  );
   return disabledSecondary?.disabledReason || "";
 }
 
@@ -2639,12 +2924,19 @@ function getCommandCenterMessageKey(
     (message.type || "").trim(),
     (message.timestamp || "").trim(),
     (message.content || "").trim(),
-    (message.delivered_at || message.last_attempt_at || message.next_retry_at || "").trim(),
+    (
+      message.delivered_at ||
+      message.last_attempt_at ||
+      message.next_retry_at ||
+      ""
+    ).trim(),
     String(fallbackIndex),
   ].join("|");
 }
 
-function sortCommandCenterMessages(messages: CommandCenterMessage[]): CommandCenterMessage[] {
+function sortCommandCenterMessages(
+  messages: CommandCenterMessage[],
+): CommandCenterMessage[] {
   return [...(messages || [])]
     .map((message, index) => ({ message, index }))
     .sort((left, right) =>

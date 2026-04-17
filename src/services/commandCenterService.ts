@@ -222,7 +222,9 @@ export function openCommandCenterRealtimeSocket(input: {
   const socket = new WebSocket(url);
   socket.onmessage = (event) => {
     try {
-      const payload = JSON.parse(String(event.data || "")) as CommandCenterRealtimeEnvelope;
+      const payload = JSON.parse(
+        String(event.data || ""),
+      ) as CommandCenterRealtimeEnvelope;
       input.onMessage(payload);
     } catch {
       // Ignore malformed payloads and keep the stream alive.
@@ -243,7 +245,9 @@ function buildRealtimeSocketURL(
 ): string {
   const base =
     (import.meta.env.VITE_API_BASE_URL || "").trim() ||
-    (typeof window !== "undefined" ? window.location.origin : "http://localhost");
+    (typeof window !== "undefined"
+      ? window.location.origin
+      : "http://localhost");
   const url = new URL(`/api/v1/realtime/${topic}/ws`, base);
   if (url.protocol === "https:") {
     url.protocol = "wss:";
@@ -306,12 +310,14 @@ export async function transitionKFServiceState(input: {
 }
 
 export async function markCommandCenterSessionRead(params: {
+  open_kfid?: string;
   external_userid?: string;
 }): Promise<void> {
   const customerID = (params.external_userid || "").trim();
-  if (!customerID) return;
+  const openKFID = (params.open_kfid || "").trim();
+  if (!customerID || !openKFID) return;
   await requestJSON<unknown>("/api/v1/chat/conversations/read", {
     method: "POST",
-    body: JSON.stringify({ customer_id: customerID }),
+    body: JSON.stringify({ customer_id: customerID, open_kfid: openKFID }),
   });
 }
