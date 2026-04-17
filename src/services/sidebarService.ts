@@ -6,24 +6,6 @@ type APIReply<T> = {
   data?: T
 }
 
-export type KFSidebarContext = {
-  entry?: string
-  kind?: string
-  open_kfid?: string
-  external_userid?: string
-  contact_name?: string
-  contact_avatar?: string
-  session_state?: number
-  session_label?: string
-  last_active?: string
-  last_message?: string
-  unread_count?: number
-  capability_hints?: Record<string, boolean>
-  suggestions?: Array<{ id?: string; text?: string }>
-  sop_items?: Array<{ id?: string; title?: string }>
-  warnings?: string[]
-}
-
 export type ContactSidebarContext = {
   mode?: "single" | "group" | string
   contact?: {
@@ -64,19 +46,6 @@ export type SidebarCommandResult = {
   message?: string
 }
 
-export async function getKFSidebarContext(params: {
-  entry?: string
-  open_kfid?: string
-  external_userid?: string
-}): Promise<KFSidebarContext | null> {
-  const search = new URLSearchParams()
-  if (params.entry) search.set("entry", params.entry)
-  if (params.open_kfid) search.set("open_kfid", params.open_kfid)
-  if (params.external_userid) search.set("external_userid", params.external_userid)
-  const payload = await requestJSON<APIReply<KFSidebarContext>>(`/api/v1/sidebar/kf/context?${search.toString()}`)
-  return payload?.data || null
-}
-
 export async function getContactSidebarContext(params: {
   mode?: string
   entry?: string
@@ -89,24 +58,6 @@ export async function getContactSidebarContext(params: {
   if (params.external_userid) search.set("external_userid", params.external_userid)
   if (params.chat_id) search.set("chat_id", params.chat_id)
   const payload = await requestJSON<APIReply<ContactSidebarContext>>(`/api/v1/sidebar/contact/context?${search.toString()}`)
-  return payload?.data || null
-}
-
-export async function executeKFSidebarCommand(input: {
-  command: string
-  open_kfid?: string
-  external_userid?: string
-  payload?: Record<string, unknown>
-}): Promise<SidebarCommandResult | null> {
-  const payload = await requestJSON<APIReply<SidebarCommandResult>>("/api/v1/sidebar/kf/commands", {
-    method: "POST",
-    body: JSON.stringify({
-      command: input.command,
-      open_kfid: input.open_kfid || "",
-      external_userid: input.external_userid || "",
-      payload_json: JSON.stringify(input.payload || {}),
-    }),
-  })
   return payload?.data || null
 }
 

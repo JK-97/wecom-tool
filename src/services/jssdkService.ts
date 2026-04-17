@@ -66,6 +66,7 @@ export type SidebarRuntimeMode = "single" | "group" | "unknown"
 export type SidebarRuntimeContext = {
   entry: string
   mode: SidebarRuntimeMode
+  open_kfid: string
   external_userid: string
   chat_id: string
   api_support: Record<string, boolean>
@@ -488,6 +489,16 @@ function readChatID(payload: Record<string, unknown>): string {
   return readString(payload.chatId) || readString(payload.chat_id)
 }
 
+function readOpenKFID(payload: Record<string, unknown>): string {
+  return (
+    readString(payload.openKfId) ||
+    readString(payload.open_kfid) ||
+    readString(payload.openKFID) ||
+    readString(payload.kfOpenId) ||
+    readString(payload.kf_open_id)
+  )
+}
+
 export async function resolveSidebarRuntimeContext(): Promise<SidebarRuntimeContext> {
   try {
     await ensureRegistered()
@@ -500,18 +511,22 @@ export async function resolveSidebarRuntimeContext(): Promise<SidebarRuntimeCont
 
     logJSSDKDiagnostic("get_context_start")
     const context = await ww.getContext()
+    const contextRecord = toUnknownRecord(context)
     const entry = normalizeEntry(context?.entry)
-    logJSSDKDiagnostic("get_context_done", { entry, raw_entry: context?.entry })
+    logJSSDKDiagnostic("get_context_done", { entry, raw_entry: context?.entry, raw_context: contextRecord })
 
     const modeByEntry = inferMode(entry, "", "")
-    let externalUserID = ""
+    let openKFID = readOpenKFID(contextRecord)
+    let externalUserID = readExternalUserID(contextRecord)
     let chatID = ""
 
     if (modeByEntry !== "group" && apiSupport.getCurExternalContact && typeof ww.getCurExternalContact === "function") {
       try {
-        externalUserID = readExternalUserID(toUnknownRecord(await ww.getCurExternalContact()))
+        const contactRecord = toUnknownRecord(await ww.getCurExternalContact())
+        externalUserID = readExternalUserID(contactRecord) || externalUserID
+        openKFID = readOpenKFID(contactRecord) || openKFID
       } catch {
-        externalUserID = ""
+        externalUserID = externalUserID || ""
       }
     }
 
@@ -529,10 +544,23 @@ export async function resolveSidebarRuntimeContext(): Promise<SidebarRuntimeCont
         logJSSDKDiagnostic("chat_id_fallback_from_query", { chat_id: chatID })
       }
     }
+    if (!openKFID) {
+      openKFID = readQueryParam("open_kfid")
+      if (openKFID) {
+        logJSSDKDiagnostic("open_kfid_fallback_from_query", { open_kfid: openKFID })
+      }
+    }
+    if (!externalUserID) {
+      externalUserID = readQueryParam("external_userid")
+      if (externalUserID) {
+        logJSSDKDiagnostic("external_userid_fallback_from_query", { external_userid: externalUserID })
+      }
+    }
 
     return {
       entry,
       mode: inferMode(entry, externalUserID, chatID),
+      open_kfid: openKFID,
       external_userid: externalUserID,
       chat_id: chatID,
       api_support: apiSupport,
