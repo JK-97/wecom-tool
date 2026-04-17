@@ -456,6 +456,7 @@ export default function CSCommandCenter() {
   const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] = useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [showBackToLatest, setShowBackToLatest] = useState(false);
   const [isBrowsingHistory, setIsBrowsingHistory] = useState(false);
   const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
@@ -821,9 +822,11 @@ export default function CSCommandCenter() {
   useEffect(() => {
     let alive = true;
     if (!selectedExternalUserID) {
+      setIsLoadingDetail(false);
       applyDetailSnapshot(null, "reset", Date.now());
       return;
     }
+    setIsLoadingDetail(true);
     applyDetailSnapshot(null, "reset", Date.now());
     void fetchDetailSnapshot(selectedExternalUserID, {
       limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
@@ -831,10 +834,12 @@ export default function CSCommandCenter() {
       .then((data) => {
         if (!alive) return;
         applyDetailSnapshot(data, "reset", Date.now());
+        setIsLoadingDetail(false);
       })
       .catch(() => {
         if (!alive) return;
         applyDetailSnapshot(null, "reset", Date.now());
+        setIsLoadingDetail(false);
       });
     return () => {
       alive = false;
@@ -919,13 +924,29 @@ export default function CSCommandCenter() {
 
   const sessions = useMemo(() => view?.sessions || [], [view?.sessions]);
   const selectedSession = useMemo(() => {
-    if (sessions.length === 0) return null;
+    const selectedID = selectedExternalUserID.trim();
+    if (!selectedID || sessions.length === 0) return null;
     const found = sessions.find(
-      (item) =>
-      (item.external_userid || "").trim() === selectedExternalUserID.trim(),
+      (item) => (item.external_userid || "").trim() === selectedID,
     );
-    return found || sessions[0];
+    return found || null;
   }, [selectedExternalUserID, sessions]);
+
+  useEffect(() => {
+    const currentSelected = selectedExternalUserID.trim();
+    const currentSelectedSession = sessions.find(
+      (item) => (item.external_userid || "").trim() === currentSelected,
+    );
+    if (currentSelectedSession && resolveSessionBucket(currentSelectedSession) === activeTab) {
+      return;
+    }
+    const firstSessionInActiveTab = sessions.find(
+      (item) => resolveSessionBucket(item) === activeTab,
+    );
+    const nextSelected = (firstSessionInActiveTab?.external_userid || "").trim();
+    if (nextSelected === currentSelected) return;
+    setSelectedExternalUserID(nextSelected);
+  }, [activeTab, selectedExternalUserID, sessions]);
 
   // Task 4: 选中会话状态变化时，左侧 tab 自动跟随
   // 只在同一会话的 bucket 发生改变时切换（排队 → 接待中 → 已结束）
@@ -1206,7 +1227,8 @@ export default function CSCommandCenter() {
     }
   };
 
-  const activeMonitor = detail?.monitor || view?.monitor;
+  const hasSelectedSession = Boolean(selectedSession && selectedExternalUserID.trim());
+  const activeMonitor = hasSelectedSession ? detail?.monitor || view?.monitor : null;
   const emotionCode = normalizeEmotionCode(
     activeMonitor?.emotion?.code || activeMonitor?.mood || "neutral",
   );
@@ -1235,7 +1257,7 @@ export default function CSCommandCenter() {
   const latestRoutingRecord = routingRecords[0];
   const latestMatchedRoutingRecord =
     routingRecords.find((item) => readRoutingRuleName(item) !== "") || latestRoutingRecord;
-  const currentSessionMeta = selectedSession || detail?.session;
+  const currentSessionMeta = hasSelectedSession ? selectedSession || detail?.session : null;
   const effectiveSessionState = Number(currentSessionMeta?.session_state || 0);
   const actionPanel = useMemo(() => {
     if (!currentSessionMeta) {
@@ -1551,7 +1573,7 @@ export default function CSCommandCenter() {
         <div className="flex-1 flex min-h-0">
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="relative flex-1 min-h-0">
-              {!selectedExternalUserID ? (
+              {!hasSelectedSession ? (
                 <div className="h-full flex flex-col items-center justify-center gap-3 bg-[#F5F7FA]">
                   <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
                     <Search className="w-6 h-6 text-gray-400" />
@@ -1579,7 +1601,11 @@ export default function CSCommandCenter() {
                   </div>
                 ) : null}
                 {orderedMessages.length === 0 ? (
-                  <div className="text-sm text-gray-500">暂无会话消息</div>
+                  <div className="flex min-h-[320px] items-center justify-center">
+                    {!isLoadingDetail ? (
+                      <div className="text-sm text-gray-500">暂无会话消息</div>
+                    ) : null}
+                  </div>
                 ) : (
                   orderedMessages.map((message, index) => {
                     const senderKind = resolveMessageSenderKind(message);
@@ -1660,7 +1686,7 @@ export default function CSCommandCenter() {
             </div>
 
             <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
-              {selectedSession ? (
+              {hasSelectedSession ? (
                 <div className="mb-3 flex items-center justify-between gap-3 text-[11px]">
                   <div className="min-w-0 text-gray-500">
                     {isBrowsingHistory
@@ -1672,26 +1698,28 @@ export default function CSCommandCenter() {
                   </div>
                 </div>
               ) : null}
-              <div className="grid grid-cols-3 gap-3">
-                {actionButtons.map((action) => (
-                  <Button
-                    key={action.key}
-                    variant={action.tone === "primary" ? undefined : "outline"}
-                    className={`h-9 w-full ${resolveActionButtonClassName(action)}`}
-                    disabled={isSubmitting || action.disabled}
-                    onClick={() => void handleActionClick(action)}
-                  >
-                    {action.label}
-                  </Button>
-                ))}
-              </div>
+              {hasSelectedSession ? (
+                <div className="grid grid-cols-3 gap-3">
+                  {actionButtons.map((action) => (
+                    <Button
+                      key={action.key}
+                      variant={action.tone === "primary" ? undefined : "outline"}
+                      className={`h-9 w-full ${resolveActionButtonClassName(action)}`}
+                      disabled={isSubmitting || action.disabled}
+                      onClick={() => void handleActionClick(action)}
+                    >
+                      {action.label}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
 
-              {actionPanel.emptyHint ? (
+              {hasSelectedSession && actionPanel.emptyHint ? (
                 <div className="mt-3 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
                   {actionPanel.emptyHint}
                 </div>
               ) : null}
-              {readActionDisabledMessage(actionPanel) ? (
+              {hasSelectedSession && readActionDisabledMessage(actionPanel) ? (
                 <div className="mt-3 text-[11px] leading-relaxed text-gray-500">
                   {readActionDisabledMessage(actionPanel)}
                 </div>
@@ -1699,6 +1727,7 @@ export default function CSCommandCenter() {
             </div>
           </div>
 
+          {hasSelectedSession ? (
           <div className="w-[320px] shrink-0 border-l border-gray-200 bg-white">
             <Tabs
               value={detailPanelTab}
@@ -2036,6 +2065,7 @@ export default function CSCommandCenter() {
               </TabsContent>
             </Tabs>
           </div>
+          ) : null}
         </div>
       </div>
 
