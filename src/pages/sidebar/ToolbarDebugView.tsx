@@ -6,6 +6,10 @@ import { Textarea } from "@/components/ui/Textarea";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import { normalizeErrorMessage } from "@/services/http";
 import {
+  getCSCommandCenterView,
+  type CommandCenterSession,
+} from "@/services/commandCenterService";
+import {
   checkSidebarJSSDKApis,
   getJSSDKRuntimeDiagnosticsSnapshot,
   inspectSidebarJSSDKContext,
@@ -22,6 +26,10 @@ import {
   ensureOpenDataReady,
   type OpenDataRuntime,
 } from "@/services/openDataService";
+import {
+  listReceptionChannels,
+  type ReceptionChannel,
+} from "@/services/receptionService";
 import {
   sidebarBody,
   sidebarHeader,
@@ -45,8 +53,34 @@ type ToolbarDebugViewProps = {
   onBack: () => void;
   openKFID?: string;
   externalUserID?: string;
+  sessionCandidates?: ToolbarDebugSessionCandidate[];
   sampleOpenDataUserID?: string;
   sampleOpenDataFallback?: string;
+};
+
+type ToolbarDebugSessionCandidate = {
+  open_kfid?: string;
+  external_userid?: string;
+  contact_name?: string;
+  session_status?: string;
+  channel_token?: string;
+  last_active?: string;
+  last_message?: string;
+};
+
+type NavigateChannelOption = {
+  openKFID: string;
+  label: string;
+  source: "current" | "channel" | "candidate";
+};
+
+type NavigateCustomerOption = {
+  openKFID: string;
+  externalUserID: string;
+  label: string;
+  sessionStatus?: string;
+  lastActive?: string;
+  lastMessage?: string;
 };
 
 function prettyJSON(value: unknown): string {
@@ -118,6 +152,73 @@ function DebugMetric(props: { label: string; value?: string; mono?: boolean }) {
   );
 }
 
+function firstNonEmpty(...items: Array<string | undefined>): string {
+  for (const item of items) {
+    const value = (item || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function sessionStatusText(value?: string): string {
+  const text = (value || "").trim();
+  return text || "会话中";
+}
+
+function formatDebugTime(value?: string): string {
+  const raw = (value || "").trim();
+  if (!raw) return "";
+  const millis = Date.parse(raw.replace(" ", "T"));
+  if (Number.isNaN(millis)) return raw;
+  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
+}
+
+function dedupeChannels(
+  channels: NavigateChannelOption[],
+): NavigateChannelOption[] {
+  const seen = new Set<string>();
+  const out: NavigateChannelOption[] = [];
+  channels.forEach((item) => {
+    const openKFID = item.openKFID.trim();
+    if (!openKFID || seen.has(openKFID)) return;
+    seen.add(openKFID);
+    out.push({ ...item, openKFID });
+  });
+  return out;
+}
+
+function dedupeCustomers(
+  customers: NavigateCustomerOption[],
+): NavigateCustomerOption[] {
+  const seen = new Set<string>();
+  const out: NavigateCustomerOption[] = [];
+  customers.forEach((item) => {
+    const openKFID = item.openKFID.trim();
+    const externalUserID = item.externalUserID.trim();
+    const key = `${openKFID}\u001f${externalUserID}`;
+    if (!openKFID || !externalUserID || seen.has(key)) return;
+    seen.add(key);
+    out.push({ ...item, openKFID, externalUserID });
+  });
+  return out;
+}
+
+function mapSessionToNavigateCustomer(
+  item: CommandCenterSession,
+): NavigateCustomerOption | null {
+  const openKFID = (item.open_kfid || "").trim();
+  const externalUserID = (item.external_userid || "").trim();
+  if (!openKFID || !externalUserID) return null;
+  return {
+    openKFID,
+    externalUserID,
+    label: firstNonEmpty(item.name, externalUserID, "未识别客户"),
+    sessionStatus: item.session_label || item.state_bucket,
+    lastActive: item.last_active,
+    lastMessage: item.last_message,
+  };
+}
+
 function SectionNotice(props: { text?: string; tone?: "info" | "warning" }) {
   if (!(props.text || "").trim()) return null;
   const warning = props.tone === "warning";
@@ -161,9 +262,132 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
   const [isCheckingOpenData, setIsCheckingOpenData] = useState(false);
   const [isSendingText, setIsSendingText] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [channels, setChannels] = useState<ReceptionChannel[]>([]);
+  const [channelNotice, setChannelNotice] = useState("");
+  const [customerNotice, setCustomerNotice] = useState("");
+  const [isLoadingChannels, setIsLoadingChannels] = useState(false);
+  const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
+  const [navigateOpenKFID, setNavigateOpenKFID] = useState("");
+  const [navigateExternalUserID, setNavigateExternalUserID] = useState("");
+  const [channelCustomers, setChannelCustomers] = useState<
+    NavigateCustomerOption[]
+  >([]);
 
   const currentOpenKFID = (props.openKFID || "").trim();
   const currentExternalUserID = (props.externalUserID || "").trim();
+  const sessionCandidates = useMemo(
+    () => props.sessionCandidates || [],
+    [props.sessionCandidates],
+  );
+  const candidateChannels = useMemo<NavigateChannelOption[]>(() => {
+    return sessionCandidates
+      .map((item): NavigateChannelOption | null => {
+        const openKFID = (item.open_kfid || "").trim();
+        if (!openKFID) return null;
+        return {
+          openKFID,
+          label: firstNonEmpty(item.channel_token, openKFID),
+          source: "candidate" as const,
+        };
+      })
+      .filter((item): item is NavigateChannelOption => item !== null);
+  }, [sessionCandidates]);
+  const candidateCustomers = useMemo<NavigateCustomerOption[]>(() => {
+    return sessionCandidates
+      .map((item): NavigateCustomerOption | null => {
+        const openKFID = (item.open_kfid || "").trim();
+        const externalUserID = (
+          item.external_userid || currentExternalUserID
+        ).trim();
+        if (!openKFID || !externalUserID) return null;
+        return {
+          openKFID,
+          externalUserID,
+          label: firstNonEmpty(item.contact_name, externalUserID, "未识别客户"),
+          sessionStatus: item.session_status,
+          lastActive: item.last_active,
+          lastMessage: item.last_message,
+        };
+      })
+      .filter((item): item is NavigateCustomerOption => item !== null);
+  }, [currentExternalUserID, sessionCandidates]);
+
+  const channelOptions = useMemo(() => {
+    const fromChannels = channels
+      .map((item): NavigateChannelOption | null => {
+        const openKFID = (item.open_kfid || "").trim();
+        if (!openKFID) return null;
+        return {
+          openKFID,
+          label: firstNonEmpty(item.display_name, item.name, openKFID),
+          source: "channel" as const,
+        };
+      })
+      .filter((item): item is NavigateChannelOption => item !== null);
+    const current = currentOpenKFID
+      ? [
+          {
+            openKFID: currentOpenKFID,
+            label: firstNonEmpty(
+              fromChannels.find((item) => item.openKFID === currentOpenKFID)
+                ?.label,
+              candidateChannels.find((item) => item.openKFID === currentOpenKFID)
+                ?.label,
+              currentOpenKFID,
+            ),
+            source: "current" as const,
+          },
+        ]
+      : [];
+    return dedupeChannels([...current, ...candidateChannels, ...fromChannels]);
+  }, [candidateChannels, channels, currentOpenKFID]);
+
+  const customerOptions = useMemo(() => {
+    const selectedOpenKFID = navigateOpenKFID.trim();
+    const current = currentExternalUserID && selectedOpenKFID === currentOpenKFID
+      ? [
+          {
+            openKFID: selectedOpenKFID,
+            externalUserID: currentExternalUserID,
+            label: firstNonEmpty(
+              candidateCustomers.find(
+                (item) =>
+                  item.openKFID === selectedOpenKFID &&
+                  item.externalUserID === currentExternalUserID,
+              )?.label,
+              currentExternalUserID,
+              "当前客户",
+            ),
+            sessionStatus: "当前会话",
+          },
+        ]
+      : [];
+    return dedupeCustomers([
+      ...current,
+      ...candidateCustomers.filter((item) => item.openKFID === selectedOpenKFID),
+      ...channelCustomers.filter((item) => item.openKFID === selectedOpenKFID),
+    ]);
+  }, [
+    candidateCustomers,
+    channelCustomers,
+    currentExternalUserID,
+    currentOpenKFID,
+    navigateOpenKFID,
+  ]);
+
+  const selectedChannel = useMemo(
+    () =>
+      channelOptions.find((item) => item.openKFID === navigateOpenKFID.trim()) ||
+      null,
+    [channelOptions, navigateOpenKFID],
+  );
+  const selectedCustomer = useMemo(
+    () =>
+      customerOptions.find(
+        (item) => item.externalUserID === navigateExternalUserID.trim(),
+      ) || null,
+    [customerOptions, navigateExternalUserID],
+  );
 
   const refreshRuntimeSnapshot = () => {
     setRuntimeSnapshot(getJSSDKRuntimeDiagnosticsSnapshot());
@@ -260,7 +484,9 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
   };
 
   const handleNavigateToKfChat = async () => {
-    if (!currentOpenKFID) {
+    const targetOpenKFID = navigateOpenKFID.trim();
+    const targetExternalUserID = navigateExternalUserID.trim();
+    if (!targetOpenKFID) {
       setNavigateNotice("当前没有可用的 open_kfid，无法测试打开客服会话");
       return;
     }
@@ -268,14 +494,55 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
       setIsNavigating(true);
       setNavigateNotice("");
       await openWecomKfConversation({
-        open_kfid: currentOpenKFID,
-        external_userid: currentExternalUserID,
+        open_kfid: targetOpenKFID,
+        external_userid: targetExternalUserID,
       });
       setNavigateNotice("已触发打开微信客服会话");
     } catch (error) {
-      setNavigateNotice(normalizeErrorMessage(error));
+      setNavigateNotice(toJSSDKErrorMessage(error));
     } finally {
       setIsNavigating(false);
+    }
+  };
+
+  const loadChannels = async () => {
+    try {
+      setIsLoadingChannels(true);
+      setChannelNotice("");
+      const result = await listReceptionChannels({ limit: 500 });
+      setChannels(result || []);
+      setChannelNotice("已加载客服账号列表");
+    } catch (error) {
+      setChannels([]);
+      setChannelNotice(normalizeErrorMessage(error));
+    } finally {
+      setIsLoadingChannels(false);
+    }
+  };
+
+  const loadCustomersForChannel = async (openKFID: string) => {
+    const selectedOpenKFID = openKFID.trim();
+    if (!selectedOpenKFID) {
+      setChannelCustomers([]);
+      return;
+    }
+    try {
+      setIsLoadingCustomers(true);
+      setCustomerNotice("");
+      const result = await getCSCommandCenterView({
+        open_kfid: selectedOpenKFID,
+        limit: 100,
+      });
+      const next = (result?.sessions || [])
+        .map(mapSessionToNavigateCustomer)
+        .filter((item): item is NavigateCustomerOption => item !== null);
+      setChannelCustomers(next);
+      setCustomerNotice("已加载该客服账号下的买家会话");
+    } catch (error) {
+      setChannelCustomers([]);
+      setCustomerNotice(normalizeErrorMessage(error));
+    } finally {
+      setIsLoadingCustomers(false);
     }
   };
 
@@ -285,7 +552,34 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
     void handleCheckApis();
     void handleInspectContext();
     void handleCheckOpenData();
+    void loadChannels();
   }, []);
+
+  useEffect(() => {
+    setNavigateOpenKFID(currentOpenKFID);
+    setNavigateExternalUserID(currentExternalUserID);
+  }, [currentExternalUserID, currentOpenKFID]);
+
+  useEffect(() => {
+    void loadCustomersForChannel(navigateOpenKFID);
+  }, [navigateOpenKFID]);
+
+  useEffect(() => {
+    const selectedExternalUserID = navigateExternalUserID.trim();
+    if (
+      selectedExternalUserID &&
+      customerOptions.some((item) => item.externalUserID === selectedExternalUserID)
+    ) {
+      return;
+    }
+    const currentForSelected = customerOptions.find(
+      (item) => item.externalUserID === currentExternalUserID,
+    );
+    const fallback = currentForSelected || customerOptions[0];
+    if (fallback) {
+      setNavigateExternalUserID(fallback.externalUserID);
+    }
+  }, [currentExternalUserID, customerOptions, navigateExternalUserID]);
 
   const overallBadge = overallDebugBadge({
     registration,
@@ -515,7 +809,11 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
               mono
             />
             <DebugMetric label="chat_id" value={contextInspection?.chat_id} mono />
-            <DebugMetric label="open_kfid" value={contextInspection?.open_kfid} mono />
+            <DebugMetric
+              label="open_kfid"
+              value={contextInspection?.open_kfid || currentOpenKFID}
+              mono
+            />
           </div>
 
           <div className="mt-3 space-y-2">
@@ -528,6 +826,205 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
                   raw_chat: contextInspection?.raw_chat || {},
                 })}
               </pre>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600">
+                <MessageSquareText className="h-4 w-4" />
+              </div>
+              <div>
+                <div className={sidebarSectionLabel}>打开微信客服会话</div>
+                <div className={`${sidebarMeta} mt-0.5`}>
+                  单独验证 navigateToKfChat，先选客服账号，再选买家
+                </div>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+              disabled={isLoadingChannels || isLoadingCustomers}
+              onClick={() => {
+                void loadChannels();
+                void loadCustomersForChannel(navigateOpenKFID);
+              }}
+            >
+              <RefreshCcw
+                className={`mr-1 h-3.5 w-3.5 ${
+                  isLoadingChannels || isLoadingCustomers ? "animate-spin" : ""
+                }`}
+              />
+              刷新候选
+            </Button>
+          </div>
+
+          <SectionNotice
+            text={
+              navigateNotice ||
+              channelNotice ||
+              customerNotice ||
+              "客服账号来自接待渠道，买家候选来自会话读模型；这里不会再从消息表反推会话。"
+            }
+            tone={
+              navigateNotice.includes("失败") ||
+              navigateNotice.includes("无法") ||
+              channelNotice.includes("失败") ||
+              customerNotice.includes("失败")
+                ? "warning"
+                : "info"
+            }
+          />
+
+          <div className="mt-3 space-y-3">
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-slate-500">
+                客服账号 open_kfid
+              </label>
+              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] leading-5 text-slate-600">
+                <div className="font-medium text-slate-800">
+                  {selectedChannel?.label || "未匹配到客服账号名称"}
+                </div>
+                <div className="font-mono text-[11px] text-slate-500">
+                  {navigateOpenKFID || "-"}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-100 bg-white">
+                <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-[11px] text-slate-500">
+                  <span>客服账号列表</span>
+                  <span>{channelOptions.length} 个</span>
+                </div>
+                <div className="max-h-[180px] overflow-y-auto p-1">
+                  {channelOptions.length === 0 ? (
+                    <div className="px-3 py-4 text-[12px] text-slate-400">
+                      暂未获取到客服账号，请确认接待渠道已同步。
+                    </div>
+                  ) : (
+                    channelOptions.map((item) => {
+                      const selected = item.openKFID === navigateOpenKFID.trim();
+                      return (
+                        <button
+                          key={item.openKFID}
+                          type="button"
+                          className={`flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors ${
+                            selected
+                              ? "bg-blue-50 text-blue-700"
+                              : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                          onClick={() => {
+                            setNavigateOpenKFID(item.openKFID);
+                            setNavigateNotice("");
+                          }}
+                        >
+                          <span className="text-[12px] font-medium">
+                            {item.label}
+                          </span>
+                          <span className="mt-0.5 font-mono text-[11px] text-slate-500">
+                            {item.openKFID}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-slate-500">
+                买家 externalUserId
+              </label>
+              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] leading-5 text-slate-600">
+                <div className="font-medium text-slate-800">
+                  {selectedCustomer?.label || "未匹配到买家名称"}
+                </div>
+                <div className="font-mono text-[11px] text-slate-500">
+                  {navigateExternalUserID || "-"}
+                </div>
+                {selectedCustomer?.sessionStatus ||
+                selectedCustomer?.lastActive ||
+                selectedCustomer?.lastMessage ? (
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {sessionStatusText(selectedCustomer.sessionStatus)}
+                    {selectedCustomer.lastActive
+                      ? ` · ${formatDebugTime(selectedCustomer.lastActive)}`
+                      : ""}
+                    {selectedCustomer.lastMessage
+                      ? ` · ${selectedCustomer.lastMessage}`
+                      : ""}
+                  </div>
+                ) : null}
+              </div>
+              <div className="rounded-2xl border border-slate-100 bg-white">
+                <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-[11px] text-slate-500">
+                  <span>买家会话列表</span>
+                  <span>
+                    {isLoadingCustomers ? "加载中" : `${customerOptions.length} 个`}
+                  </span>
+                </div>
+                <div className="max-h-[260px] overflow-y-auto p-1">
+                  {customerOptions.length === 0 ? (
+                    <div className="px-3 py-4 text-[12px] leading-5 text-slate-400">
+                      {navigateOpenKFID.trim()
+                        ? "该客服账号下暂未获取到买家会话。"
+                        : "请先选择客服账号。"}
+                    </div>
+                  ) : (
+                    customerOptions.map((item) => {
+                      const selected =
+                        item.externalUserID === navigateExternalUserID.trim();
+                      return (
+                        <button
+                          key={`${item.openKFID}:${item.externalUserID}`}
+                          type="button"
+                          className={`flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors ${
+                            selected
+                              ? "bg-blue-50 text-blue-700"
+                              : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                          onClick={() => {
+                            setNavigateExternalUserID(item.externalUserID);
+                            setNavigateNotice("");
+                          }}
+                        >
+                          <span className="text-[12px] font-medium">
+                            {item.label}
+                          </span>
+                          <span className="mt-0.5 font-mono text-[11px] text-slate-500">
+                            {item.externalUserID}
+                          </span>
+                          <span className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">
+                            {sessionStatusText(item.sessionStatus)}
+                            {item.lastActive
+                              ? ` · ${formatDebugTime(item.lastActive)}`
+                              : ""}
+                            {item.lastMessage ? ` · ${item.lastMessage}` : ""}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <Button
+              size="sm"
+              className="h-9 w-full rounded-full px-3 text-[12px]"
+              disabled={isNavigating || !navigateOpenKFID.trim()}
+              onClick={() => void handleNavigateToKfChat()}
+            >
+              <MessageSquareText className="mr-1 h-3.5 w-3.5" />
+              {isNavigating ? "打开中..." : "测试 navigateToKfChat"}
+            </Button>
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-500">
+              说明：open_kfid 和 externalUserId 不是企业通讯录 userid，不能用
+              open-data 直接解析姓名；这里使用接待渠道与会话读模型做真实业务回显。
+              内部成员姓名仍由下方 open-data 模块验证。
             </div>
           </div>
         </Card>
@@ -578,20 +1075,9 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
                 <Send className="mr-1 h-3.5 w-3.5" />
                 {isSendingText ? "发送中..." : "测试 sendChatMessage"}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
-                disabled={isNavigating}
-                onClick={() => void handleNavigateToKfChat()}
-              >
-                <MessageSquareText className="mr-1 h-3.5 w-3.5" />
-                {isNavigating ? "处理中..." : "测试 navigateToKfChat"}
-              </Button>
             </div>
 
             <SectionNotice text={sendNotice} tone={sendNotice.includes("失败") || sendNotice.includes("请") ? "warning" : "info"} />
-            <SectionNotice text={navigateNotice} tone={navigateNotice.includes("无法") || navigateNotice.includes("失败") ? "warning" : "info"} />
           </div>
         </Card>
 

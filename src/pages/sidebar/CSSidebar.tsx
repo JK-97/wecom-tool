@@ -1328,6 +1328,7 @@ export default function CSSidebar() {
           sessionLocator.external_userid ||
           query.external_userid
         }
+        sessionCandidates={bootstrap?.selection?.candidates || []}
         sampleOpenDataUserID={sampleOpenDataUserID}
         sampleOpenDataFallback={sampleOpenDataFallback}
       />
