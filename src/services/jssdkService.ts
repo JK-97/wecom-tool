@@ -50,7 +50,8 @@ type SignatureReply = {
 
 type RuntimeState =
   | "external_browser"
-  | "wecom_bridge_pending"
+  | "wecom_bridge_missing"
+  | "wecom_bridge_incomplete"
   | "wecom_bridge_ready";
 
 type RuntimeDiagnostics = {
@@ -92,6 +93,35 @@ export type MainWebviewJSSDKCheckResult = {
   check_result: Record<string, boolean>;
   error_code?: string;
   error_message?: string;
+};
+
+export type JSSDKRuntimeDiagnosticsSnapshot = RuntimeDiagnostics & {
+  current_page_url: string;
+  entry_query: string;
+  open_kfid_query: string;
+  external_userid_query: string;
+  chat_id_query: string;
+};
+
+export type JSSDKRegistrationSnapshot = {
+  current_page_url: string;
+  register_ok: boolean;
+  corp_id?: string;
+  agent_id?: number;
+  error_code?: string;
+  error_message?: string;
+};
+
+export type JSSDKContextInspection = {
+  entry: string;
+  mode: SidebarRuntimeMode;
+  open_kfid: string;
+  external_userid: string;
+  chat_id: string;
+  api_support: Record<string, boolean>;
+  raw_context: Record<string, unknown>;
+  raw_contact: Record<string, unknown>;
+  raw_chat: Record<string, unknown>;
 };
 
 export class JSSDKRuntimeError extends Error {
@@ -159,8 +189,11 @@ function inferRuntimeState(
   if (hasWindowWW && windowWWRegisterType === "function") {
     return "wecom_bridge_ready";
   }
-  if (isWxworkWebView || hasWindowWW) {
-    return "wecom_bridge_pending";
+  if (hasWindowWW) {
+    return "wecom_bridge_incomplete";
+  }
+  if (isWxworkWebView) {
+    return "wecom_bridge_missing";
   }
   return "external_browser";
 }
@@ -190,6 +223,18 @@ function readRuntimeDiagnostics(): RuntimeDiagnostics {
     jssdkRegisterType: typeof ww.register,
     jssdkCheckJsApiType: typeof ww.checkJsApi,
     jssdkGetContextType: typeof ww.getContext,
+  };
+}
+
+function readRuntimeDiagnosticsSnapshot(): JSSDKRuntimeDiagnosticsSnapshot {
+  const diagnostics = readRuntimeDiagnostics();
+  return {
+    ...diagnostics,
+    current_page_url: currentPageURL(),
+    entry_query: readQueryParam("entry"),
+    open_kfid_query: readQueryParam("open_kfid"),
+    external_userid_query: readQueryParam("external_userid"),
+    chat_id_query: readQueryParam("chat_id"),
   };
 }
 
@@ -859,4 +904,110 @@ export async function checkMainWebviewJSSDKRuntime(): Promise<MainWebviewJSSDKCh
       error_message: mapped.message,
     };
   }
+}
+
+export function getJSSDKRuntimeDiagnosticsSnapshot(): JSSDKRuntimeDiagnosticsSnapshot {
+  return readRuntimeDiagnosticsSnapshot();
+}
+
+export function resetJSSDKRuntimeCaches(): void {
+  signatureCache.clear();
+  registerPromise = null;
+  checkedApiCache = null;
+}
+
+export async function runJSSDKRegistrationDiagnostics(): Promise<JSSDKRegistrationSnapshot> {
+  const pageURL = currentPageURL();
+  try {
+    await ensureRegistered();
+    const signatureBundle = await fetchSignatureBundle(pageURL);
+    return {
+      current_page_url: pageURL,
+      register_ok: true,
+      corp_id: signatureBundle.corp_id,
+      agent_id: signatureBundle.agent_id,
+    };
+  } catch (error) {
+    const mapped = normalizeJSSDKRuntimeError(error);
+    return {
+      current_page_url: pageURL,
+      register_ok: false,
+      error_code: mapped.code,
+      error_message: mapped.message,
+    };
+  }
+}
+
+export async function checkSidebarJSSDKApis(): Promise<Record<string, boolean>> {
+  await ensureRegistered();
+  return ensureSupportedAPIs();
+}
+
+export async function inspectSidebarJSSDKContext(): Promise<JSSDKContextInspection> {
+  await ensureRegistered();
+  const apiSupport = await ensureSupportedAPIs();
+  if (!apiSupport.getContext || typeof ww.getContext !== "function") {
+    throw new JSSDKRuntimeError(
+      "api_unsupported",
+      "当前环境无法读取企业微信会话上下文。",
+      {
+        stage: "get_context",
+      },
+    );
+  }
+
+  const context = await ww.getContext();
+  const contextRecord = toUnknownRecord(context);
+  const entry = normalizeEntry(context?.entry);
+  const modeByEntry = inferMode(entry, "", "");
+  let openKFID = readQueryParam("open_kfid");
+  let externalUserID = readExternalUserID(contextRecord);
+  let chatID = "";
+  let contactRecord: Record<string, unknown> = {};
+  let chatRecord: Record<string, unknown> = {};
+
+  if (
+    modeByEntry !== "group" &&
+    apiSupport.getCurExternalContact &&
+    typeof ww.getCurExternalContact === "function"
+  ) {
+    try {
+      contactRecord = toUnknownRecord(await ww.getCurExternalContact());
+      externalUserID = readExternalUserID(contactRecord) || externalUserID;
+    } catch {
+      contactRecord = {};
+    }
+  }
+
+  if (
+    modeByEntry !== "single" &&
+    apiSupport.getCurExternalChat &&
+    typeof ww.getCurExternalChat === "function"
+  ) {
+    try {
+      chatRecord = toUnknownRecord(await ww.getCurExternalChat());
+      chatID = readChatID(chatRecord);
+    } catch {
+      chatRecord = {};
+    }
+  }
+
+  if (!chatID && modeByEntry === "group") {
+    chatID = readQueryParam("chat_id");
+  }
+  if (!externalUserID) {
+    externalUserID = readQueryParam("external_userid");
+  }
+
+  return {
+    entry,
+    mode: inferMode(entry, externalUserID, chatID),
+    open_kfid: openKFID,
+    external_userid: externalUserID,
+    chat_id: chatID,
+    api_support: apiSupport,
+    raw_context: contextRecord,
+    raw_contact: contactRecord,
+    raw_chat: chatRecord,
+  };
 }

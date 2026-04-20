@@ -32,9 +32,12 @@ import {
   sidebarSectionLabel,
   sidebarTitle,
 } from "./sidebarChrome";
+import { ToolbarDebugView } from "./ToolbarDebugView";
 import { listReceptionChannels } from "@/services/receptionService";
+import { getOrganizationSettingsView } from "@/services/organizationSettingsService";
 import {
   ArrowUpRight,
+  Bug,
   Bot,
   CheckCircle2,
   GitBranch,
@@ -416,16 +419,35 @@ function summarizeToolbarStatusCopy(input?: {
 }
 
 export default function CSSidebar() {
+  const query = useMemo(() => {
+    if (typeof window === "undefined")
+      return { entry: "single_kf_tools", open_kfid: "", external_userid: "" };
+    const params = new URLSearchParams(window.location.search);
+    return {
+      entry: (params.get("entry") || "single_kf_tools").trim(),
+      open_kfid: (params.get("open_kfid") || "").trim(),
+      external_userid: (params.get("external_userid") || "").trim(),
+    };
+  }, []);
+  const shouldResolveRuntimeContext =
+    (query.entry || "").trim() === "single_kf_tools" &&
+    !(query.external_userid || "").trim();
+
   const [bootstrap, setBootstrap] = useState<KFToolbarBootstrap | null>(null);
   const [notice, setNotice] = useState("");
   const [suggestionNotice, setSuggestionNotice] = useState("");
   const [conversationNotice, setConversationNotice] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isResolvingContext, setIsResolvingContext] = useState(false);
+  const [isResolvingContext, setIsResolvingContext] = useState(
+    shouldResolveRuntimeContext,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isRefreshingConversation, setIsRefreshingConversation] = useState(false);
+  const [viewMode, setViewMode] = useState<"main" | "debug">("main");
+  const [isToolbarDebugEnabled, setIsToolbarDebugEnabled] = useState(false);
+  const [isLoadingToolbarDebugConfig, setIsLoadingToolbarDebugConfig] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgraded, setIsUpgraded] = useState(false);
   const [upgradeOwner, setUpgradeOwner] = useState("销售 A");
@@ -443,17 +465,6 @@ export default function CSSidebar() {
   const bootstrapSessionKeyRef = useRef("");
   const suggestionRequestSeqRef = useRef(0);
   const conversationScrollRef = useRef<HTMLDivElement | null>(null);
-
-  const query = useMemo(() => {
-    if (typeof window === "undefined")
-      return { entry: "single_kf_tools", open_kfid: "", external_userid: "" };
-    const params = new URLSearchParams(window.location.search);
-    return {
-      entry: (params.get("entry") || "single_kf_tools").trim(),
-      open_kfid: (params.get("open_kfid") || "").trim(),
-      external_userid: (params.get("external_userid") || "").trim(),
-    };
-  }, []);
   const [sessionLocator, setSessionLocator] = useState(query);
 
   const clearSuggestionNotice = () => {
@@ -515,9 +526,10 @@ export default function CSSidebar() {
 
   useEffect(() => {
     let alive = true;
-    const shouldResolveRuntime =
-      (query.entry || "").trim() === "single_kf_tools";
-    if (!shouldResolveRuntime) return;
+    if (!shouldResolveRuntimeContext) {
+      setIsResolvingContext(false);
+      return;
+    }
 
     setIsResolvingContext(true);
     void resolveSidebarRuntimeContext()
@@ -546,7 +558,7 @@ export default function CSSidebar() {
     return () => {
       alive = false;
     };
-  }, [query]);
+  }, [query, shouldResolveRuntimeContext]);
 
   useEffect(() => {
     let alive = true;
@@ -569,6 +581,34 @@ export default function CSSidebar() {
       .catch(() => {
         if (!alive) return;
         setChannelDisplayMap({});
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    setIsLoadingToolbarDebugConfig(true);
+    void getOrganizationSettingsView()
+      .then((view) => {
+        if (!alive) return;
+        const enabled = Boolean(
+          (view?.debug_switches || []).find(
+            (item) =>
+              (item.key || "").trim() === "enable_toolbar_debug_entry" &&
+              item.enabled,
+          ),
+        );
+        setIsToolbarDebugEnabled(enabled);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setIsToolbarDebugEnabled(false);
+      })
+      .finally(() => {
+        if (!alive) return;
+        setIsLoadingToolbarDebugConfig(false);
       });
     return () => {
       alive = false;
@@ -1026,6 +1066,17 @@ export default function CSSidebar() {
   const conversationRefreshedAt = formatToolbarMessageTime(
     bootstrap?.conversation?.refreshed_at,
   );
+  const sampleOpenDataMessage = conversationMessages.find((message) =>
+    Boolean((message?.sender_display_userid || "").trim()),
+  );
+  const sampleOpenDataUserID = (
+    sampleOpenDataMessage?.sender_display_userid || ""
+  ).trim();
+  const sampleOpenDataFallback = (
+    sampleOpenDataMessage?.sender_display_fallback ||
+    sampleOpenDataMessage?.sender_userid ||
+    ""
+  ).trim();
   const humanOnlyPrompt =
     !selectionState?.required &&
     !suggestionPanelVisible &&
@@ -1037,6 +1088,10 @@ export default function CSSidebar() {
     bootstrap?.external_userid &&
     !selectionState?.required,
   );
+  const canOpenDebugView =
+    !isLoadingToolbarDebugConfig &&
+    isToolbarDebugEnabled &&
+    !selectionState?.required;
 
   useEffect(() => {
     if (!chatPanelVisible) return;
@@ -1065,6 +1120,12 @@ export default function CSSidebar() {
     setSuggestionNotice("");
     setConversationNotice("");
   }, [bootstrap?.open_kfid, bootstrap?.external_userid]);
+
+  useEffect(() => {
+    if (selectionState?.required && viewMode === "debug") {
+      setViewMode("main");
+    }
+  }, [selectionState?.required, viewMode]);
 
   const safeFeedback = async (input: {
     reply_id?: string;
@@ -1250,6 +1311,24 @@ export default function CSSidebar() {
     }
   };
 
+  if (viewMode === "debug") {
+    return (
+      <ToolbarDebugView
+        onBack={() => setViewMode("main")}
+        openKFID={
+          bootstrap?.open_kfid || sessionLocator.open_kfid || query.open_kfid
+        }
+        externalUserID={
+          bootstrap?.external_userid ||
+          sessionLocator.external_userid ||
+          query.external_userid
+        }
+        sampleOpenDataUserID={sampleOpenDataUserID}
+        sampleOpenDataFallback={sampleOpenDataFallback}
+      />
+    );
+  }
+
   return (
     <div className={sidebarPageShell}>
       <div
@@ -1287,6 +1366,16 @@ export default function CSSidebar() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
+            {canOpenDebugView ? (
+              <button
+                type="button"
+                aria-label="打开工具栏调试面板"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-300 hover:text-blue-600 hover:shadow-[0_8px_18px_rgba(37,99,235,0.12)]"
+                onClick={() => setViewMode("debug")}
+              >
+                <Bug className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
             <Button
               size="sm"
               className={`h-8 rounded-full px-3 text-[11px] ${isUpgraded ? "bg-slate-100 text-slate-400" : "bg-blue-600 text-white hover:bg-blue-700"}`}

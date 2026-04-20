@@ -467,7 +467,7 @@ export default function OrganizationSettings() {
       },
     ]
   })()
-  const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_vconsole")
+  const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
 
   return (
     <div className="flex min-h-full flex-col bg-white rounded-xl border border-gray-200 shadow-sm">
@@ -1049,7 +1049,7 @@ export default function OrganizationSettings() {
                     <Switch
                       checked={Boolean(toolbarDebugSwitch?.enabled)}
                       onCheckedChange={(checked) => {
-                        void updateDebugSwitch("enable_vconsole", Boolean(checked))
+                        void updateDebugSwitch("enable_toolbar_debug_entry", Boolean(checked))
                       }}
                     />
                   </div>
