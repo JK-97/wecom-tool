@@ -38,6 +38,7 @@ export type CommandCenterViewModel = {
   closed_count?: number;
   sessions?: CommandCenterSession[];
   selected?: CommandCenterSession;
+  selected_detail?: CommandCenterSessionDetail;
   monitor?: {
     mood?: string;
     summary?: string;

@@ -736,6 +736,17 @@ export default function CSCommandCenter() {
         applyDetailSnapshot(null, "reset", fetchedAtMs);
       }
     }
+    const bootstrapDetail = viewData?.selected_detail || null;
+    const bootstrapDetailKey = buildCommandCenterSessionKey(
+      bootstrapDetail?.session || null,
+    );
+    if (
+      bootstrapDetail &&
+      bootstrapDetailKey &&
+      bootstrapDetailKey === resolvedSelected.sessionKey
+    ) {
+      applyDetailSnapshot(bootstrapDetail, "reset", fetchedAtMs);
+    }
     return {
       fetchedAtMs,
       resolvedSelected,
@@ -926,6 +937,11 @@ export default function CSCommandCenter() {
       applyDetailSnapshot(null, "reset", Date.now());
       return;
     }
+    const currentDetailKey = buildCommandCenterSessionKey(detail?.session || null);
+    if (currentDetailKey && currentDetailKey === selectedSessionKey) {
+      setIsLoadingDetail(false);
+      return;
+    }
     setIsLoadingDetail(true);
     applyDetailSnapshot(null, "reset", Date.now());
     void fetchDetailSnapshot(currentSelectedSession, {
@@ -944,7 +960,7 @@ export default function CSCommandCenter() {
     return () => {
       alive = false;
     };
-  }, [queryOpenKFID, selectedSessionKey]);
+  }, [detail?.session, queryOpenKFID, selectedSessionKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2859,9 +2875,9 @@ function buildSessionActionPanel(
     case 1:
       return {
         title: "当前由智能助手接待",
-        description: "需要人工介入时，可直接转给指定人工，或先送入待接入池。",
+        description: "需要人工介入时，可直接转给指定人工，送入待接入池，或直接结束当前会话。",
         primaryAction: transferAction,
-        secondaryActions: [queueAction],
+        secondaryActions: [queueAction, endAction],
         emptyHint:
           !hasKnownCandidates || hasHumanCandidates
             ? ""
@@ -2944,11 +2960,11 @@ function buildFlatSessionActions(
     label: "结束会话",
     description: "结束当前会话，不再继续人工接待",
     tone: "danger",
-    disabled: sessionState !== 3,
+    disabled: sessionState !== 1 && sessionState !== 3,
     disabledReason:
       sessionState === 4
         ? "当前会话已结束"
-        : sessionState === 3
+        : sessionState === 1 || sessionState === 3
           ? ""
           : "当前状态不支持直接结束会话",
   };

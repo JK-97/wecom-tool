@@ -173,14 +173,13 @@ function compactToolbarFacts(items?: string[], limit = 3): string[] {
 }
 
 function normalizeToolbarSummaryStatus(raw?: string): string {
-  const value = (raw || "").trim();
+  const value = (raw || "").trim().toLowerCase();
   if (!value) return "pending";
-  if (value === "succeeded") return "ready";
-  if (value === "selection_required") return "待选择";
-  if (value === "running") return "分析中";
-  if (value === "queued") return "排队中";
-  if (value === "failed") return "失败";
-  if (value === "ready" || value === "pending") return value;
+  if (["succeeded", "success", "completed"].includes(value)) return "ready";
+  if (value === "processing") return "running";
+  if (["selection_required", "running", "queued", "failed", "ready", "pending"].includes(value)) {
+    return value;
+  }
   return value;
 }
 
@@ -190,18 +189,15 @@ function mergeToolbarSummary(
 ): KFToolbarBootstrap["summary"] | undefined {
   if (!next) return prev || undefined;
   if (!prev) return next;
-  const prevStatus = (prev.status || "").trim().toLowerCase();
-  const nextStatus = (next.status || "").trim().toLowerCase();
-  const prevHeadline = (prev.headline || "").trim();
-  const nextHeadline = (next.headline || "").trim();
+  const prevStatus = normalizeToolbarSummaryStatus(prev.status);
+  const nextStatus = normalizeToolbarSummaryStatus(next.status);
   if (
     (prevStatus === "queued" || prevStatus === "running") &&
-    nextStatus === "pending" &&
-    prevHeadline !== "" &&
-    nextHeadline === prevHeadline
+    nextStatus === "pending"
   ) {
     return {
       ...prev,
+      ...next,
       status: prev.status,
     };
   }
@@ -447,7 +443,7 @@ export default function CSSidebar() {
   const [isRefreshingConversation, setIsRefreshingConversation] = useState(false);
   const [viewMode, setViewMode] = useState<"main" | "debug">("main");
   const [isToolbarDebugEnabled, setIsToolbarDebugEnabled] = useState(false);
-  const [isLoadingToolbarDebugConfig, setIsLoadingToolbarDebugConfig] = useState(false);
+  const [isLoadingToolbarDebugConfig, setIsLoadingToolbarDebugConfig] = useState(true);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgraded, setIsUpgraded] = useState(false);
   const [upgradeOwner, setUpgradeOwner] = useState("销售 A");
@@ -766,14 +762,16 @@ export default function CSSidebar() {
       const sessionChanged =
         nextSessionKey !== bootstrapSessionKeyRef.current;
       bootstrapSessionKeyRef.current = nextSessionKey;
+      let mergedSummary: KFToolbarBootstrap["summary"] | undefined = data?.summary;
       setBootstrap((prev) => {
         if (!data) return null;
+        mergedSummary =
+          !sessionChanged && prev?.summary
+            ? mergeToolbarSummary(prev.summary, data.summary)
+            : data.summary;
         return {
           ...data,
-          summary:
-            options?.silent && prev?.summary
-              ? mergeToolbarSummary(prev.summary, data.summary)
-              : data.summary,
+          summary: mergedSummary,
           suggestions:
             !sessionChanged && prev?.suggestions
               ? mergeToolbarSuggestionBatch(prev.suggestions, data.suggestions)
@@ -787,8 +785,8 @@ export default function CSSidebar() {
       realtimeVersionRef.current = Number(data?.version || 0);
       setUpgradeNote(
         (
-          data?.summary?.headline ||
-          data?.summary?.customer_goal ||
+          mergedSummary?.headline ||
+          mergedSummary?.customer_goal ||
           ""
         ).trim(),
       );
@@ -1053,7 +1051,7 @@ export default function CSSidebar() {
   const summaryProfileFacts = compactToolbarFacts(summary?.profile_facts, 3);
   const summaryStatusCopy = summarizeToolbarStatusCopy({
     sessionStatusID: header?.session_status_id,
-    summaryStatus: summary?.status,
+    summaryStatus,
   });
   const analysisPanelVisible = Boolean(
     bootstrap?.capabilities?.show_analysis_panel,
@@ -1088,9 +1086,16 @@ export default function CSSidebar() {
     bootstrap?.external_userid &&
     !selectionState?.required,
   );
+  const hasStableToolbarContext = Boolean(
+    (bootstrap?.open_kfid || "").trim() &&
+      (bootstrap?.external_userid || "").trim(),
+  );
   const canOpenDebugView =
+    !isResolvingContext &&
+    !isLoading &&
     !isLoadingToolbarDebugConfig &&
     isToolbarDebugEnabled &&
+    hasStableToolbarContext &&
     !selectionState?.required;
 
   useEffect(() => {
