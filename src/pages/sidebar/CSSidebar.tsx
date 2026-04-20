@@ -173,6 +173,73 @@ function normalizeToolbarSummaryStatus(raw?: string): string {
   return value;
 }
 
+function normalizeToolbarSuggestionStatus(raw?: string): string {
+  const value = (raw || "").trim().toLowerCase();
+  if (!value) return "idle";
+  if (value === "success" || value === "completed") return "ready";
+  if (value === "processing") return "running";
+  if (["queued", "running", "ready", "failed", "idle"].includes(value))
+    return value;
+  return "idle";
+}
+
+function toolbarBatchTimeValue(batch?: KFToolbarSuggestionBatch | null): number {
+  const raw = (batch?.updated_at || batch?.generated_at || "").trim();
+  if (!raw) return 0;
+  const value = Date.parse(raw);
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function mergeToolbarSuggestionBatch(
+  prev?: KFToolbarSuggestionBatch | null,
+  next?: KFToolbarSuggestionBatch | null,
+): KFToolbarSuggestionBatch {
+  if (!next) return prev || { batch_id: "", items: [] };
+  if (!prev) return next;
+
+  const prevStatus = normalizeToolbarSuggestionStatus(prev.status);
+  const nextStatus = normalizeToolbarSuggestionStatus(next.status);
+  const prevBatchID = (prev.batch_id || "").trim();
+  const nextBatchID = (next.batch_id || "").trim();
+  const prevItemsCount = prev.items?.length || 0;
+  const nextItemsCount = next.items?.length || 0;
+  const prevTime = toolbarBatchTimeValue(prev);
+  const nextTime = toolbarBatchTimeValue(next);
+
+  if (nextBatchID && nextBatchID !== prevBatchID) {
+    return next;
+  }
+  if (
+    (nextStatus === "ready" || nextStatus === "failed") &&
+    prevStatus !== nextStatus
+  ) {
+    return next;
+  }
+  if (nextItemsCount > 0 && prevItemsCount === 0) {
+    return next;
+  }
+  if (nextTime > 0 && prevTime > 0 && nextTime >= prevTime) {
+    return next;
+  }
+  if (
+    (prevStatus === "queued" || prevStatus === "running") &&
+    nextStatus === "idle" &&
+    nextItemsCount === 0
+  ) {
+    return prev;
+  }
+  if (
+    prevStatus === "ready" &&
+    (nextStatus === "queued" || nextStatus === "running") &&
+    prevItemsCount > 0 &&
+    nextItemsCount === 0 &&
+    nextTime <= prevTime
+  ) {
+    return prev;
+  }
+  return next;
+}
+
 function shouldRefreshToolbarSuggestions(
   payload: CommandCenterRealtimeEnvelope,
   openKFID: string,
@@ -190,7 +257,9 @@ function shouldRefreshToolbarSuggestions(
     if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
     return (
       eventType === "chat.message.received" ||
-      eventType === "chat.session_analysis.updated"
+      eventType === "chat.session_state.changed" ||
+      eventType === "chat.session_analysis.updated" ||
+      eventType === "chat.session_analysis.state_changed"
     );
   });
 }
@@ -213,7 +282,7 @@ export default function CSSidebar() {
     Record<string, string>
   >({});
   const refreshTimerRef = useRef<number | null>(null);
-  const suggestionRefreshTimerRef = useRef<number | null>(null);
+  const suggestionProbeTimerRef = useRef<number | null>(null);
   const realtimeVersionRef = useRef(0);
   const bootstrapSessionKeyRef = useRef("");
   const suggestionRequestSeqRef = useRef(0);
@@ -439,7 +508,9 @@ export default function CSSidebar() {
         return {
           ...data,
           suggestions:
-            !sessionChanged && prev?.suggestions ? prev.suggestions : data.suggestions,
+            !sessionChanged && prev?.suggestions
+              ? mergeToolbarSuggestionBatch(prev.suggestions, data.suggestions)
+              : data.suggestions,
         };
       });
       realtimeVersionRef.current = Number(data?.version || 0);
@@ -464,19 +535,6 @@ export default function CSSidebar() {
             : prev,
         );
         return;
-      }
-      if (
-        sessionChanged &&
-        (data?.open_kfid || "").trim() &&
-        (data?.external_userid || "").trim()
-      ) {
-        void loadSuggestions({
-          entry: data?.entry || entry,
-          open_kfid: data?.open_kfid,
-          external_userid: data?.external_userid,
-          reason: "bootstrap",
-          silentNotice: true,
-        });
       }
     } catch (error) {
       if (!options?.silent) {
@@ -503,6 +561,32 @@ export default function CSSidebar() {
   useEffect(() => {
     realtimeVersionRef.current = Number(bootstrap?.version || 0);
   }, [bootstrap?.version]);
+
+  const header = bootstrap?.header;
+  const summary = bootstrap?.summary;
+  const selectionState = bootstrap?.selection;
+
+  useEffect(() => {
+    const suggestionStatus = normalizeToolbarSuggestionStatus(
+      bootstrap?.suggestions?.status,
+    );
+    if (suggestionProbeTimerRef.current !== null) {
+      window.clearTimeout(suggestionProbeTimerRef.current);
+      suggestionProbeTimerRef.current = null;
+    }
+    if (selectionState?.required) return;
+    if (suggestionStatus !== "queued" && suggestionStatus !== "running") return;
+    suggestionProbeTimerRef.current = window.setTimeout(() => {
+      suggestionProbeTimerRef.current = null;
+      void loadBootstrap({ preserveNotice: true, silent: true });
+    }, suggestionStatus === "queued" ? 900 : 1200);
+    return () => {
+      if (suggestionProbeTimerRef.current !== null) {
+        window.clearTimeout(suggestionProbeTimerRef.current);
+        suggestionProbeTimerRef.current = null;
+      }
+    };
+  }, [bootstrap?.suggestions?.status, selectionState?.required]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -536,22 +620,6 @@ export default function CSSidebar() {
       }, 180);
     };
 
-    const queueSuggestionRefresh = () => {
-      if (suggestionRefreshTimerRef.current !== null) {
-        window.clearTimeout(suggestionRefreshTimerRef.current);
-      }
-      suggestionRefreshTimerRef.current = window.setTimeout(() => {
-        suggestionRefreshTimerRef.current = null;
-        void loadSuggestions({
-          entry: bootstrap?.entry || sessionLocator.entry || query.entry,
-          open_kfid: openKFID,
-          external_userid: externalUserID,
-          reason: "realtime_refresh",
-          silentNotice: true,
-        });
-      }, 360);
-    };
-
     const handleMessage = (payload: CommandCenterRealtimeEnvelope) => {
       realtimeVersionRef.current = Math.max(
         realtimeVersionRef.current,
@@ -559,10 +627,28 @@ export default function CSSidebar() {
       );
       if (!shouldRefreshToolbarSession(payload, openKFID, externalUserID))
         return;
-      queueRefresh();
       if (shouldRefreshToolbarSuggestions(payload, openKFID, externalUserID)) {
-        queueSuggestionRefresh();
+        setBootstrap((prev) =>
+          prev
+            ? {
+                ...prev,
+                summary: prev.summary
+                  ? {
+                      ...prev.summary,
+                      status: "queued",
+                    }
+                  : prev.summary,
+                suggestions: {
+                  ...(prev.suggestions || {}),
+                  status: "queued",
+                  failure_message: "",
+                  updated_at: new Date().toISOString(),
+                },
+              }
+            : prev,
+        );
       }
+      queueRefresh();
     };
 
     const connect = () => {
@@ -591,10 +677,6 @@ export default function CSSidebar() {
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
-      }
-      if (suggestionRefreshTimerRef.current !== null) {
-        window.clearTimeout(suggestionRefreshTimerRef.current);
-        suggestionRefreshTimerRef.current = null;
       }
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
@@ -635,9 +717,14 @@ export default function CSSidebar() {
     );
   }, [bootstrap?.suggestions?.items]);
 
-  const header = bootstrap?.header;
-  const summary = bootstrap?.summary;
-  const selection = bootstrap?.selection;
+  const summaryStatus = normalizeToolbarSummaryStatus(summary?.status);
+  const suggestionStatus = normalizeToolbarSuggestionStatus(
+    bootstrap?.suggestions?.status,
+  );
+  const summaryIsAnalyzing =
+    summaryStatus === "queued" || summaryStatus === "running" || summaryStatus === "pending";
+  const suggestionIsAnalyzing =
+    suggestionStatus === "queued" || suggestionStatus === "running";
   const summaryBlockingIssues = compactToolbarFacts(summary?.blocking_issues, 3);
   const summaryDecisionSignals = compactToolbarFacts(
     summary?.decision_signals,
@@ -655,7 +742,7 @@ export default function CSSidebar() {
   const canUpgrade = Boolean(
     header?.can_upgrade_contact &&
     bootstrap?.external_userid &&
-    !selection?.required,
+    !selectionState?.required,
   );
 
   const safeFeedback = async (input: {
@@ -761,7 +848,7 @@ export default function CSSidebar() {
   const handleRegenerate = async () => {
     if (
       !bootstrap ||
-      selection?.required ||
+      selectionState?.required ||
       !(bootstrap.open_kfid || sessionLocator.open_kfid || query.open_kfid)
     )
       return;
@@ -785,7 +872,7 @@ export default function CSSidebar() {
   };
 
   const handleUpgrade = async () => {
-    if (selection?.required) {
+    if (selectionState?.required) {
       setNotice("请先选择当前要辅助的微信客服会话");
       return;
     }
@@ -892,7 +979,7 @@ export default function CSSidebar() {
         <ToolbarSkeleton />
       ) : (
         <div className={`${sidebarBody} space-y-3`}>
-          {selection?.required ? (
+          {selectionState?.required ? (
             <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
               <div className="mb-3 flex items-start gap-2">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
@@ -909,7 +996,7 @@ export default function CSSidebar() {
               </div>
 
               <div className="space-y-2">
-                {(selection.candidates || []).map((candidate, idx) => {
+                {(selectionState.candidates || []).map((candidate, idx) => {
                   const openKFID = (candidate.open_kfid || "").trim();
                   const externalUserID = (
                     candidate.external_userid ||
@@ -1000,20 +1087,30 @@ export default function CSSidebar() {
                     <div className="mb-1 flex items-center gap-2">
                       <div className={sidebarSectionLabel}>会话摘要</div>
                       <Badge
-                        variant={
-                          normalizeToolbarSummaryStatus(summary?.status) ===
-                          "ready"
-                            ? "success"
-                            : "secondary"
-                        }
+                        variant={summaryStatus === "ready" ? "success" : "secondary"}
                         className="px-2 py-0.5 text-[10px]"
                       >
-                        {normalizeToolbarSummaryStatus(summary?.status)}
+                        {summaryStatus}
                       </Badge>
                     </div>
-                    <p className="wecom-toolbar-summary-text m-0 text-slate-800">
-                      {(summary?.headline || "正在整理当前会话分析...").trim()}
-                    </p>
+                    <div className="space-y-2">
+                      <p className="wecom-toolbar-summary-text m-0 text-slate-800">
+                        {(summary?.headline || "正在整理当前会话分析...").trim()}
+                      </p>
+                      {summaryIsAnalyzing ? (
+                        <div className="flex items-center gap-2 text-[11px] text-blue-600">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1">
+                            <span className="relative flex h-2.5 w-2.5">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
+                              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
+                            </span>
+                            {summaryStatus === "queued"
+                              ? "正在等待回复窗口收齐后分析"
+                              : "AI 正在更新本轮会话分析"}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
 
@@ -1164,8 +1261,16 @@ export default function CSSidebar() {
                   summaryReplyGuardrails.length === 0 &&
                   summaryProfileFacts.length === 0 &&
                   !summary?.customer_goal ? (
-                    <div className="text-[12px] text-slate-500">
-                      当前结构化分析仍在整理中，稍后会补齐更完整的客户判断。
+                    <div className="rounded-2xl border border-dashed border-blue-100 bg-white px-3 py-3 text-[12px] text-slate-500">
+                      {summaryIsAnalyzing ? (
+                        <div className="space-y-2">
+                          <div className="h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
+                          <div className="h-2.5 w-full animate-pulse rounded-full bg-slate-200" />
+                          <div className="h-2.5 w-5/6 animate-pulse rounded-full bg-slate-200" />
+                        </div>
+                      ) : (
+                        "当前结构化分析仍在整理中，稍后会补齐更完整的客户判断。"
+                      )}
                     </div>
                   ) : null}
                 </div>
@@ -1180,7 +1285,11 @@ export default function CSSidebar() {
                     <div>
                       <div className={sidebarSectionLabel}>AI 建议回复</div>
                       <div className={`${sidebarMeta} mt-0.5`}>
-                        支持单句直发，也支持分步逐句填入
+                        {suggestionIsAnalyzing
+                          ? suggestionStatus === "queued"
+                            ? "已收到新消息，正在等待回复窗口收齐"
+                            : "AI 正在基于本轮新消息生成建议回复"
+                          : "支持单句直发，也支持分步逐句填入"}
                       </div>
                     </div>
                   </div>
@@ -1199,11 +1308,34 @@ export default function CSSidebar() {
                 </div>
 
                 <div className="rounded-2xl border border-slate-100 bg-slate-50/45">
+                  {suggestionIsAnalyzing ? (
+                    <div className="border-b border-slate-100 px-4 py-3">
+                      <div className="flex items-center gap-2 text-[11px] text-blue-600">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
+                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
+                        </span>
+                        <span>
+                          {suggestionStatus === "queued"
+                            ? "新消息已进入回复窗口，窗口收齐后会统一生成建议"
+                            : "AI 正在重新组织本轮建议回复"}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
                   {suggestions.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[12px] text-slate-500">
-                      {isLoadingSuggestions
-                        ? "AI 正在组织更合适的回复..."
-                        : "暂未生成建议回复，可点击换一批重试"}
+                      {isLoadingSuggestions || suggestionIsAnalyzing ? (
+                        <div className="space-y-3">
+                          <div className="mx-auto h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
+                          <div className="mx-auto h-2.5 w-11/12 animate-pulse rounded-full bg-slate-200" />
+                          <div className="mx-auto h-2.5 w-4/5 animate-pulse rounded-full bg-slate-200" />
+                        </div>
+                      ) : bootstrap?.suggestions?.failure_message ? (
+                        bootstrap.suggestions.failure_message.trim()
+                      ) : (
+                        "暂未生成建议回复，可点击换一批重试"
+                      )}
                     </div>
                   ) : (
                     suggestions.map((item, idx) => {
@@ -1227,7 +1359,9 @@ export default function CSSidebar() {
                             item.displayMode === "threaded"
                               ? "wecom-toolbar-thread-row"
                               : ""
-                          } ${idx < suggestions.length - 1 ? "border-b border-slate-100" : ""}`}
+                          } ${idx < suggestions.length - 1 ? "border-b border-slate-100" : ""} ${
+                            suggestionIsAnalyzing ? "opacity-75" : ""
+                          }`}
                           style={{ animationDelay: `${idx * 70}ms` }}
                         >
                           <div className="mb-1.5 flex items-start justify-between gap-2">

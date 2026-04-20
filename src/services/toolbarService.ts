@@ -20,6 +20,10 @@ export type KFToolbarSuggestion = {
 
 export type KFToolbarSuggestionBatch = {
   batch_id?: string;
+  status?: string;
+  updated_at?: string;
+  generated_at?: string;
+  failure_message?: string;
   items?: KFToolbarSuggestion[];
 };
 
