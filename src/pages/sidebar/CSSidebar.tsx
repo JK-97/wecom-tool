@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
 import { Textarea } from "@/components/ui/Textarea";
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import { normalizeErrorMessage } from "@/services/http";
 import {
   resolveSidebarRuntimeContext,
@@ -34,15 +35,18 @@ import {
 import { listReceptionChannels } from "@/services/receptionService";
 import {
   ArrowUpRight,
+  Bot,
   CheckCircle2,
   GitBranch,
   ChevronRight,
   Clock,
   Copy,
   Lightbulb,
+  MessageSquareText,
   RefreshCcw,
   Send,
   Sparkles,
+  UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -56,6 +60,10 @@ type NormalizedSuggestion = {
   reason: string;
   source: string;
 };
+
+type ToolbarConversationMessage = NonNullable<
+  NonNullable<KFToolbarBootstrap["conversation"]>["messages"]
+>[number];
 
 function normalizeSuggestion(
   item: KFToolbarSuggestion,
@@ -173,6 +181,30 @@ function normalizeToolbarSummaryStatus(raw?: string): string {
   return value;
 }
 
+function mergeToolbarSummary(
+  prev?: KFToolbarBootstrap["summary"] | null,
+  next?: KFToolbarBootstrap["summary"] | null,
+): KFToolbarBootstrap["summary"] | undefined {
+  if (!next) return prev || undefined;
+  if (!prev) return next;
+  const prevStatus = (prev.status || "").trim().toLowerCase();
+  const nextStatus = (next.status || "").trim().toLowerCase();
+  const prevHeadline = (prev.headline || "").trim();
+  const nextHeadline = (next.headline || "").trim();
+  if (
+    (prevStatus === "queued" || prevStatus === "running") &&
+    nextStatus === "pending" &&
+    prevHeadline !== "" &&
+    nextHeadline === prevHeadline
+  ) {
+    return {
+      ...prev,
+      status: prev.status,
+    };
+  }
+  return next;
+}
+
 function normalizeToolbarSuggestionStatus(raw?: string): string {
   const value = (raw || "").trim().toLowerCase();
   if (!value) return "idle";
@@ -257,6 +289,28 @@ function shouldRefreshToolbarSuggestions(
     if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
     return (
       eventType === "chat.message.received" ||
+      eventType === "chat.session_state.changed"
+    );
+  });
+}
+
+function shouldRefreshToolbarAnalysis(
+  payload: CommandCenterRealtimeEnvelope,
+  openKFID: string,
+  externalUserID: string,
+): boolean {
+  const targetOpenKFID = openKFID.trim();
+  const targetExternalUserID = externalUserID.trim();
+  if (!targetOpenKFID || !targetExternalUserID) return false;
+  return (payload.events || []).some((event) => {
+    const eventExternalUserID = (event.external_userid || "").trim();
+    const eventOpenKFID = (event.open_kfid || "").trim();
+    const eventType = (event.event_type || "").trim().toLowerCase();
+    if (!eventExternalUserID || eventExternalUserID !== targetExternalUserID)
+      return false;
+    if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
+    return (
+      eventType === "chat.message.received" ||
       eventType === "chat.session_state.changed" ||
       eventType === "chat.session_analysis.updated" ||
       eventType === "chat.session_analysis.state_changed"
@@ -264,14 +318,114 @@ function shouldRefreshToolbarSuggestions(
   });
 }
 
+function formatToolbarMessageTime(value?: string): string {
+  const raw = (value || "").trim();
+  if (!raw) return "";
+  const millis = Date.parse(raw.replace(" ", "T"));
+  if (Number.isNaN(millis)) return raw;
+  return new Date(millis).toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function resolveToolbarMessageRole(message?: ToolbarConversationMessage | null):
+  | "assistant"
+  | "staff"
+  | "customer"
+  | "system" {
+  const sender = (message?.sender || "").trim().toLowerCase();
+  if (sender === "assistant") return "assistant";
+  if (sender === "staff") return "staff";
+  if (sender === "system" || sender === "event") return "system";
+  return "customer";
+}
+
+function summarizeToolbarStatusCopy(input?: {
+  sessionStatusID?: number;
+  summaryStatus?: string;
+}): {
+  badgeText: string;
+  badgeVariant: "success" | "secondary" | "warning";
+  helperText: string;
+} {
+  const sessionStatusID = Number(input?.sessionStatusID ?? -99);
+  const summaryStatus = (input?.summaryStatus || "").trim().toLowerCase();
+  if (summaryStatus === "queued") {
+    return {
+      badgeText: "待更新",
+      badgeVariant: "warning",
+      helperText: "检测到会话有新变化，AI 正在等待本轮消息窗口收齐。",
+    };
+  }
+  if (summaryStatus === "running") {
+    return {
+      badgeText: "分析中",
+      badgeVariant: "warning",
+      helperText: "AI 正在整理客户意图、阻力和下一步服务动作。",
+    };
+  }
+  if (summaryStatus === "failed") {
+    return {
+      badgeText: "分析失败",
+      badgeVariant: "warning",
+      helperText: "本轮分析暂未完成，可等待后续事件或手动刷新聊天区后再查看。",
+    };
+  }
+  switch (sessionStatusID) {
+    case 0:
+      return {
+        badgeText: "待建模",
+        badgeVariant: "secondary",
+        helperText: "当前会话仍处于未处理状态，建议等待客户表达更多信息后再形成稳定判断。",
+      };
+    case 1:
+      return {
+        badgeText: "助手监测中",
+        badgeVariant: "success",
+        helperText: "智能助手接待中，分析重点放在客户目标、风险信号和接手前上下文准备。",
+      };
+    case 2:
+      return {
+        badgeText: "待人工接手",
+        badgeVariant: "warning",
+        helperText: "会话在待接入池排队中，当前分析更偏向接手摘要和优先级判断。",
+      };
+    case 3:
+      return {
+        badgeText: "人工辅助中",
+        badgeVariant: "success",
+        helperText: "人工接待中，分析会持续刷新成交信号、主要阻力和建议动作。",
+      };
+    case 4:
+      return {
+        badgeText: "历史结论",
+        badgeVariant: "secondary",
+        helperText: "会话已结束，当前展示的是最近一次沉淀下来的分析结论。",
+      };
+    default:
+      return {
+        badgeText: "已准备",
+        badgeVariant: "secondary",
+        helperText: "当前展示的是最新可用的会话分析结果。",
+      };
+  }
+}
+
 export default function CSSidebar() {
   const [bootstrap, setBootstrap] = useState<KFToolbarBootstrap | null>(null);
   const [notice, setNotice] = useState("");
+  const [suggestionNotice, setSuggestionNotice] = useState("");
+  const [conversationNotice, setConversationNotice] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isResolvingContext, setIsResolvingContext] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isRefreshingConversation, setIsRefreshingConversation] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgraded, setIsUpgraded] = useState(false);
   const [upgradeOwner, setUpgradeOwner] = useState("销售 A");
@@ -283,9 +437,12 @@ export default function CSSidebar() {
   >({});
   const refreshTimerRef = useRef<number | null>(null);
   const suggestionProbeTimerRef = useRef<number | null>(null);
+  const suggestionNoticeTimerRef = useRef<number | null>(null);
+  const conversationNoticeTimerRef = useRef<number | null>(null);
   const realtimeVersionRef = useRef(0);
   const bootstrapSessionKeyRef = useRef("");
   const suggestionRequestSeqRef = useRef(0);
+  const conversationScrollRef = useRef<HTMLDivElement | null>(null);
 
   const query = useMemo(() => {
     if (typeof window === "undefined")
@@ -299,9 +456,62 @@ export default function CSSidebar() {
   }, []);
   const [sessionLocator, setSessionLocator] = useState(query);
 
+  const clearSuggestionNotice = () => {
+    if (suggestionNoticeTimerRef.current !== null) {
+      window.clearTimeout(suggestionNoticeTimerRef.current);
+      suggestionNoticeTimerRef.current = null;
+    }
+    setSuggestionNotice("");
+  };
+
+  const clearConversationNotice = () => {
+    if (conversationNoticeTimerRef.current !== null) {
+      window.clearTimeout(conversationNoticeTimerRef.current);
+      conversationNoticeTimerRef.current = null;
+    }
+    setConversationNotice("");
+  };
+
+  const pushSuggestionNotice = (message: string) => {
+    const next = message.trim();
+    if (!next) return;
+    if (suggestionNoticeTimerRef.current !== null) {
+      window.clearTimeout(suggestionNoticeTimerRef.current);
+    }
+    setSuggestionNotice(next);
+    suggestionNoticeTimerRef.current = window.setTimeout(() => {
+      suggestionNoticeTimerRef.current = null;
+      setSuggestionNotice("");
+    }, 2800);
+  };
+
+  const pushConversationNotice = (message: string) => {
+    const next = message.trim();
+    if (!next) return;
+    if (conversationNoticeTimerRef.current !== null) {
+      window.clearTimeout(conversationNoticeTimerRef.current);
+    }
+    setConversationNotice(next);
+    conversationNoticeTimerRef.current = window.setTimeout(() => {
+      conversationNoticeTimerRef.current = null;
+      setConversationNotice("");
+    }, 2800);
+  };
+
   useEffect(() => {
     setSessionLocator(query);
   }, [query]);
+
+  useEffect(() => {
+    return () => {
+      if (suggestionNoticeTimerRef.current !== null) {
+        window.clearTimeout(suggestionNoticeTimerRef.current);
+      }
+      if (conversationNoticeTimerRef.current !== null) {
+        window.clearTimeout(conversationNoticeTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -373,7 +583,7 @@ export default function CSSidebar() {
     reason?: string;
     silentNotice?: boolean;
     manual?: boolean;
-  }) => {
+  }): Promise<boolean> => {
     const entry = (
       input?.entry ||
       bootstrap?.entry ||
@@ -395,9 +605,17 @@ export default function CSSidebar() {
       query.external_userid ||
       ""
     ).trim();
+    const canLoad =
+      input?.manual ||
+      Boolean(bootstrap?.capabilities?.regenerate) ||
+      Boolean(bootstrap?.capabilities?.auto_refresh_suggestions);
     if (!openKFID || !externalUserID) {
       setIsLoadingSuggestions(false);
-      return;
+      return false;
+    }
+    if (!canLoad) {
+      setIsLoadingSuggestions(false);
+      return false;
     }
 
     const requestSeq = suggestionRequestSeqRef.current + 1;
@@ -416,7 +634,7 @@ export default function CSSidebar() {
         seed_reply_id: (input?.seed_reply_id || "").trim(),
         reason: (input?.reason || "bootstrap").trim(),
       });
-      if (suggestionRequestSeqRef.current !== requestSeq) return;
+      if (suggestionRequestSeqRef.current !== requestSeq) return false;
       const nextBatch: KFToolbarSuggestionBatch = batch || { batch_id: "", items: [] };
       setBootstrap((prev) => {
         if (!prev) return prev;
@@ -438,12 +656,15 @@ export default function CSSidebar() {
         };
       });
       if (input?.manual) {
-        setNotice("已更新一组新的建议回复");
+        pushSuggestionNotice("已更新一组新的建议回复");
+      } else {
+        clearSuggestionNotice();
       }
+      return true;
     } catch (error) {
-      if (suggestionRequestSeqRef.current !== requestSeq) return;
+      if (suggestionRequestSeqRef.current !== requestSeq) return false;
       if (!input?.silentNotice) {
-        setNotice(sanitizeToolbarNotice(error));
+        pushSuggestionNotice(sanitizeToolbarNotice(error));
       }
       setBootstrap((prev) =>
         prev
@@ -453,6 +674,7 @@ export default function CSSidebar() {
             }
           : prev,
       );
+      return false;
     } finally {
       if (suggestionRequestSeqRef.current === requestSeq) {
         setIsLoadingSuggestions(false);
@@ -464,7 +686,8 @@ export default function CSSidebar() {
   const loadBootstrap = async (options?: {
     preserveNotice?: boolean;
     silent?: boolean;
-  }) => {
+    preserveConversation?: boolean;
+  }): Promise<boolean> => {
     const entry = (
       sessionLocator.entry ||
       query.entry ||
@@ -484,7 +707,7 @@ export default function CSSidebar() {
           "暂时无法识别当前客户，请确认已从企业微信客户会话进入工具栏，或稍后重试。",
         );
       }
-      return;
+      return false;
     }
     if (!options?.silent) {
       setIsLoading(true);
@@ -507,10 +730,18 @@ export default function CSSidebar() {
         if (!data) return null;
         return {
           ...data,
+          summary:
+            options?.silent && prev?.summary
+              ? mergeToolbarSummary(prev.summary, data.summary)
+              : data.summary,
           suggestions:
             !sessionChanged && prev?.suggestions
               ? mergeToolbarSuggestionBatch(prev.suggestions, data.suggestions)
               : data.suggestions,
+          conversation:
+            options?.preserveConversation && prev?.conversation
+              ? prev.conversation
+              : data.conversation,
         };
       });
       realtimeVersionRef.current = Number(data?.version || 0);
@@ -524,6 +755,10 @@ export default function CSSidebar() {
       if (!options?.preserveNotice) {
         setNotice("");
       }
+      if (!options?.silent) {
+        clearSuggestionNotice();
+        clearConversationNotice();
+      }
       if (data?.selection?.required) {
         setIsLoadingSuggestions(false);
         setBootstrap((prev) =>
@@ -534,13 +769,15 @@ export default function CSSidebar() {
               }
             : prev,
         );
-        return;
+        return true;
       }
+      return true;
     } catch (error) {
       if (!options?.silent) {
         setBootstrap(null);
         setNotice(sanitizeToolbarNotice(error));
       }
+      return false;
     } finally {
       if (!options?.silent) {
         setIsLoading(false);
@@ -575,10 +812,15 @@ export default function CSSidebar() {
       suggestionProbeTimerRef.current = null;
     }
     if (selectionState?.required) return;
+    if (!bootstrap?.capabilities?.auto_refresh_suggestions) return;
     if (suggestionStatus !== "queued" && suggestionStatus !== "running") return;
     suggestionProbeTimerRef.current = window.setTimeout(() => {
       suggestionProbeTimerRef.current = null;
-      void loadBootstrap({ preserveNotice: true, silent: true });
+      void loadBootstrap({
+        preserveNotice: true,
+        silent: true,
+        preserveConversation: true,
+      });
     }, suggestionStatus === "queued" ? 900 : 1200);
     return () => {
       if (suggestionProbeTimerRef.current !== null) {
@@ -586,7 +828,11 @@ export default function CSSidebar() {
         suggestionProbeTimerRef.current = null;
       }
     };
-  }, [bootstrap?.suggestions?.status, selectionState?.required]);
+  }, [
+    bootstrap?.capabilities?.auto_refresh_suggestions,
+    bootstrap?.suggestions?.status,
+    selectionState?.required,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -616,7 +862,11 @@ export default function CSSidebar() {
       }
       refreshTimerRef.current = window.setTimeout(() => {
         refreshTimerRef.current = null;
-        void loadBootstrap({ preserveNotice: true, silent: true });
+        void loadBootstrap({
+          preserveNotice: true,
+          silent: true,
+          preserveConversation: true,
+        });
       }, 180);
     };
 
@@ -627,7 +877,10 @@ export default function CSSidebar() {
       );
       if (!shouldRefreshToolbarSession(payload, openKFID, externalUserID))
         return;
-      if (shouldRefreshToolbarSuggestions(payload, openKFID, externalUserID)) {
+      if (
+        bootstrap?.capabilities?.auto_refresh_suggestions &&
+        shouldRefreshToolbarSuggestions(payload, openKFID, externalUserID)
+      ) {
         setBootstrap((prev) =>
           prev
             ? {
@@ -644,6 +897,24 @@ export default function CSSidebar() {
                   failure_message: "",
                   updated_at: new Date().toISOString(),
                 },
+              }
+            : prev,
+        );
+      }
+      if (
+        bootstrap?.capabilities?.auto_refresh_analysis &&
+        shouldRefreshToolbarAnalysis(payload, openKFID, externalUserID)
+      ) {
+        setBootstrap((prev) =>
+          prev
+            ? {
+                ...prev,
+                summary: prev.summary
+                  ? {
+                      ...prev.summary,
+                      status: "queued",
+                    }
+                  : prev.summary,
               }
             : prev,
         );
@@ -692,6 +963,7 @@ export default function CSSidebar() {
       });
     };
   }, [
+    bootstrap?.capabilities?.auto_refresh_analysis,
     bootstrap?.external_userid,
     bootstrap?.open_kfid,
     bootstrap?.selection?.required,
@@ -739,11 +1011,60 @@ export default function CSSidebar() {
     3,
   );
   const summaryProfileFacts = compactToolbarFacts(summary?.profile_facts, 3);
+  const summaryStatusCopy = summarizeToolbarStatusCopy({
+    sessionStatusID: header?.session_status_id,
+    summaryStatus: summary?.status,
+  });
+  const analysisPanelVisible = Boolean(
+    bootstrap?.capabilities?.show_analysis_panel,
+  );
+  const suggestionPanelVisible = Boolean(
+    bootstrap?.capabilities?.show_suggestion_panel,
+  );
+  const chatPanelVisible = Boolean(bootstrap?.capabilities?.show_chat_panel);
+  const conversationMessages = bootstrap?.conversation?.messages || [];
+  const conversationRefreshedAt = formatToolbarMessageTime(
+    bootstrap?.conversation?.refreshed_at,
+  );
+  const humanOnlyPrompt =
+    !selectionState?.required &&
+    !suggestionPanelVisible &&
+    (header?.session_status || "").trim()
+      ? `当前为${(header?.session_status || "").trim()}，仅在人工接待状态下显示建议回复。`
+      : "仅在人工接待状态下显示建议回复。";
   const canUpgrade = Boolean(
     header?.can_upgrade_contact &&
     bootstrap?.external_userid &&
     !selectionState?.required,
   );
+
+  useEffect(() => {
+    if (!chatPanelVisible) return;
+    const container = conversationScrollRef.current;
+    if (!container) return;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [
+    chatPanelVisible,
+    bootstrap?.conversation?.refreshed_at,
+    bootstrap?.open_kfid,
+    bootstrap?.external_userid,
+  ]);
+
+  useEffect(() => {
+    if (suggestionNoticeTimerRef.current !== null) {
+      window.clearTimeout(suggestionNoticeTimerRef.current);
+      suggestionNoticeTimerRef.current = null;
+    }
+    if (conversationNoticeTimerRef.current !== null) {
+      window.clearTimeout(conversationNoticeTimerRef.current);
+      conversationNoticeTimerRef.current = null;
+    }
+    setSuggestionNotice("");
+    setConversationNotice("");
+  }, [bootstrap?.open_kfid, bootstrap?.external_userid]);
 
   const safeFeedback = async (input: {
     reply_id?: string;
@@ -774,14 +1095,16 @@ export default function CSSidebar() {
     const text = item.sentences[currentStep] || item.text;
     try {
       await navigator.clipboard.writeText(text);
-      setNotice(currentStep > 0 ? "已复制下一句建议" : "已复制建议内容");
+      pushSuggestionNotice(
+        currentStep > 0 ? "已复制下一句建议" : "已复制建议内容",
+      );
       void safeFeedback({
         reply_id: item.id,
         action: "copy",
         step: currentStep + 1,
       });
     } catch {
-      setNotice("复制失败，请手动复制");
+      pushSuggestionNotice("复制失败，请手动复制");
     }
   };
 
@@ -806,13 +1129,13 @@ export default function CSSidebar() {
       });
       if (currentStep + 1 < item.sentences.length) {
         setThreadSteps((prev) => ({ ...prev, [item.id]: currentStep + 1 }));
-        setNotice(`已填入第 ${currentStep + 1} 句，可继续发送下一句`);
+        pushSuggestionNotice(`已填入第 ${currentStep + 1} 句，可继续发送下一句`);
       } else {
         setThreadSteps((prev) => ({
           ...prev,
           [item.id]: item.sentences.length,
         }));
-        setNotice(
+        pushSuggestionNotice(
           item.hasFollowups
             ? "已完成本组分步回复填入"
             : "已通过企业微信客户端填入当前会话",
@@ -836,9 +1159,9 @@ export default function CSSidebar() {
       const message = toJSSDKErrorMessage(error);
       try {
         await navigator.clipboard.writeText(text);
-        setNotice(`${message}，已降级为复制，请手动粘贴发送`);
+        pushSuggestionNotice(`${message}，已降级为复制，请手动粘贴发送`);
       } catch {
-        setNotice(message || sanitizeToolbarNotice(error));
+        pushSuggestionNotice(message || sanitizeToolbarNotice(error));
       }
     } finally {
       setIsSubmitting(false);
@@ -849,6 +1172,7 @@ export default function CSSidebar() {
     if (
       !bootstrap ||
       selectionState?.required ||
+      !bootstrap.capabilities?.regenerate ||
       !(bootstrap.open_kfid || sessionLocator.open_kfid || query.open_kfid)
     )
       return;
@@ -903,6 +1227,26 @@ export default function CSSidebar() {
       setNotice(sanitizeToolbarNotice(error));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleRefreshConversation = async () => {
+    try {
+      setIsRefreshingConversation(true);
+      const ok = await loadBootstrap({
+        preserveNotice: true,
+        silent: true,
+        preserveConversation: false,
+      });
+      if (ok) {
+        pushConversationNotice("已刷新聊天记录");
+      } else {
+        pushConversationNotice("聊天记录刷新失败，请稍后再试");
+      }
+    } catch {
+      pushConversationNotice("聊天记录刷新失败，请稍后再试");
+    } finally {
+      setIsRefreshingConversation(false);
     }
   };
 
@@ -1078,382 +1422,603 @@ export default function CSSidebar() {
             </Card>
           ) : (
             <>
-              <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
-                <div className="mb-3 flex items-start gap-2">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                    <Lightbulb className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="mb-1 flex items-center gap-2">
-                      <div className={sidebarSectionLabel}>会话摘要</div>
-                      <Badge
-                        variant={summaryStatus === "ready" ? "success" : "secondary"}
-                        className="px-2 py-0.5 text-[10px]"
-                      >
-                        {summaryStatus}
-                      </Badge>
+              {analysisPanelVisible ? (
+                <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
+                  <div className="mb-3 flex items-start gap-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                      <Lightbulb className="h-4 w-4" />
                     </div>
-                    <div className="space-y-2">
-                      <p className="wecom-toolbar-summary-text m-0 text-slate-800">
-                        {(summary?.headline || "正在整理当前会话分析...").trim()}
-                      </p>
-                      {summaryIsAnalyzing ? (
-                        <div className="flex items-center gap-2 text-[11px] text-blue-600">
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1">
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center gap-2">
+                        <div className={sidebarSectionLabel}>会话摘要</div>
+                        <Badge
+                          variant={summaryStatusCopy.badgeVariant}
+                          className="px-2 py-0.5 text-[10px]"
+                        >
+                          {summaryStatusCopy.badgeText}
+                        </Badge>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="wecom-toolbar-summary-text m-0 text-slate-800">
+                          {(summary?.headline || "正在整理当前会话分析...").trim()}
+                        </p>
+                        <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
+                          {summaryStatusCopy.helperText}
+                        </div>
+                        {summaryIsAnalyzing ? (
+                          <div className="flex items-center gap-2 text-[11px] text-blue-600">
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1">
+                              <span className="relative flex h-2.5 w-2.5">
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
+                                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
+                              </span>
+                              {summaryStatus === "queued"
+                                ? "正在等待回复窗口收齐后分析"
+                                : "AI 正在更新本轮会话分析"}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 rounded-2xl bg-slate-50/90 p-3">
+                    <div className="flex flex-wrap gap-2">
+                      {summary?.journey_stage ? (
+                        <Badge
+                          variant="secondary"
+                          className="border-none bg-white text-[10px] text-slate-600"
+                        >
+                          阶段：{summary.journey_stage}
+                        </Badge>
+                      ) : null}
+                      {summary?.relationship_stage ? (
+                        <Badge
+                          variant="secondary"
+                          className="border-none bg-white text-[10px] text-slate-600"
+                        >
+                          关系：{summary.relationship_stage}
+                        </Badge>
+                      ) : null}
+                      {summary?.priority ? (
+                        <Badge
+                          variant="secondary"
+                          className="border-none bg-white text-[10px] text-slate-600"
+                        >
+                          优先级：{summary.priority}
+                        </Badge>
+                      ) : null}
+                      {summary?.opportunity_level ? (
+                        <Badge
+                          variant="secondary"
+                          className="border-none bg-white text-[10px] text-slate-600"
+                        >
+                          机会：{summary.opportunity_level}
+                        </Badge>
+                      ) : null}
+                    </div>
+
+                    {summary?.customer_goal ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-slate-500">
+                          客户当前诉求
+                        </div>
+                        <div className="text-[12px] leading-6 text-slate-700">
+                          {summary.customer_goal.trim()}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {summaryBlockingIssues.length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-slate-500">
+                          主要成交阻力
+                        </div>
+                        <div className="space-y-1">
+                          {summaryBlockingIssues.map((item, idx) => (
+                            <div
+                              key={`${item}-${idx}`}
+                              className="flex items-start gap-2 text-[12px] text-slate-600"
+                            >
+                              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {summaryNextBestActions.length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-slate-500">
+                          建议服务动作
+                        </div>
+                        <div className="space-y-1">
+                          {summaryNextBestActions.map((item, idx) => (
+                            <div
+                              key={`${item}-${idx}`}
+                              className="flex items-start gap-2 text-[12px] text-slate-600"
+                            >
+                              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {summaryDecisionSignals.length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-slate-500">
+                          关键决策信号
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {summaryDecisionSignals.map((item) => (
+                            <Badge
+                              key={item}
+                              variant="secondary"
+                              className="border-none bg-white text-[10px] text-slate-600"
+                            >
+                              {item}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {summaryReplyGuardrails.length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-slate-500">
+                          沟通约束与风险提示
+                        </div>
+                        <div className="space-y-1">
+                          {summaryReplyGuardrails.map((item, idx) => (
+                            <div
+                              key={`${item}-${idx}`}
+                              className="flex items-start gap-2 text-[12px] text-slate-600"
+                            >
+                              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {summaryProfileFacts.length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-slate-500">
+                          长期关系资产
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {summaryProfileFacts.map((item) => (
+                            <Badge
+                              key={item}
+                              variant="secondary"
+                              className="border-none bg-white text-[10px] text-slate-600"
+                            >
+                              {item}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {summaryBlockingIssues.length === 0 &&
+                    summaryNextBestActions.length === 0 &&
+                    summaryDecisionSignals.length === 0 &&
+                    summaryReplyGuardrails.length === 0 &&
+                    summaryProfileFacts.length === 0 &&
+                    !summary?.customer_goal ? (
+                      <div className="rounded-2xl border border-dashed border-blue-100 bg-white px-3 py-3 text-[12px] text-slate-500">
+                        {summaryIsAnalyzing ? (
+                          <div className="space-y-2">
+                            <div className="h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
+                            <div className="h-2.5 w-full animate-pulse rounded-full bg-slate-200" />
+                            <div className="h-2.5 w-5/6 animate-pulse rounded-full bg-slate-200" />
+                          </div>
+                        ) : (
+                          "当前结构化分析仍在整理中，稍后会补齐更完整的客户判断。"
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </Card>
+              ) : null}
+
+              {suggestionPanelVisible ? (
+                <>
+                  <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
+                          <Sparkles className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <div className={sidebarSectionLabel}>AI 建议回复</div>
+                          <div className={`${sidebarMeta} mt-0.5`}>
+                            {suggestionIsAnalyzing
+                              ? suggestionStatus === "queued"
+                                ? "已收到新消息，正在等待回复窗口收齐"
+                                : "AI 正在基于本轮新消息生成建议回复"
+                              : "支持单句直发，也支持分步逐句填入"}
+                          </div>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+                        disabled={
+                          isRegenerating ||
+                          isSubmitting ||
+                          !bootstrap?.capabilities?.regenerate
+                        }
+                        onClick={() => void handleRegenerate()}
+                      >
+                        <RefreshCcw
+                          className={`mr-1 h-3.5 w-3.5 ${isRegenerating ? "animate-spin" : ""}`}
+                        />
+                        换一批
+                      </Button>
+                    </div>
+
+                    {suggestionNotice ? (
+                      <div className="mb-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] text-blue-700 transition-all duration-200">
+                        {suggestionNotice}
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50/45">
+                      {suggestionIsAnalyzing ? (
+                        <div className="border-b border-slate-100 px-4 py-3">
+                          <div className="flex items-center gap-2 text-[11px] text-blue-600">
                             <span className="relative flex h-2.5 w-2.5">
                               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
                               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
                             </span>
-                            {summaryStatus === "queued"
-                              ? "正在等待回复窗口收齐后分析"
-                              : "AI 正在更新本轮会话分析"}
-                          </span>
+                            <span>
+                              {suggestionStatus === "queued"
+                                ? "新消息已进入回复窗口，窗口收齐后会统一生成建议"
+                                : "AI 正在重新组织本轮建议回复"}
+                            </span>
+                          </div>
                         </div>
                       ) : null}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3 rounded-2xl bg-slate-50/90 p-3">
-                  <div className="flex flex-wrap gap-2">
-                    {summary?.journey_stage ? (
-                      <Badge
-                        variant="secondary"
-                        className="border-none bg-white text-[10px] text-slate-600"
-                      >
-                        阶段：{summary.journey_stage}
-                      </Badge>
-                    ) : null}
-                    {summary?.relationship_stage ? (
-                      <Badge
-                        variant="secondary"
-                        className="border-none bg-white text-[10px] text-slate-600"
-                      >
-                        关系：{summary.relationship_stage}
-                      </Badge>
-                    ) : null}
-                    {summary?.priority ? (
-                      <Badge
-                        variant="secondary"
-                        className="border-none bg-white text-[10px] text-slate-600"
-                      >
-                        优先级：{summary.priority}
-                      </Badge>
-                    ) : null}
-                    {summary?.opportunity_level ? (
-                      <Badge
-                        variant="secondary"
-                        className="border-none bg-white text-[10px] text-slate-600"
-                      >
-                        机会：{summary.opportunity_level}
-                      </Badge>
-                    ) : null}
-                  </div>
-
-                  {summary?.customer_goal ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        当前目标
-                      </div>
-                      <div className="text-[12px] leading-6 text-slate-700">
-                        {summary.customer_goal.trim()}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {summaryBlockingIssues.length > 0 ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        阻塞点
-                      </div>
-                      <div className="space-y-1">
-                        {summaryBlockingIssues.map((item, idx) => (
-                          <div
-                            key={`${item}-${idx}`}
-                            className="flex items-start gap-2 text-[12px] text-slate-600"
-                          >
-                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                            <span>{item}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {summaryNextBestActions.length > 0 ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        下一步建议
-                      </div>
-                      <div className="space-y-1">
-                        {summaryNextBestActions.map((item, idx) => (
-                          <div
-                            key={`${item}-${idx}`}
-                            className="flex items-start gap-2 text-[12px] text-slate-600"
-                          >
-                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                            <span>{item}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {summaryDecisionSignals.length > 0 ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        成交/决策信号
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {summaryDecisionSignals.map((item) => (
-                          <Badge
-                            key={item}
-                            variant="secondary"
-                            className="border-none bg-white text-[10px] text-slate-600"
-                          >
-                            {item}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {summaryReplyGuardrails.length > 0 ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        回复注意
-                      </div>
-                      <div className="space-y-1">
-                        {summaryReplyGuardrails.map((item, idx) => (
-                          <div
-                            key={`${item}-${idx}`}
-                            className="flex items-start gap-2 text-[12px] text-slate-600"
-                          >
-                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                            <span>{item}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {summaryProfileFacts.length > 0 ? (
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-slate-500">
-                        长期画像
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {summaryProfileFacts.map((item) => (
-                          <Badge
-                            key={item}
-                            variant="secondary"
-                            className="border-none bg-white text-[10px] text-slate-600"
-                          >
-                            {item}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  {summaryBlockingIssues.length === 0 &&
-                  summaryNextBestActions.length === 0 &&
-                  summaryDecisionSignals.length === 0 &&
-                  summaryReplyGuardrails.length === 0 &&
-                  summaryProfileFacts.length === 0 &&
-                  !summary?.customer_goal ? (
-                    <div className="rounded-2xl border border-dashed border-blue-100 bg-white px-3 py-3 text-[12px] text-slate-500">
-                      {summaryIsAnalyzing ? (
-                        <div className="space-y-2">
-                          <div className="h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
-                          <div className="h-2.5 w-full animate-pulse rounded-full bg-slate-200" />
-                          <div className="h-2.5 w-5/6 animate-pulse rounded-full bg-slate-200" />
+                      {suggestions.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[12px] text-slate-500">
+                          {isLoadingSuggestions || suggestionIsAnalyzing ? (
+                            <div className="space-y-3">
+                              <div className="mx-auto h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
+                              <div className="mx-auto h-2.5 w-11/12 animate-pulse rounded-full bg-slate-200" />
+                              <div className="mx-auto h-2.5 w-4/5 animate-pulse rounded-full bg-slate-200" />
+                            </div>
+                          ) : bootstrap?.suggestions?.failure_message ? (
+                            bootstrap.suggestions.failure_message.trim()
+                          ) : (
+                            "暂未生成建议回复，可点击换一批重试"
+                          )}
                         </div>
                       ) : (
-                        "当前结构化分析仍在整理中，稍后会补齐更完整的客户判断。"
+                        suggestions.map((item, idx) => {
+                          const currentStep = Math.min(
+                            threadSteps[item.id] || 0,
+                            item.sentences.length,
+                          );
+                          const isFinished =
+                            currentStep >= item.sentences.length;
+                          const primaryLabel = isFinished
+                            ? "已完成本组回复"
+                            : !item.hasFollowups
+                              ? "填入回复"
+                              : currentStep === 0
+                                ? "填入首句"
+                                : item.nextStepLabel;
+
+                          return (
+                            <div
+                              key={item.id}
+                              className={`wecom-toolbar-list-item wecom-toolbar-enter ${
+                                item.displayMode === "threaded"
+                                  ? "wecom-toolbar-thread-row"
+                                  : ""
+                              } ${
+                                idx < suggestions.length - 1
+                                  ? "border-b border-slate-100"
+                                  : ""
+                              } ${suggestionIsAnalyzing ? "opacity-75" : ""}`}
+                              style={{ animationDelay: `${idx * 70}ms` }}
+                            >
+                              <div className="mb-1.5 flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <Badge
+                                    variant={
+                                      item.hasFollowups ? "default" : "secondary"
+                                    }
+                                    className="shrink-0 px-2 py-0.5 text-[10px]"
+                                  >
+                                    {item.hasFollowups ? "分步发送" : "直接回复"}
+                                  </Badge>
+                                  <span className="text-[10px] text-slate-400">
+                                    已填{" "}
+                                    {Math.min(
+                                      currentStep,
+                                      item.sentences.length,
+                                    )}
+                                    /{item.sentences.length}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="mb-2 space-y-1.5 rounded-xl bg-white/90 px-2.5 py-2.5 shadow-[inset_0_0_0_1px_rgba(226,232,240,0.9)]">
+                                {item.sentences.map((sentence, sentenceIdx) => {
+                                  const isSent = sentenceIdx < currentStep;
+                                  const isCurrent =
+                                    !isFinished &&
+                                    sentenceIdx === currentStep;
+                                  return (
+                                    <div
+                                      key={`${item.id}-sentence-${sentenceIdx}`}
+                                      className="flex items-start gap-2"
+                                    >
+                                      <div className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center">
+                                        {isSent ? (
+                                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                                        ) : (
+                                          <span
+                                            className={`block h-1.5 w-1.5 rounded-full ${
+                                              isCurrent
+                                                ? "bg-blue-500"
+                                                : "bg-slate-300"
+                                            }`}
+                                          />
+                                        )}
+                                      </div>
+                                      <div
+                                        className={`min-w-0 text-[11.5px] leading-5 transition-colors duration-200 ${
+                                          isSent
+                                            ? "text-slate-500"
+                                            : isCurrent
+                                              ? "font-medium text-slate-800"
+                                              : "text-slate-400"
+                                        }`}
+                                      >
+                                        {sentence}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {isFinished ? (
+                                <div className="mb-2 text-[11px] text-emerald-700">
+                                  这组建议已填入完成。
+                                </div>
+                              ) : null}
+
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 rounded-full px-2.5 text-[10.5px]"
+                                  disabled={!bootstrap?.capabilities?.copy_reply}
+                                  onClick={() => void handleCopySuggestion(item)}
+                                >
+                                  <Copy className="mr-1 h-3.5 w-3.5" />
+                                  {item.hasFollowups && currentStep > 0
+                                    ? "复制当前句"
+                                    : "复制"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className={`h-7 rounded-full px-2.5 text-[10.5px] ${
+                                    isFinished
+                                      ? "bg-slate-100 text-slate-400"
+                                      : "bg-blue-600 hover:bg-blue-700"
+                                  }`}
+                                  disabled={
+                                    isSubmitting ||
+                                    isFinished ||
+                                    !bootstrap?.capabilities?.fill_reply
+                                  }
+                                  onClick={() => void handleFillSuggestion(item)}
+                                >
+                                  <Send className="mr-1 h-3.5 w-3.5" />
+                                  {primaryLabel}
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
-                  ) : null}
-                </div>
-              </Card>
-
-              <Card className="wecom-toolbar-panel rounded-2xl border-slate-200 bg-white/95">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
-                      <Sparkles className="h-4 w-4" />
+                  </Card>
+                </>
+              ) : (
+                <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
+                  <div className="flex items-start gap-3 rounded-2xl bg-slate-50/90 p-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
+                      <Lightbulb className="h-4 w-4" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <div className={sidebarSectionLabel}>AI 建议回复</div>
-                      <div className={`${sidebarMeta} mt-0.5`}>
-                        {suggestionIsAnalyzing
-                          ? suggestionStatus === "queued"
-                            ? "已收到新消息，正在等待回复窗口收齐"
-                            : "AI 正在基于本轮新消息生成建议回复"
-                          : "支持单句直发，也支持分步逐句填入"}
-                      </div>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {humanOnlyPrompt}
+                      </p>
                     </div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
-                    disabled={isRegenerating || isSubmitting}
-                    onClick={() => void handleRegenerate()}
-                  >
-                    <RefreshCcw
-                      className={`mr-1 h-3.5 w-3.5 ${isRegenerating ? "animate-spin" : ""}`}
-                    />
-                    换一批
-                  </Button>
-                </div>
+                </Card>
+              )}
 
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/45">
-                  {suggestionIsAnalyzing ? (
-                    <div className="border-b border-slate-100 px-4 py-3">
-                      <div className="flex items-center gap-2 text-[11px] text-blue-600">
-                        <span className="relative flex h-2.5 w-2.5">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
-                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
-                        </span>
-                        <span>
-                          {suggestionStatus === "queued"
-                            ? "新消息已进入回复窗口，窗口收齐后会统一生成建议"
-                            : "AI 正在重新组织本轮建议回复"}
-                        </span>
+              {chatPanelVisible ? (
+                <Card className="wecom-toolbar-panel rounded-2xl border-slate-200 bg-white/95">
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-slate-100 text-slate-600">
+                        <MessageSquareText className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className={sidebarSectionLabel}>会话聊天内容</div>
+                        <div className={`${sidebarMeta} mt-0.5`}>
+                          展示最近 30 条消息，此区域不跟随实时消息流自动刷新
+                        </div>
                       </div>
                     </div>
+                    {conversationRefreshedAt ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+                          disabled={isRefreshingConversation}
+                          onClick={() => void handleRefreshConversation()}
+                        >
+                          <RefreshCcw
+                            className={`mr-1 h-3.5 w-3.5 ${isRefreshingConversation ? "animate-spin" : ""}`}
+                          />
+                          刷新聊天
+                        </Button>
+                        <span className="text-[10px] text-slate-400">
+                          刷新于 {conversationRefreshedAt}
+                        </span>
+                      </div>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+                        disabled={isRefreshingConversation}
+                        onClick={() => void handleRefreshConversation()}
+                      >
+                        <RefreshCcw
+                          className={`mr-1 h-3.5 w-3.5 ${isRefreshingConversation ? "animate-spin" : ""}`}
+                        />
+                        刷新聊天
+                      </Button>
+                    )}
+                  </div>
+
+                  {conversationNotice ? (
+                    <div className="mb-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] text-blue-700 transition-all duration-200">
+                      {conversationNotice}
+                    </div>
                   ) : null}
-                  {suggestions.length === 0 ? (
+
+                  {conversationMessages.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[12px] text-slate-500">
-                      {isLoadingSuggestions || suggestionIsAnalyzing ? (
-                        <div className="space-y-3">
-                          <div className="mx-auto h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
-                          <div className="mx-auto h-2.5 w-11/12 animate-pulse rounded-full bg-slate-200" />
-                          <div className="mx-auto h-2.5 w-4/5 animate-pulse rounded-full bg-slate-200" />
-                        </div>
-                      ) : bootstrap?.suggestions?.failure_message ? (
-                        bootstrap.suggestions.failure_message.trim()
-                      ) : (
-                        "暂未生成建议回复，可点击换一批重试"
-                      )}
+                      当前会话暂时没有可展示的聊天记录。
                     </div>
                   ) : (
-                    suggestions.map((item, idx) => {
-                      const currentStep = Math.min(
-                        threadSteps[item.id] || 0,
-                        item.sentences.length,
-                      );
-                      const isFinished = currentStep >= item.sentences.length;
-                      const primaryLabel = isFinished
-                        ? "已完成本组回复"
-                        : !item.hasFollowups
-                          ? "填入回复"
-                          : currentStep === 0
-                          ? "填入首句"
-                          : item.nextStepLabel;
+                    <div
+                      ref={conversationScrollRef}
+                      className="max-h-[420px] space-y-3 overflow-y-auto pr-1"
+                    >
+                      {conversationMessages.map((message, idx) => {
+                        const role = resolveToolbarMessageRole(message);
+                        const isRight =
+                          role === "assistant" || role === "staff";
+                        const timeText = formatToolbarMessageTime(
+                          message?.timestamp,
+                        );
+                        const content = (message?.content || "").trim();
+                        const staffDisplayUserID = (
+                          message?.sender_display_userid || ""
+                        ).trim();
+                        const staffFallback = (
+                          message?.sender_display_fallback ||
+                          message?.sender_userid ||
+                          "人工客服"
+                        ).trim();
 
-                      return (
-                        <div
-                          key={item.id}
-                          className={`wecom-toolbar-list-item wecom-toolbar-enter ${
-                            item.displayMode === "threaded"
-                              ? "wecom-toolbar-thread-row"
-                              : ""
-                          } ${idx < suggestions.length - 1 ? "border-b border-slate-100" : ""} ${
-                            suggestionIsAnalyzing ? "opacity-75" : ""
-                          }`}
-                          style={{ animationDelay: `${idx * 70}ms` }}
-                        >
-                          <div className="mb-1.5 flex items-start justify-between gap-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <Badge
-                                variant={
-                                  item.hasFollowups ? "default" : "secondary"
-                                }
-                                className="shrink-0 px-2 py-0.5 text-[10px]"
+                        return (
+                          <div
+                            key={`${message?.id || "msg"}-${idx}`}
+                            className={`flex gap-2 ${isRight ? "justify-end" : "justify-start"}`}
+                          >
+                            {!isRight ? (
+                              <div
+                                className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl ${
+                                  role === "system"
+                                    ? "bg-slate-100 text-slate-500"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
                               >
-                                {item.hasFollowups ? "分步发送" : "直接回复"}
-                              </Badge>
-                              <span className="text-[10px] text-slate-400">
-                                已填 {Math.min(currentStep, item.sentences.length)}/
-                                {item.sentences.length}
-                              </span>
-                            </div>
-                          </div>
+                                <UserRound className="h-4 w-4" />
+                              </div>
+                            ) : null}
 
-                          <div className="mb-2 space-y-1.5 rounded-xl bg-white/90 px-2.5 py-2.5 shadow-[inset_0_0_0_1px_rgba(226,232,240,0.9)]">
-                            {item.sentences.map((sentence, sentenceIdx) => {
-                              const isSent = sentenceIdx < currentStep;
-                              const isCurrent =
-                                !isFinished && sentenceIdx === currentStep;
-                              return (
-                                <div
-                                  key={`${item.id}-sentence-${sentenceIdx}`}
-                                  className="flex items-start gap-2"
-                                >
-                                  <div className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center">
-                                    {isSent ? (
-                                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                                    ) : (
-                                      <span
-                                        className={`block h-1.5 w-1.5 rounded-full ${
-                                          isCurrent
-                                            ? "bg-blue-500"
-                                            : "bg-slate-300"
-                                        }`}
-                                      />
-                                    )}
-                                  </div>
-                                  <div
-                                    className={`min-w-0 text-[11.5px] leading-5 transition-colors duration-200 ${
-                                      isSent
-                                        ? "text-slate-500"
-                                        : isCurrent
-                                          ? "font-medium text-slate-800"
-                                          : "text-slate-400"
-                                    }`}
-                                  >
-                                    {sentence}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {isFinished ? (
-                            <div className="mb-2 text-[11px] text-emerald-700">
-                              这组建议已填入完成。
-                            </div>
-                          ) : null}
-
-                          <div className="flex items-center justify-end gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 rounded-full px-2.5 text-[10.5px]"
-                              onClick={() => void handleCopySuggestion(item)}
+                            <div
+                              className={`max-w-[85%] ${
+                                isRight ? "items-end" : "items-start"
+                              } flex flex-col gap-1`}
                             >
-                              <Copy className="mr-1 h-3.5 w-3.5" />
-                              {item.hasFollowups && currentStep > 0
-                                ? "复制当前句"
-                                : "复制"}
-                            </Button>
-                            <Button
-                              size="sm"
-                              className={`h-7 rounded-full px-2.5 text-[10.5px] ${isFinished ? "bg-slate-100 text-slate-400" : "bg-blue-600 hover:bg-blue-700"}`}
-                              disabled={isSubmitting || isFinished}
-                              onClick={() => void handleFillSuggestion(item)}
-                            >
-                              <Send className="mr-1 h-3.5 w-3.5" />
-                              {primaryLabel}
-                            </Button>
+                              <div
+                                className={`flex flex-wrap items-center gap-1.5 text-[11px] ${
+                                  isRight ? "justify-end text-slate-500" : "text-slate-500"
+                                }`}
+                              >
+                                {role === "assistant" ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-600">
+                                    <Bot className="h-3.5 w-3.5" />
+                                    AI 回复
+                                  </span>
+                                ) : role === "staff" ? (
+                                  staffDisplayUserID ? (
+                                    <WecomOpenDataName
+                                      userid={staffDisplayUserID}
+                                      corpId=""
+                                      fallback={staffFallback}
+                                      className="font-medium text-slate-600"
+                                    />
+                                  ) : (
+                                    <span className="font-medium text-slate-600">
+                                      {staffFallback}
+                                    </span>
+                                  )
+                                ) : role === "system" ? (
+                                  <span>系统事件</span>
+                                ) : (
+                                  <span>客户</span>
+                                )}
+                                {timeText ? <span>{timeText}</span> : null}
+                              </div>
+
+                              <div
+                                className={`rounded-2xl px-3 py-2 text-[12px] leading-6 shadow-[0_8px_24px_rgba(15,23,42,0.05)] ${
+                                  role === "assistant"
+                                    ? "bg-violet-50 text-slate-800"
+                                    : role === "staff"
+                                      ? "bg-blue-50 text-slate-800"
+                                      : role === "system"
+                                        ? "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
+                                        : "bg-slate-100 text-slate-800"
+                                }`}
+                              >
+                                {content || "暂不支持展示该消息内容"}
+                              </div>
+                            </div>
+
+                            {isRight ? (
+                              <div
+                                className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl ${
+                                  role === "assistant"
+                                    ? "bg-violet-50 text-violet-600"
+                                    : "bg-blue-50 text-blue-600"
+                                }`}
+                              >
+                                {role === "assistant" ? (
+                                  <Bot className="h-4 w-4" />
+                                ) : (
+                                  <UserRound className="h-4 w-4" />
+                                )}
+                              </div>
+                            ) : null}
                           </div>
-                        </div>
-                      );
-                    })
+                        );
+                      })}
+                    </div>
                   )}
-                </div>
-              </Card>
+                </Card>
+              ) : null}
             </>
           )}
         </div>

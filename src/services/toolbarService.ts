@@ -33,6 +33,8 @@ export type KFToolbarBootstrap = {
   external_userid?: string;
   header?: {
     session_status?: string;
+    session_status_id?: number;
+    session_status_code?: string;
     contact_name?: string;
     risk_tags?: string[];
     last_active?: string;
@@ -53,11 +55,33 @@ export type KFToolbarBootstrap = {
     profile_facts?: string[];
   };
   suggestions?: KFToolbarSuggestionBatch;
+  conversation?: {
+    messages?: Array<{
+      id?: string;
+      sender?: string;
+      sender_userid?: string;
+      sender_display_userid?: string;
+      sender_display_fallback?: string;
+      content?: string;
+      timestamp?: string;
+      type?: string;
+      status?: string;
+      delivery_status?: string;
+    }>;
+    next_cursor?: string;
+    next_token?: string;
+    refreshed_at?: string;
+  };
   capabilities?: {
     fill_reply?: boolean;
     copy_reply?: boolean;
     upgrade_contact?: boolean;
     regenerate?: boolean;
+    show_analysis_panel?: boolean;
+    show_suggestion_panel?: boolean;
+    show_chat_panel?: boolean;
+    auto_refresh_analysis?: boolean;
+    auto_refresh_suggestions?: boolean;
   };
   selection?: {
     required?: boolean;
