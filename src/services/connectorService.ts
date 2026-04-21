@@ -72,7 +72,7 @@ export async function getMuYuAIConnectorStatus(): Promise<MuYuAIConnectorStatus>
   const payload = await requestJSON<APIEnvelope<MuYuAIConnectorStatus>>("/api/v1/connectors/muyuai/status")
   return payload.data || {
     key: "muyuai",
-    name: "MuYuAI",
+    name: "母语AI",
     status: "unavailable",
     connected: false,
     corp_id: "",

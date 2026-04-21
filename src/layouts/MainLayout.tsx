@@ -38,10 +38,10 @@ export default function MainLayout() {
       <div className="flex w-64 flex-col border-r border-gray-200 bg-white">
         <div className="flex h-16 shrink-0 items-center px-6 border-b border-gray-100">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-blue-600 text-white font-bold">
-              C
+            <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white ring-1 ring-slate-200">
+              <img src="/favicon-32.png?v=callfay-2" alt="CallFay" className="h-full w-full object-cover" />
             </div>
-            <span className="text-lg font-semibold text-gray-900">双域沟通平台</span>
+            <span className="text-lg font-semibold text-gray-900">CallFay 微信平台</span>
           </div>
         </div>
         <nav className="flex-1 space-y-1 p-4">
