@@ -17,6 +17,13 @@ import {
   getOrganizationSettingsView,
   type OrganizationSettingsView,
 } from "@/services/organizationSettingsService"
+import {
+  getMuYuAIConnectorStatus,
+  refreshMuYuAIConnection,
+  startMuYuAIOAuth,
+  testMuYuAIConnection,
+  type MuYuAIConnectorStatus,
+} from "@/services/connectorService"
 import { checkMainWebviewJSSDKRuntime } from "@/services/jssdkService"
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 
@@ -24,6 +31,16 @@ const ROLE_OPTIONS = [
   { key: "super_admin", label: "超级管理员" },
   { key: "admin", label: "销售主管" },
   { key: "staff", label: "一线销售" },
+]
+
+const CONNECTOR_CATALOG = [
+  {
+    key: "muyuai",
+    name: "MuYuAI",
+    title: "MuYuAI RPA 与业务数据连接器",
+    description: "用于后续对接 RPA 客户端、店铺、商品、客户与自动化执行回执。",
+    capabilities: ["OAuth 授权", "RPA ACK 验签", "客户/店铺/商品数据预留"],
+  },
 ]
 
 const PERMISSION_LABELS: Record<string, string> = {
@@ -162,6 +179,12 @@ export default function OrganizationSettings() {
   const [isRunningCheck, setIsRunningCheck] = useState(false)
   const [notice, setNotice] = useState("")
   const [memberRoleDraft, setMemberRoleDraft] = useState<Record<string, string>>({})
+  const [connectorStatuses, setConnectorStatuses] = useState<Record<string, MuYuAIConnectorStatus | null>>({})
+  const [isLoadingConnectors, setIsLoadingConnectors] = useState(false)
+  const [connectorNotice, setConnectorNotice] = useState("")
+  const [testingConnectorKey, setTestingConnectorKey] = useState("")
+  const [refreshingConnectorKey, setRefreshingConnectorKey] = useState("")
+  const [connectingConnectorKey, setConnectingConnectorKey] = useState("")
 
   const [isRoleEditorOpen, setIsRoleEditorOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<NonNullable<OrganizationSettingsView["roles"]>[number] | null>(null)
@@ -206,8 +229,31 @@ export default function OrganizationSettings() {
     }
   }
 
+  const loadConnectors = async () => {
+    try {
+      setIsLoadingConnectors(true)
+      const muyuai = await getMuYuAIConnectorStatus()
+      setConnectorStatuses((prev) => ({ ...prev, muyuai }))
+    } catch (error) {
+      setConnectorNotice(normalizeErrorMessage(error))
+      setConnectorStatuses((prev) => ({
+        ...prev,
+        muyuai: {
+          key: "muyuai",
+          name: "MuYuAI",
+          status: "unavailable",
+          connected: false,
+          corp_id: "",
+        },
+      }))
+    } finally {
+      setIsLoadingConnectors(false)
+    }
+  }
+
   useEffect(() => {
     void loadView()
+    void loadConnectors()
   }, [])
 
   const runIntegrationCheck = async () => {
@@ -269,6 +315,64 @@ export default function OrganizationSettings() {
       await loadView()
     } catch (error) {
       setNotice(normalizeErrorMessage(error))
+    }
+  }
+
+  const startConnectorOAuth = async (key: string) => {
+    if (key !== "muyuai") {
+      setConnectorNotice("该连接器暂未开放授权入口")
+      return
+    }
+    try {
+      setConnectingConnectorKey(key)
+      const returnURL = new URL(window.location.href)
+      returnURL.searchParams.set("tab", "connectors")
+      const start = await startMuYuAIOAuth(returnURL.toString())
+      const authURL = (start.AuthorizeURL || start.authorize_url || start.authorization_url || "").trim()
+      if (!authURL) {
+        setConnectorNotice("授权地址生成失败，请稍后重试")
+        return
+      }
+      window.location.assign(authURL)
+    } catch (error) {
+      setConnectorNotice(normalizeErrorMessage(error))
+    } finally {
+      setConnectingConnectorKey("")
+    }
+  }
+
+  const refreshConnector = async (key: string) => {
+    if (key !== "muyuai") {
+      setConnectorNotice("该连接器暂未开放刷新能力")
+      return
+    }
+    try {
+      setRefreshingConnectorKey(key)
+      await refreshMuYuAIConnection()
+      setConnectorNotice("MuYuAI 连接令牌已刷新，回调密钥保持不变")
+      await loadConnectors()
+    } catch (error) {
+      setConnectorNotice(normalizeErrorMessage(error))
+    } finally {
+      setRefreshingConnectorKey("")
+    }
+  }
+
+  const testConnector = async (key: string) => {
+    if (key !== "muyuai") {
+      setConnectorNotice("该连接器暂未开放测试能力")
+      return
+    }
+    try {
+      setTestingConnectorKey(key)
+      const result = await testMuYuAIConnection()
+      const message = (result.Message || result.message || "").trim()
+      setConnectorNotice(message || "MuYuAI 认证测试通过")
+      await loadConnectors()
+    } catch (error) {
+      setConnectorNotice(normalizeErrorMessage(error))
+    } finally {
+      setTestingConnectorKey("")
     }
   }
 
@@ -467,6 +571,31 @@ export default function OrganizationSettings() {
       },
     ]
   })()
+  const initialSettingsTab = (() => {
+    if (typeof window === "undefined") return "wecom"
+    const tab = new URLSearchParams(window.location.search).get("tab")
+    if (tab === "connectors") return "connectors"
+    if (new URLSearchParams(window.location.search).get("muyuai_connected") === "1") return "connectors"
+    return "wecom"
+  })()
+  const readConnectionText = (connection: Record<string, unknown> | undefined, ...keys: string[]): string => {
+    if (!connection) return "-"
+    for (const key of keys) {
+      const value = connection[key]
+      if (typeof value === "string" && value.trim() !== "") return value.trim()
+    }
+    return "-"
+  }
+  const connectorStatusBadge = (status: string) => {
+    switch ((status || "").trim()) {
+      case "connected":
+        return { label: "已连接", className: "bg-green-50 text-green-700 border-green-200" }
+      case "not_connected":
+        return { label: "未连接", className: "bg-gray-100 text-gray-600 border-gray-200" }
+      default:
+        return { label: "不可用", className: "bg-orange-50 text-orange-700 border-orange-200" }
+    }
+  }
   const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
 
   return (
@@ -476,7 +605,7 @@ export default function OrganizationSettings() {
         <p className="text-sm text-gray-500 mt-1">查看企业微信集成状态，并管理平台内部组织权限与调试配置</p>
       </div>
 
-      <Tabs defaultValue="wecom" className="flex flex-col">
+      <Tabs defaultValue={initialSettingsTab} className="flex flex-col">
         <div className="px-6 border-b border-gray-100 bg-white">
           <TabsList className="bg-transparent border-none gap-8 h-14">
             <TabsTrigger value="wecom" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
@@ -490,6 +619,9 @@ export default function OrganizationSettings() {
             </TabsTrigger>
             <TabsTrigger value="toolbar" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
               侧边栏工具配置
+            </TabsTrigger>
+            <TabsTrigger value="connectors" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
+              连接器
             </TabsTrigger>
             <TabsTrigger value="debug" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
               调试与开发开关
@@ -1055,6 +1187,104 @@ export default function OrganizationSettings() {
                   </div>
                 </CardContent>
               </Card>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="connectors" className="mt-0">
+            <div className="max-w-6xl space-y-8">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 tracking-tight">外部连接器</h3>
+                  <p className="text-sm text-gray-500">按企业独立授权，每个 corp 拥有自己的连接、token 与回调验签密钥。</p>
+                </div>
+                <Button variant="outline" className="bg-white font-semibold" onClick={() => void loadConnectors()} disabled={isLoadingConnectors}>
+                  {isLoadingConnectors ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  刷新连接状态
+                </Button>
+              </div>
+
+              {connectorNotice ? (
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700 transition-all">
+                  {connectorNotice}
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                {CONNECTOR_CATALOG.map((item) => {
+                  const status = connectorStatuses[item.key]
+                  const badge = connectorStatusBadge(status?.status || "unavailable")
+                  const connection = (status?.connection || {}) as Record<string, unknown>
+                  const connected = Boolean(status?.connected)
+                  return (
+                    <Card key={item.key} className="overflow-hidden border-gray-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg">
+                      <CardHeader className="relative p-6 pb-4">
+                        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-600 via-cyan-400 to-emerald-400" />
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-start gap-4">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 shadow-inner">
+                              <Globe className="h-6 w-6" />
+                            </div>
+                            <div>
+                              <CardTitle className="text-base font-bold text-gray-900">{item.title}</CardTitle>
+                              <p className="mt-1 text-xs leading-relaxed text-gray-500">{item.description}</p>
+                            </div>
+                          </div>
+                          <Badge className={`${badge.className} shrink-0 px-2.5 py-1 text-[10px] font-bold`}>
+                            {badge.label}
+                          </Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-5 p-6 pt-2">
+                        <div className="grid grid-cols-1 gap-3 rounded-2xl border border-gray-100 bg-gray-50/70 p-4 md:grid-cols-2">
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">企业 CorpID</div>
+                            <div className="mt-1 break-all font-mono text-xs font-semibold text-gray-800">{status?.corp_id || (integration?.corp_id || "-").trim() || "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">MuYuAI 租户</div>
+                            <div className="mt-1 break-all font-mono text-xs font-semibold text-gray-800">{readConnectionText(connection, "MuYuAITenantID", "muyuai_tenant_id")}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">授权账号</div>
+                            <div className="mt-1 break-all text-xs font-semibold text-gray-800">{readConnectionText(connection, "MuYuAIUserPhone", "muyuai_user_phone")}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Token 到期</div>
+                            <div className="mt-1 text-xs font-semibold text-gray-800">{formatDateTime(readConnectionText(connection, "TokenExpiresAt", "token_expires_at"))}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {item.capabilities.map((capability) => (
+                            <Badge key={capability} variant="secondary" className="border-none bg-blue-50 text-[10px] font-bold text-blue-700">
+                              {capability}
+                            </Badge>
+                          ))}
+                        </div>
+
+                        <div className="rounded-xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-[11px] leading-relaxed text-amber-800">
+                          OAuth client 由 MuYuAI 后台或 migration 配置；运行时只读，不会在授权请求中自动改 client_secret、redirect_uri 或 scope。
+                        </div>
+
+                        <div className="flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4">
+                          <Button variant="outline" size="sm" className="bg-white text-xs font-bold" onClick={() => void startConnectorOAuth(item.key)} disabled={connectingConnectorKey === item.key}>
+                            {connectingConnectorKey === item.key ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="mr-2 h-3.5 w-3.5" />}
+                            {connected ? "重新授权" : "连接"}
+                          </Button>
+                          <Button variant="outline" size="sm" className="bg-white text-xs font-bold" onClick={() => void refreshConnector(item.key)} disabled={!connected || refreshingConnectorKey === item.key}>
+                            {refreshingConnectorKey === item.key ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                            刷新令牌
+                          </Button>
+                          <Button size="sm" className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700" onClick={() => void testConnector(item.key)} disabled={!connected || testingConnectorKey === item.key}>
+                            {testingConnectorKey === item.key ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Shield className="mr-2 h-3.5 w-3.5" />}
+                            测试认证
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+              </div>
             </div>
           </TabsContent>
 
