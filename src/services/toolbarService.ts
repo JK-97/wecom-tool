@@ -40,6 +40,8 @@ export type KFToolbarBootstrap = {
   };
   summary?: {
     status?: string;
+    updated_at?: string;
+    generated_at?: string;
     text?: string;
     customer_intent?: string;
     customer_goal?: string;

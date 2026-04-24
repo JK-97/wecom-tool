@@ -610,6 +610,24 @@ function normalizeToolbarSummaryStatus(raw?: string): string {
   return value;
 }
 
+function toolbarSummaryGeneratedTimeValue(
+  summary?: KFToolbarBootstrap["summary"] | null,
+): number {
+  const raw = (summary?.generated_at || summary?.updated_at || "").trim();
+  if (!raw) return 0;
+  const value = Date.parse(raw);
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function toolbarSummaryWorkTimeValue(
+  summary?: KFToolbarBootstrap["summary"] | null,
+): number {
+  const raw = (summary?.updated_at || summary?.generated_at || "").trim();
+  if (!raw) return 0;
+  const value = Date.parse(raw);
+  return Number.isNaN(value) ? 0 : value;
+}
+
 function mergeToolbarSummary(
   prev?: KFToolbarBootstrap["summary"] | null,
   next?: KFToolbarBootstrap["summary"] | null,
@@ -618,6 +636,8 @@ function mergeToolbarSummary(
   if (!prev) return next;
   const prevStatus = normalizeToolbarSummaryStatus(prev.status);
   const nextStatus = normalizeToolbarSummaryStatus(next.status);
+  const prevWorkTime = toolbarSummaryWorkTimeValue(prev);
+  const nextGeneratedTime = toolbarSummaryGeneratedTimeValue(next);
   if (
     (prevStatus === "queued" || prevStatus === "running") &&
     nextStatus === "pending"
@@ -627,6 +647,14 @@ function mergeToolbarSummary(
       ...next,
       status: prev.status,
     };
+  }
+  if (
+    (prevStatus === "queued" || prevStatus === "running") &&
+    nextStatus === "ready" &&
+    prevWorkTime > 0 &&
+    (nextGeneratedTime <= 0 || nextGeneratedTime < prevWorkTime)
+  ) {
+    return prev;
   }
   return next;
 }
@@ -666,6 +694,14 @@ function mergeToolbarSuggestionBatch(
   const prevTime = toolbarBatchTimeValue(prev);
   const nextTime = toolbarBatchTimeValue(next);
 
+  if (
+    (prevStatus === "queued" || prevStatus === "running") &&
+    nextStatus === "ready" &&
+    prevTime > 0 &&
+    (nextTime <= 0 || nextTime < prevTime)
+  ) {
+    return prev;
+  }
   if (nextBatchID && nextBatchID !== prevBatchID) {
     return next;
   }
@@ -731,6 +767,28 @@ function shouldRefreshToolbarAnalysis(
       return false;
     return isToolbarAnalysisRealtimeEvent(realtimeEventType(event));
   });
+}
+
+function nextToolbarAnalysisRealtimeStatus(
+  payload: CommandCenterRealtimeEnvelope,
+  openKFID: string,
+  externalUserID: string,
+): string {
+  const matched = (payload.events || []).filter((event) =>
+    matchesToolbarRealtimeSession(event, openKFID, externalUserID),
+  );
+  const stateEvent = matched.find(
+    (event) => realtimeEventType(event) === "chat.session_analysis.state_changed",
+  );
+  const status = stateEvent ? readRealtimeEventString(stateEvent, "status") : "";
+  const normalized = normalizeToolbarSummaryStatus(status);
+  if (normalized === "queued" || normalized === "running") return normalized;
+  if (
+    matched.some((event) => realtimeEventType(event) === "chat.message.received")
+  ) {
+    return "queued";
+  }
+  return "";
 }
 
 function shouldRefreshToolbarImmediately(eventTypes: string[]): boolean {
@@ -1596,6 +1654,7 @@ export default function CSSidebar() {
                   status: "queued",
                   failure_message: "",
                   updated_at: now,
+                  generated_at: prev.suggestions?.generated_at || "",
                 },
               }
             : prev,
@@ -1605,14 +1664,21 @@ export default function CSSidebar() {
         bootstrap?.capabilities?.auto_refresh_analysis &&
         shouldRefreshToolbarAnalysis(payload, openKFID, externalUserID)
       ) {
+        const nextStatus = nextToolbarAnalysisRealtimeStatus(
+          payload,
+          openKFID,
+          externalUserID,
+        );
+        const now = new Date().toISOString();
         setBootstrap((prev) =>
-          prev
+          prev && nextStatus
             ? {
                 ...prev,
                 summary: prev.summary
                   ? {
                       ...prev.summary,
-                      status: "queued",
+                      status: nextStatus,
+                      updated_at: now,
                     }
                   : prev.summary,
               }
@@ -1719,6 +1785,10 @@ export default function CSSidebar() {
   const conversationMessages = bootstrap?.conversation?.messages || [];
   const conversationRefreshedAt = formatToolbarMessageTime(
     bootstrap?.conversation?.refreshed_at,
+  );
+  const summaryGeneratedAt = formatToolbarMessageTime(summary?.generated_at);
+  const suggestionGeneratedAt = formatToolbarMessageTime(
+    bootstrap?.suggestions?.generated_at,
   );
   const sampleOpenDataMessage = conversationMessages.find((message) =>
     Boolean((message?.sender_display_userid || "").trim()),
@@ -1866,7 +1936,7 @@ export default function CSSidebar() {
     const text = item.sentences[currentStep] || item.text;
     try {
       setIsSubmitting(true);
-      const runtime = await sendTextToCurrentSession(text, {
+      await sendTextToCurrentSession(text, {
         external_userid:
           bootstrap?.external_userid ||
           sessionLocator.external_userid ||
@@ -1893,20 +1963,6 @@ export default function CSSidebar() {
             : "已通过企业微信客户端填入当前会话",
         );
       }
-      void executeContactSidebarCommand({
-        command: "contact_fill_suggestion",
-        external_userid:
-          runtime.external_userid ||
-          bootstrap?.external_userid ||
-          sessionLocator.external_userid ||
-          query.external_userid,
-        payload: {
-          text,
-          source: "jssdk_send_chat_message",
-          reply_id: item.id,
-          step: currentStep + 1,
-        },
-      }).catch(() => {});
     } catch (error) {
       const message = toJSSDKErrorMessage(error);
       try {
@@ -2402,11 +2458,18 @@ export default function CSSidebar() {
               </div>
               {analysisPanelVisible ? (
                 <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-                  <div className="flex items-center gap-2 border-b border-gray-100 bg-purple-50/50 px-3 py-2.5">
-                    <Sparkles className="h-3.5 w-3.5 text-purple-600" />
-                    <span className="text-xs font-bold text-gray-800">
-                      AI 会话感知
-                    </span>
+                  <div className="flex items-center justify-between gap-3 border-b border-gray-100 bg-purple-50/50 px-3 py-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Sparkles className="h-3.5 w-3.5 shrink-0 text-purple-600" />
+                      <span className="truncate text-xs font-bold text-gray-800">
+                        AI 会话感知
+                      </span>
+                    </div>
+                    {summaryGeneratedAt ? (
+                      <span className="shrink-0 rounded border border-purple-100 bg-white/80 px-1.5 py-0.5 text-[10px] font-bold text-purple-500">
+                        生成 {summaryGeneratedAt}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="space-y-3.5 p-3.5">
                     <div>
@@ -2467,18 +2530,23 @@ export default function CSSidebar() {
                 <>
                   <Card className="wecom-toolbar-panel wecom-toolbar-enter overflow-hidden rounded-lg border-[#0052D9]/30 bg-white shadow-md ring-1 ring-[#0052D9]/5">
                     <div className="-mx-3 -mt-3 mb-3 flex items-center justify-between gap-2 border-b border-blue-100 bg-blue-50 px-3 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <Lightbulb className="h-4 w-4 text-[#0052D9]" />
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Lightbulb className="h-4 w-4 shrink-0 text-[#0052D9]" />
                         <div className="min-w-0">
                           <div className="truncate text-xs font-bold text-[#0052D9]">
                             建议操作：{suggestedActionText || "继续安抚并确认下一步"}
                           </div>
+                          {suggestionGeneratedAt ? (
+                            <div className="mt-0.5 truncate text-[10px] font-bold text-blue-400">
+                              生成 {suggestionGeneratedAt}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         className="h-7 shrink-0 rounded border-blue-200 bg-white px-2 text-[10px] font-bold text-[#0052D9] shadow-sm"
                         disabled={
                           isRegenerating ||
