@@ -1,13 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
-import { Badge } from "@/components/ui/Badge";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import { normalizeErrorMessage } from "@/services/http";
 import {
-  getCSCommandCenterView,
-  type CommandCenterSession,
+  listKFCustomerSessions,
+  type KFCustomerSessionCandidate,
 } from "@/services/commandCenterService";
 import {
   checkSidebarJSSDKApis,
@@ -32,11 +39,7 @@ import {
 } from "@/services/receptionService";
 import {
   sidebarBody,
-  sidebarHeader,
-  sidebarMeta,
   sidebarPageShell,
-  sidebarSectionLabel,
-  sidebarTitle,
 } from "./sidebarChrome";
 import {
   ArrowLeft,
@@ -83,6 +86,43 @@ type NavigateCustomerOption = {
   lastMessage?: string;
 };
 
+type DebugBadgeVariant = "success" | "warning" | "secondary";
+type DebugTone = "blue" | "violet" | "emerald" | "cyan" | "sky" | "indigo" | "red";
+
+const debugToneStyles: Record<
+  DebugTone,
+  { icon: string; bar: string }
+> = {
+  blue: {
+    icon: "bg-blue-50 text-blue-600 ring-blue-100",
+    bar: "bg-[#0052D9]",
+  },
+  violet: {
+    icon: "bg-violet-50 text-violet-600 ring-violet-100",
+    bar: "bg-violet-500",
+  },
+  emerald: {
+    icon: "bg-emerald-50 text-emerald-600 ring-emerald-100",
+    bar: "bg-emerald-500",
+  },
+  cyan: {
+    icon: "bg-cyan-50 text-cyan-600 ring-cyan-100",
+    bar: "bg-cyan-500",
+  },
+  sky: {
+    icon: "bg-sky-50 text-sky-600 ring-sky-100",
+    bar: "bg-sky-500",
+  },
+  indigo: {
+    icon: "bg-indigo-50 text-indigo-600 ring-indigo-100",
+    bar: "bg-indigo-500",
+  },
+  red: {
+    icon: "bg-red-50 text-red-600 ring-red-100",
+    bar: "bg-red-500",
+  },
+};
+
 function prettyJSON(value: unknown): string {
   try {
     return JSON.stringify(value ?? {}, null, 2);
@@ -94,7 +134,7 @@ function prettyJSON(value: unknown): string {
 function renderStatusBadge(
   ok: boolean | undefined,
   pendingText = "未执行",
-): { text: string; variant: "success" | "warning" | "secondary" } {
+): { text: string; variant: DebugBadgeVariant } {
   if (ok === true) return { text: "正常", variant: "success" };
   if (ok === false) return { text: "异常", variant: "warning" };
   return { text: pendingText, variant: "secondary" };
@@ -102,7 +142,7 @@ function renderStatusBadge(
 
 function runtimeStateBadge(
   state?: string,
-): { text: string; variant: "success" | "warning" | "secondary" } {
+): { text: string; variant: DebugBadgeVariant } {
   switch ((state || "").trim()) {
     case "wecom_bridge_ready":
       return { text: "Bridge 已就绪", variant: "success" };
@@ -121,7 +161,7 @@ function overallDebugBadge(input: {
   registration?: JSSDKRegistrationSnapshot | null;
   isRunningRegistration?: boolean;
   runtimeState?: string;
-}): { text: string; variant: "success" | "warning" | "secondary" } {
+}): { text: string; variant: DebugBadgeVariant } {
   if (input.isRunningRegistration) {
     return { text: "注册检查中", variant: "warning" };
   }
@@ -139,10 +179,12 @@ function overallDebugBadge(input: {
 
 function DebugMetric(props: { label: string; value?: string; mono?: boolean }) {
   return (
-    <div className="space-y-1">
-      <div className="text-[11px] font-medium text-slate-500">{props.label}</div>
+    <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
+        {props.label}
+      </div>
       <div
-        className={`rounded-xl bg-slate-50 px-3 py-2 text-[12px] leading-5 text-slate-700 ${
+        className={`mt-1 text-[12px] leading-5 text-gray-800 ${
           props.mono ? "font-mono break-all" : ""
         }`}
       >
@@ -204,7 +246,7 @@ function dedupeCustomers(
 }
 
 function mapSessionToNavigateCustomer(
-  item: CommandCenterSession,
+  item: KFCustomerSessionCandidate,
 ): NavigateCustomerOption | null {
   const openKFID = (item.open_kfid || "").trim();
   const externalUserID = (item.external_userid || "").trim();
@@ -212,10 +254,12 @@ function mapSessionToNavigateCustomer(
   return {
     openKFID,
     externalUserID,
-    label: firstNonEmpty(item.name, externalUserID, "未识别客户"),
-    sessionStatus: item.session_label || item.state_bucket,
-    lastActive: item.last_active,
-    lastMessage: item.last_message,
+    label: firstNonEmpty(
+      item.display_name,
+      item.nickname,
+      externalUserID,
+      "未识别客户",
+    ),
   };
 }
 
@@ -224,14 +268,97 @@ function SectionNotice(props: { text?: string; tone?: "info" | "warning" }) {
   const warning = props.tone === "warning";
   return (
     <div
-      className={`rounded-xl px-3 py-2 text-[12px] leading-5 ${
+      className={`rounded-md px-3 py-2 text-[12px] leading-5 ${
         warning
-          ? "border border-amber-100 bg-amber-50 text-amber-700"
+          ? "border border-red-100 bg-red-50 text-red-700"
           : "border border-blue-100 bg-blue-50 text-blue-700"
       }`}
     >
       {props.text}
     </div>
+  );
+}
+
+function isWarningNotice(text?: string): boolean {
+  const value = (text || "").trim();
+  if (!value) return false;
+  return /(失败|异常|无法|请|错误|不可用|未注入|不支持|超时|denied|error|fail)/i.test(
+    value,
+  );
+}
+
+function shouldAutoDismissNotice(text?: string): boolean {
+  const value = (text || "").trim();
+  return Boolean(value) && !isWarningNotice(value);
+}
+
+function useAutoDismissNotice(
+  value: string,
+  setValue: Dispatch<SetStateAction<string>>,
+) {
+  useEffect(() => {
+    if (!shouldAutoDismissNotice(value)) return;
+    const timer = window.setTimeout(() => setValue(""), 3200);
+    return () => window.clearTimeout(timer);
+  }, [setValue, value]);
+}
+
+function DebugStatusPill(props: { text: string; variant: DebugBadgeVariant }) {
+  const className =
+    props.variant === "success"
+      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+      : props.variant === "warning"
+        ? "border-orange-100 bg-orange-50 text-orange-700"
+        : "border-gray-100 bg-gray-50 text-gray-600";
+  return (
+    <span
+      className={`inline-flex max-w-[116px] shrink-0 items-center justify-center rounded-md border px-2 py-1 text-center text-[10px] font-bold leading-3 ${className}`}
+    >
+      {props.text}
+    </span>
+  );
+}
+
+function DebugPanel(props: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  tone?: DebugTone;
+  status?: { text: string; variant: DebugBadgeVariant };
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  const tone = debugToneStyles[props.tone || "blue"];
+  return (
+    <Card className="wecom-toolbar-panel wecom-toolbar-enter overflow-visible rounded-lg border-gray-200 bg-white p-0 shadow-sm">
+      <div className={`h-1 ${tone.bar}`} />
+      <div className="p-3">
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <div
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ring-1 ${tone.icon}`}
+            >
+              {props.icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-bold leading-5 text-gray-900">
+                {props.title}
+              </div>
+              <div className="mt-0.5 text-[12px] leading-5 text-gray-500">
+                {props.description}
+              </div>
+            </div>
+          </div>
+          {(props.status || props.action) ? (
+            <div className="flex shrink-0 flex-col items-end gap-1.5">
+              {props.action}
+              {props.status ? <DebugStatusPill {...props.status} /> : null}
+            </div>
+          ) : null}
+        </div>
+        {props.children}
+      </div>
+    </Card>
   );
 }
 
@@ -256,6 +383,7 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
   const [apiNotice, setApiNotice] = useState("");
   const [contextNotice, setContextNotice] = useState("");
   const [openDataNotice, setOpenDataNotice] = useState("");
+  const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
   const [isRunningRegistration, setIsRunningRegistration] = useState(false);
   const [isCheckingApis, setIsCheckingApis] = useState(false);
   const [isInspectingContext, setIsInspectingContext] = useState(false);
@@ -269,9 +397,20 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
   const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
   const [navigateOpenKFID, setNavigateOpenKFID] = useState("");
   const [navigateExternalUserID, setNavigateExternalUserID] = useState("");
+  const [isChannelPickerOpen, setIsChannelPickerOpen] = useState(false);
+  const [isCustomerPickerOpen, setIsCustomerPickerOpen] = useState(false);
   const [channelCustomers, setChannelCustomers] = useState<
     NavigateCustomerOption[]
   >([]);
+
+  useAutoDismissNotice(sendNotice, setSendNotice);
+  useAutoDismissNotice(navigateNotice, setNavigateNotice);
+  useAutoDismissNotice(registrationNotice, setRegistrationNotice);
+  useAutoDismissNotice(apiNotice, setApiNotice);
+  useAutoDismissNotice(contextNotice, setContextNotice);
+  useAutoDismissNotice(openDataNotice, setOpenDataNotice);
+  useAutoDismissNotice(channelNotice, setChannelNotice);
+  useAutoDismissNotice(customerNotice, setCustomerNotice);
 
   const currentOpenKFID = (props.openKFID || "").trim();
   const currentExternalUserID = (props.externalUserID || "").trim();
@@ -350,6 +489,11 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
             openKFID: selectedOpenKFID,
             externalUserID: currentExternalUserID,
             label: firstNonEmpty(
+              channelCustomers.find(
+                (item) =>
+                  item.openKFID === selectedOpenKFID &&
+                  item.externalUserID === currentExternalUserID,
+              )?.label,
               candidateCustomers.find(
                 (item) =>
                   item.openKFID === selectedOpenKFID &&
@@ -364,8 +508,8 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
       : [];
     return dedupeCustomers([
       ...current,
-      ...candidateCustomers.filter((item) => item.openKFID === selectedOpenKFID),
       ...channelCustomers.filter((item) => item.openKFID === selectedOpenKFID),
+      ...candidateCustomers.filter((item) => item.openKFID === selectedOpenKFID),
     ]);
   }, [
     candidateCustomers,
@@ -391,6 +535,27 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
 
   const refreshRuntimeSnapshot = () => {
     setRuntimeSnapshot(getJSSDKRuntimeDiagnosticsSnapshot());
+  };
+
+  const handleRefreshDiagnostics = async () => {
+    const selectedOpenKFID = navigateOpenKFID.trim();
+    try {
+      setIsRefreshingDiagnostics(true);
+      refreshRuntimeSnapshot();
+      await Promise.allSettled([
+        handleCheckRegistration(false),
+        handleCheckApis(),
+        handleInspectContext(),
+        handleCheckOpenData(),
+        loadChannels(),
+        selectedOpenKFID
+          ? loadCustomersForChannel(selectedOpenKFID)
+          : Promise.resolve(),
+      ]);
+      refreshRuntimeSnapshot();
+    } finally {
+      setIsRefreshingDiagnostics(false);
+    }
   };
 
   const handleCheckRegistration = async (force = false) => {
@@ -529,11 +694,11 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
     try {
       setIsLoadingCustomers(true);
       setCustomerNotice("");
-      const result = await getCSCommandCenterView({
+      const sessions = await listKFCustomerSessions({
         open_kfid: selectedOpenKFID,
         limit: 100,
       });
-      const next = (result?.sessions || [])
+      const next = sessions
         .map(mapSessionToNavigateCustomer)
         .filter((item): item is NavigateCustomerOption => item !== null);
       setChannelCustomers(next);
@@ -566,10 +731,7 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
 
   useEffect(() => {
     const selectedExternalUserID = navigateExternalUserID.trim();
-    if (
-      selectedExternalUserID &&
-      customerOptions.some((item) => item.externalUserID === selectedExternalUserID)
-    ) {
+    if (selectedExternalUserID) {
       return;
     }
     const currentForSelected = customerOptions.find(
@@ -609,84 +771,111 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
 
   const sampleOpenDataUserID = (props.sampleOpenDataUserID || "").trim();
   const sampleOpenDataFallback = (props.sampleOpenDataFallback || "").trim();
+  const registrationBaseNotice = firstNonEmpty(
+    registrationNotice,
+    registration?.error_message,
+  );
+  const registrationNoticeText = isRunningRegistration
+    ? ""
+    : registrationBaseNotice;
+  const apiNoticeText = isCheckingApis
+    ? "正在检查当前客户端的 JSSDK API 能力。"
+    : apiNotice;
+  const contextNoticeText = isInspectingContext ? "" : contextNotice;
+  const navigateWarningNotice = [navigateNotice, channelNotice, customerNotice]
+    .map((item) => (item || "").trim())
+    .find(isWarningNotice);
+  const navigateBaseNotice =
+    navigateWarningNotice ||
+    firstNonEmpty(navigateNotice, channelNotice, customerNotice);
+  const navigateNoticeText =
+    isNavigating
+      ? ""
+      : isLoadingChannels || isLoadingCustomers
+        ? ""
+        : navigateBaseNotice;
+  const openDataBaseNotice = firstNonEmpty(
+    openDataNotice,
+    openDataRuntime?.reason,
+  );
+  const openDataNoticeText = isCheckingOpenData
+    ? "正在检查 open-data 运行态。"
+    : openDataBaseNotice;
 
   return (
     <div className={sidebarPageShell}>
-      <div
-        className={`${sidebarHeader} sticky top-0 z-10 shadow-[0_8px_24px_rgba(15,23,42,0.04)]`}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+      <div className="sticky top-0 z-10 shrink-0 bg-[#0052D9] p-4 text-white shadow-[0_8px_22px_rgba(0,82,217,0.22)]">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={`h-2 w-2 shrink-0 animate-pulse rounded-full ${
+                overallBadge.variant === "warning"
+                  ? "bg-orange-300"
+                  : overallBadge.variant === "success"
+                    ? "bg-green-400"
+                    : "bg-white/50"
+              }`}
+            />
+            <h1 className="truncate text-sm font-bold tracking-tight text-white">
+              工具栏调试模式
+            </h1>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              className="mb-2 inline-flex items-center gap-1.5 text-[12px] font-medium text-slate-500 transition-colors hover:text-slate-800"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30"
               onClick={props.onBack}
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
+              <ArrowLeft className="h-3 w-3" />
               返回
             </button>
-            <div className="mb-1 flex items-center gap-2">
-              <span className={sidebarTitle}>工具栏调试</span>
-              <Badge variant={overallBadge.variant} className="px-2 py-0.5 text-[10px]">
-                {overallBadge.text}
-              </Badge>
-            </div>
-            <div className={`${sidebarMeta} max-w-[280px] leading-5`}>
-              按照环境、注册、能力、上下文、动作的顺序排查当前工具栏 JSSDK 链路。
-            </div>
+            <button
+              type="button"
+              disabled={isRefreshingDiagnostics}
+              className="inline-flex h-7 w-7 items-center justify-center rounded bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-60"
+              onClick={() => void handleRefreshDiagnostics()}
+              aria-label="刷新工具栏调试"
+            >
+              <RefreshCcw
+                className={`h-3.5 w-3.5 ${isRefreshingDiagnostics ? "animate-spin" : ""}`}
+              />
+            </button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
-            onClick={refreshRuntimeSnapshot}
-          >
-            <RefreshCcw className="mr-1 h-3.5 w-3.5" />
-            刷新诊断
-          </Button>
+        </div>
+        <div className="rounded bg-black/10 p-2 text-[12px] leading-5 text-white/82">
+          按照环境、注册、能力、上下文、动作的顺序排查当前工具栏 JSSDK 链路。
         </div>
       </div>
 
-      <div className={`${sidebarBody} space-y-3`}>
-        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                <Bot className="h-4 w-4" />
-              </div>
-              <div>
-                <div className={sidebarSectionLabel}>注册与签名</div>
-                <div className={`${sidebarMeta} mt-0.5`}>
-                  检查并重试当前页面的 JSSDK 注册链路
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={registrationBadge.variant} className="px-2 py-0.5 text-[10px]">
-                {registrationBadge.text}
-              </Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
-                disabled={isRunningRegistration}
-                onClick={() => void handleCheckRegistration(true)}
-              >
-                <RefreshCcw className={`mr-1 h-3.5 w-3.5 ${isRunningRegistration ? "animate-spin" : ""}`} />
-                重新注册
-              </Button>
-            </div>
-          </div>
+      <div className={`${sidebarBody} space-y-3 bg-[#F8FAFC] p-3`}>
+        <DebugPanel
+          tone="blue"
+          icon={<Bot className="h-4 w-4" />}
+          title="注册与签名"
+          description="检查并重试当前页面的 JSSDK 注册链路"
+          status={registrationBadge}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 rounded-md border-gray-200 bg-white px-2.5 text-[11px]"
+              disabled={isRunningRegistration}
+              onClick={() => void handleCheckRegistration(true)}
+            >
+              <RefreshCcw className={`mr-1 h-3.5 w-3.5 ${isRunningRegistration ? "animate-spin" : ""}`} />
+              重试
+            </Button>
+          }
+        >
 
           <SectionNotice
-            text={
-              registrationNotice ||
-              registration?.error_message ||
-              (isRunningRegistration
-                ? "正在检查当前工具栏页面的 JSSDK 注册、签名与基础 Bridge 能力。"
-                : "")
+            text={registrationNoticeText}
+            tone={
+              registration?.register_ok === false ||
+              isWarningNotice(registrationNoticeText)
+                ? "warning"
+                : "info"
             }
-            tone={registration?.register_ok === false ? "warning" : "info"}
           />
 
           <div className="mt-3 grid grid-cols-1 gap-3">
@@ -713,34 +902,28 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
               />
             ) : null}
           </div>
-        </Card>
+        </DebugPanel>
 
-        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
-                <Waypoints className="h-4 w-4" />
-              </div>
-              <div>
-                <div className={sidebarSectionLabel}>API 能力检查</div>
-                <div className={`${sidebarMeta} mt-0.5`}>
-                  当前客户端对关键 JSSDK API 的支持情况
-                </div>
-              </div>
-            </div>
+        <DebugPanel
+          tone="violet"
+          icon={<Waypoints className="h-4 w-4" />}
+          title="API 能力检查"
+          description="当前客户端对关键 JSSDK API 的支持情况"
+          action={
             <Button
               variant="outline"
               size="sm"
-              className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+              className="h-8 shrink-0 rounded-md border-gray-200 bg-white px-2.5 text-[11px]"
               disabled={isCheckingApis}
               onClick={() => void handleCheckApis()}
             >
               <RefreshCcw className={`mr-1 h-3.5 w-3.5 ${isCheckingApis ? "animate-spin" : ""}`} />
-              检查能力
+              检查
             </Button>
-          </div>
+          }
+        >
 
-          <SectionNotice text={apiNotice} tone={apiSupport ? "info" : "warning"} />
+          <SectionNotice text={apiNoticeText} tone={isWarningNotice(apiNoticeText) ? "warning" : "info"} />
 
           <div className="mt-3 grid grid-cols-2 gap-2">
             {[
@@ -758,46 +941,38 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
               return (
                 <div
                   key={name}
-                  className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"
+                  className="flex items-center justify-between rounded-md border border-gray-100 bg-gray-50 px-3 py-2"
                 >
-                  <span className="font-mono text-[11px] text-slate-700">{name}</span>
-                  <Badge variant={badge.variant} className="px-2 py-0.5 text-[10px]">
-                    {badge.text}
-                  </Badge>
+                  <span className="font-mono text-[11px] text-gray-700">{name}</span>
+                  <DebugStatusPill {...badge} />
                 </div>
               );
             })}
           </div>
-        </Card>
+        </DebugPanel>
 
-        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
-                <UserRound className="h-4 w-4" />
-              </div>
-              <div>
-                <div className={sidebarSectionLabel}>会话上下文解析</div>
-                <div className={`${sidebarMeta} mt-0.5`}>
-                  验证 entry、客户、群聊与 query fallback 结果
-                </div>
-              </div>
-            </div>
+        <DebugPanel
+          tone="emerald"
+          icon={<UserRound className="h-4 w-4" />}
+          title="会话上下文解析"
+          description="验证 entry、客户、群聊与 query fallback 结果"
+          action={
             <Button
               variant="outline"
               size="sm"
-              className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+              className="h-8 shrink-0 rounded-md border-gray-200 bg-white px-2.5 text-[11px]"
               disabled={isInspectingContext}
               onClick={() => void handleInspectContext()}
             >
               <RefreshCcw className={`mr-1 h-3.5 w-3.5 ${isInspectingContext ? "animate-spin" : ""}`} />
-              重新解析
+              解析
             </Button>
-          </div>
+          }
+        >
 
           <SectionNotice
-            text={contextNotice}
-            tone={contextInspection ? "info" : "warning"}
+            text={contextNoticeText}
+            tone={isWarningNotice(contextNoticeText) ? "warning" : "info"}
           />
 
           <div className="mt-3 grid grid-cols-2 gap-3">
@@ -817,8 +992,8 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
           </div>
 
           <div className="mt-3 space-y-2">
-            <div className="text-[11px] font-medium text-slate-500">Raw Payload</div>
-            <div className="rounded-2xl bg-slate-950 px-3 py-3 font-mono text-[11px] leading-5 text-slate-100">
+            <div className="text-[11px] font-medium text-gray-500">Raw Payload</div>
+            <div className="rounded-md bg-[#111827] px-3 py-3 font-mono text-[11px] leading-5 text-gray-100">
               <pre className="max-h-[220px] overflow-y-auto whitespace-pre-wrap break-words">
                 {prettyJSON({
                   raw_context: contextInspection?.raw_context || {},
@@ -828,25 +1003,18 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
               </pre>
             </div>
           </div>
-        </Card>
+        </DebugPanel>
 
-        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600">
-                <MessageSquareText className="h-4 w-4" />
-              </div>
-              <div>
-                <div className={sidebarSectionLabel}>打开微信客服会话</div>
-                <div className={`${sidebarMeta} mt-0.5`}>
-                  单独验证 navigateToKfChat，先选客服账号，再选买家
-                </div>
-              </div>
-            </div>
+        <DebugPanel
+          tone="cyan"
+          icon={<MessageSquareText className="h-4 w-4" />}
+          title="打开微信客服会话"
+          description="单独验证 navigateToKfChat，先选客服账号，再选买家"
+          action={
             <Button
               variant="outline"
               size="sm"
-              className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+              className="h-8 shrink-0 rounded-md border-gray-200 bg-white px-2.5 text-[11px]"
               disabled={isLoadingChannels || isLoadingCustomers}
               onClick={() => {
                 void loadChannels();
@@ -858,162 +1026,169 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
                   isLoadingChannels || isLoadingCustomers ? "animate-spin" : ""
                 }`}
               />
-              刷新候选
+              候选
             </Button>
-          </div>
+          }
+        >
 
           <SectionNotice
-            text={
-              navigateNotice ||
-              channelNotice ||
-              customerNotice ||
-              "客服账号来自接待渠道，买家候选来自会话读模型；这里不会再从消息表反推会话。"
-            }
-            tone={
-              navigateNotice.includes("失败") ||
-              navigateNotice.includes("无法") ||
-              channelNotice.includes("失败") ||
-              customerNotice.includes("失败")
-                ? "warning"
-                : "info"
-            }
+            text={navigateNoticeText}
+            tone={isWarningNotice(navigateNoticeText) ? "warning" : "info"}
           />
 
           <div className="mt-3 space-y-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-medium text-slate-500">
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-gray-500">
                 客服账号 open_kfid
               </label>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] leading-5 text-slate-600">
-                <div className="font-medium text-slate-800">
-                  {selectedChannel?.label || "未匹配到客服账号名称"}
-                </div>
-                <div className="font-mono text-[11px] text-slate-500">
-                  {navigateOpenKFID || "-"}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-100 bg-white">
-                <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-[11px] text-slate-500">
-                  <span>客服账号列表</span>
-                  <span>{channelOptions.length} 个</span>
-                </div>
-                <div className="max-h-[180px] overflow-y-auto p-1">
-                  {channelOptions.length === 0 ? (
-                    <div className="px-3 py-4 text-[12px] text-slate-400">
-                      暂未获取到客服账号，请确认接待渠道已同步。
+              <div className="relative">
+                <div className="rounded-md border border-gray-100 bg-gray-50 p-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] font-semibold text-gray-900">
+                        {selectedChannel?.label || "手动输入客服账号"}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {isLoadingChannels ? "候选加载中" : `${channelOptions.length} 个候选`}
+                      </div>
                     </div>
-                  ) : (
-                    channelOptions.map((item) => {
-                      const selected = item.openKFID === navigateOpenKFID.trim();
-                      return (
-                        <button
-                          key={item.openKFID}
-                          type="button"
-                          className={`flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors ${
-                            selected
-                              ? "bg-blue-50 text-blue-700"
-                              : "text-slate-700 hover:bg-slate-50"
-                          }`}
-                          onClick={() => {
-                            setNavigateOpenKFID(item.openKFID);
-                            setNavigateNotice("");
-                          }}
-                        >
-                          <span className="text-[12px] font-medium">
-                            {item.label}
-                          </span>
-                          <span className="mt-0.5 font-mono text-[11px] text-slate-500">
-                            {item.openKFID}
-                          </span>
-                        </button>
-                      );
-                    })
-                  )}
+                    <button
+                      type="button"
+                      className="shrink-0 rounded bg-white px-2 py-1 text-[11px] font-medium text-blue-600 shadow-sm ring-1 ring-gray-200 transition-colors hover:bg-blue-50"
+                      onClick={() => setIsChannelPickerOpen((value) => !value)}
+                    >
+                      {isChannelPickerOpen ? "收起" : "选择"}
+                    </button>
+                  </div>
+                  <Input
+                    className="h-8 font-mono text-[11px]"
+                    value={navigateOpenKFID}
+                    placeholder="输入 open_kfid"
+                    onFocus={() => setIsChannelPickerOpen(true)}
+                    onChange={(event) => {
+                      setNavigateOpenKFID(event.target.value);
+                      setNavigateNotice("");
+                    }}
+                  />
                 </div>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-medium text-slate-500">
-                买家 externalUserId
-              </label>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] leading-5 text-slate-600">
-                <div className="font-medium text-slate-800">
-                  {selectedCustomer?.label || "未匹配到买家名称"}
-                </div>
-                <div className="font-mono text-[11px] text-slate-500">
-                  {navigateExternalUserID || "-"}
-                </div>
-                {selectedCustomer?.sessionStatus ||
-                selectedCustomer?.lastActive ||
-                selectedCustomer?.lastMessage ? (
-                  <div className="mt-1 text-[11px] text-slate-500">
-                    {sessionStatusText(selectedCustomer.sessionStatus)}
-                    {selectedCustomer.lastActive
-                      ? ` · ${formatDebugTime(selectedCustomer.lastActive)}`
-                      : ""}
-                    {selectedCustomer.lastMessage
-                      ? ` · ${selectedCustomer.lastMessage}`
-                      : ""}
+                {isChannelPickerOpen ? (
+                  <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-[220px] overflow-y-auto rounded-md border border-gray-200 bg-white p-1 shadow-xl">
+                    {channelOptions.length === 0 ? (
+                      <div className="px-3 py-4 text-[12px] text-gray-400">
+                        暂未获取到客服账号，可直接手动输入 open_kfid。
+                      </div>
+                    ) : (
+                      channelOptions.map((item) => {
+                        const selected = item.openKFID === navigateOpenKFID.trim();
+                        return (
+                          <button
+                            key={item.openKFID}
+                            type="button"
+                            className={`flex w-full flex-col rounded-md px-3 py-2 text-left transition-colors ${
+                              selected
+                                ? "bg-blue-50 text-blue-700"
+                                : "text-gray-700 hover:bg-gray-50"
+                            }`}
+                            onClick={() => {
+                              setNavigateOpenKFID(item.openKFID);
+                              setNavigateNotice("");
+                              setIsChannelPickerOpen(false);
+                            }}
+                          >
+                            <span className="truncate text-[12px] font-semibold">
+                              {item.label}
+                            </span>
+                            <span className="mt-0.5 font-mono text-[11px] text-gray-500">
+                              {item.openKFID}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 ) : null}
               </div>
-              <div className="rounded-2xl border border-slate-100 bg-white">
-                <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-[11px] text-slate-500">
-                  <span>买家会话列表</span>
-                  <span>
-                    {isLoadingCustomers ? "加载中" : `${customerOptions.length} 个`}
-                  </span>
-                </div>
-                <div className="max-h-[260px] overflow-y-auto p-1">
-                  {customerOptions.length === 0 ? (
-                    <div className="px-3 py-4 text-[12px] leading-5 text-slate-400">
-                      {navigateOpenKFID.trim()
-                        ? "该客服账号下暂未获取到买家会话。"
-                        : "请先选择客服账号。"}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-gray-500">
+                买家 externalUserId
+              </label>
+              <div className="relative">
+                <div className="rounded-md border border-gray-100 bg-gray-50 p-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] font-semibold text-gray-900">
+                        {selectedCustomer?.label || "手动输入买家"}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {isLoadingCustomers ? "候选加载中" : `${customerOptions.length} 个候选`}
+                      </div>
                     </div>
-                  ) : (
-                    customerOptions.map((item) => {
-                      const selected =
-                        item.externalUserID === navigateExternalUserID.trim();
-                      return (
-                        <button
-                          key={`${item.openKFID}:${item.externalUserID}`}
-                          type="button"
-                          className={`flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors ${
-                            selected
-                              ? "bg-blue-50 text-blue-700"
-                              : "text-slate-700 hover:bg-slate-50"
-                          }`}
-                          onClick={() => {
-                            setNavigateExternalUserID(item.externalUserID);
-                            setNavigateNotice("");
-                          }}
-                        >
-                          <span className="text-[12px] font-medium">
-                            {item.label}
-                          </span>
-                          <span className="mt-0.5 font-mono text-[11px] text-slate-500">
-                            {item.externalUserID}
-                          </span>
-                          <span className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">
-                            {sessionStatusText(item.sessionStatus)}
-                            {item.lastActive
-                              ? ` · ${formatDebugTime(item.lastActive)}`
-                              : ""}
-                            {item.lastMessage ? ` · ${item.lastMessage}` : ""}
-                          </span>
-                        </button>
-                      );
-                    })
-                  )}
+                    <button
+                      type="button"
+                      className="shrink-0 rounded bg-white px-2 py-1 text-[11px] font-medium text-blue-600 shadow-sm ring-1 ring-gray-200 transition-colors hover:bg-blue-50"
+                      onClick={() => setIsCustomerPickerOpen((value) => !value)}
+                    >
+                      {isCustomerPickerOpen ? "收起" : "选择"}
+                    </button>
+                  </div>
+                  <Input
+                    className="h-8 font-mono text-[11px]"
+                    value={navigateExternalUserID}
+                    placeholder="输入 external_userid"
+                    onFocus={() => setIsCustomerPickerOpen(true)}
+                    onChange={(event) => {
+                      setNavigateExternalUserID(event.target.value);
+                      setNavigateNotice("");
+                    }}
+                  />
                 </div>
+                {isCustomerPickerOpen ? (
+                  <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-[220px] overflow-y-auto rounded-md border border-gray-200 bg-white p-1 shadow-xl">
+                    {customerOptions.length === 0 ? (
+                      <div className="px-3 py-4 text-[12px] leading-5 text-gray-400">
+                        {navigateOpenKFID.trim()
+                          ? "该客服账号下暂未获取到买家候选，可直接手动输入 external_userid。"
+                          : "请先选择或输入客服账号。"}
+                      </div>
+                    ) : (
+                      customerOptions.map((item) => {
+                        const selected =
+                          item.externalUserID === navigateExternalUserID.trim();
+                        return (
+                          <button
+                            key={`${item.openKFID}:${item.externalUserID}`}
+                            type="button"
+                            className={`flex w-full flex-col rounded-md px-3 py-2 text-left transition-colors ${
+                              selected
+                                ? "bg-blue-50 text-blue-700"
+                                : "text-gray-700 hover:bg-gray-50"
+                            }`}
+                            onClick={() => {
+                              setNavigateExternalUserID(item.externalUserID);
+                              setNavigateNotice("");
+                              setIsCustomerPickerOpen(false);
+                            }}
+                          >
+                            <span className="truncate text-[12px] font-semibold">
+                              {item.label}
+                            </span>
+                            <span className="mt-0.5 font-mono text-[11px] text-gray-500">
+                              {item.externalUserID}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
 
             <Button
               size="sm"
-              className="h-9 w-full rounded-full px-3 text-[12px]"
+              className="h-9 w-full rounded-md px-3 text-[12px]"
               disabled={isNavigating || !navigateOpenKFID.trim()}
               onClick={() => void handleNavigateToKfChat()}
             >
@@ -1021,42 +1196,33 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
               {isNavigating ? "打开中..." : "测试 navigateToKfChat"}
             </Button>
 
-            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-500">
+            <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-[11px] leading-5 text-gray-500">
               说明：open_kfid 和 externalUserId 不是企业通讯录 userid，不能用
               open-data 直接解析姓名；这里使用接待渠道与会话读模型做真实业务回显。
               内部成员姓名仍由下方 open-data 模块验证。
             </div>
           </div>
-        </Card>
+        </DebugPanel>
 
-        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-sky-50 text-sky-600">
-                <MessageSquareText className="h-4 w-4" />
-              </div>
-              <div>
-                <div className={sidebarSectionLabel}>动作调试</div>
-                <div className={`${sidebarMeta} mt-0.5`}>
-                  这里的写操作会真实作用到当前企业微信会话
-                </div>
-              </div>
-            </div>
-          </div>
-
+        <DebugPanel
+          tone="sky"
+          icon={<MessageSquareText className="h-4 w-4" />}
+          title="动作调试"
+          description="这里的写操作会真实作用到当前企业微信会话"
+        >
           <div className="space-y-4">
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-700">
+            <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-700">
               发送测试消息前，请确认你正在真实会话里，且理解这会直接影响当前客户侧沟通。
             </div>
 
             <Textarea
-              className="min-h-[96px] rounded-2xl text-[12px] leading-5"
+              className="min-h-[96px] rounded-md text-[12px] leading-5"
               placeholder="输入一条测试消息"
               value={sendText}
               onChange={(event) => setSendText(event.target.value)}
             />
 
-            <label className="flex items-center gap-2 text-[12px] text-slate-600">
+            <label className="flex items-center gap-2 text-[12px] text-gray-600">
               <input
                 type="checkbox"
                 checked={confirmSend}
@@ -1068,7 +1234,7 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
-                className="h-8 rounded-full px-3 text-[11px]"
+                className="h-8 rounded-md px-3 text-[11px]"
                 disabled={isSendingText}
                 onClick={() => void handleSendText()}
               >
@@ -1077,43 +1243,35 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
               </Button>
             </div>
 
-            <SectionNotice text={sendNotice} tone={sendNotice.includes("失败") || sendNotice.includes("请") ? "warning" : "info"} />
+            <SectionNotice
+              text={sendNotice}
+              tone={isWarningNotice(sendNotice) ? "warning" : "info"}
+            />
           </div>
-        </Card>
+        </DebugPanel>
 
-        <Card className="rounded-2xl border-slate-200 bg-white/95 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
-                <ShieldCheck className="h-4 w-4" />
-              </div>
-              <div>
-                <div className={sidebarSectionLabel}>OpenData 运行</div>
-                <div className={`${sidebarMeta} mt-0.5`}>
-                  验证 open-data 初始化与当前环境可用性
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={openDataBadge.variant} className="px-2 py-0.5 text-[10px]">
-                {openDataBadge.text}
-              </Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
-                disabled={isCheckingOpenData}
-                onClick={() => void handleCheckOpenData()}
-              >
-                <RefreshCcw className={`mr-1 h-3.5 w-3.5 ${isCheckingOpenData ? "animate-spin" : ""}`} />
-                检查 open-data
-              </Button>
-            </div>
-          </div>
-
+        <DebugPanel
+          tone="indigo"
+          icon={<ShieldCheck className="h-4 w-4" />}
+          title="OpenData 运行"
+          description="验证 open-data 初始化与当前环境可用性"
+          status={openDataBadge}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 rounded-md border-gray-200 bg-white px-2.5 text-[11px]"
+              disabled={isCheckingOpenData}
+              onClick={() => void handleCheckOpenData()}
+            >
+              <RefreshCcw className={`mr-1 h-3.5 w-3.5 ${isCheckingOpenData ? "animate-spin" : ""}`} />
+              检查
+            </Button>
+          }
+        >
           <SectionNotice
-            text={openDataNotice || openDataRuntime?.reason}
-            tone={openDataRuntime?.canUseOpenData ? "info" : "warning"}
+            text={openDataNoticeText}
+            tone={isWarningNotice(openDataNoticeText) ? "warning" : "info"}
           />
 
           <div className="mt-3 grid grid-cols-2 gap-3">
@@ -1130,23 +1288,23 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
 
           {sampleOpenDataUserID ? (
             <div className="mt-3 space-y-1">
-              <div className="text-[11px] font-medium text-slate-500">示例渲染</div>
-              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] text-slate-700">
+              <div className="text-[11px] font-medium text-gray-500">示例渲染</div>
+              <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-[12px] text-gray-700">
                 <WecomOpenDataName
                   userid={sampleOpenDataUserID}
                   fallback={sampleOpenDataFallback || sampleOpenDataUserID}
                   showHint
-                  className="font-medium text-slate-800"
-                  hintClassName="mt-1 text-[11px] text-slate-500"
+                  className="font-medium text-gray-900"
+                  hintClassName="mt-1 text-[11px] text-gray-500"
                 />
               </div>
             </div>
           ) : (
-            <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-[12px] text-slate-500">
+            <div className="mt-3 rounded-md border border-dashed border-gray-200 bg-gray-50 px-3 py-3 text-[12px] text-gray-500">
               当前会话里没有可用于演示的内部成员标识，暂不展示 open-data 姓名渲染样例。
             </div>
           )}
-        </Card>
+        </DebugPanel>
       </div>
     </div>
   );

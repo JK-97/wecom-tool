@@ -32,6 +32,15 @@ export type CommandCenterSession = {
   reply_sla_status?: string;
 };
 
+export type KFCustomerSessionCandidate = {
+  open_kfid?: string;
+  external_userid?: string;
+  display_name?: string;
+  nickname?: string;
+  profile_source?: string;
+  source?: string;
+};
+
 export type CommandCenterViewModel = {
   queue_count?: number;
   active_count?: number;
@@ -198,6 +207,23 @@ export async function getCSCommandCenterView(params?: {
     `/api/v1/main/cs-command-center/view?${search.toString()}`,
   );
   return payload?.data || null;
+}
+
+export async function listKFCustomerSessions(params?: {
+  open_kfid?: string;
+  external_userid?: string;
+  limit?: number;
+}): Promise<KFCustomerSessionCandidate[]> {
+  const search = new URLSearchParams();
+  if (params?.open_kfid) search.set("open_kfid", params.open_kfid);
+  if (params?.external_userid)
+    search.set("external_userid", params.external_userid);
+  if (params?.limit && params.limit > 0)
+    search.set("limit", String(params.limit));
+  const payload = await requestJSON<
+    APIReply<{ sessions?: KFCustomerSessionCandidate[] }>
+  >(`/api/v1/kf/customer-sessions?${search.toString()}`);
+  return payload?.data?.sessions || [];
 }
 
 export async function getCSCommandCenterSessionDetail(params: {
