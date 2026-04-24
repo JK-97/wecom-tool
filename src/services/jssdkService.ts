@@ -159,12 +159,6 @@ function currentPageURL(): string {
   return (window.location.href || "").trim();
 }
 
-function readQueryParam(name: string): string {
-  if (typeof window === "undefined") return "";
-  const params = new URLSearchParams(window.location.search);
-  return (params.get(name) || "").trim();
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -231,10 +225,10 @@ function readRuntimeDiagnosticsSnapshot(): JSSDKRuntimeDiagnosticsSnapshot {
   return {
     ...diagnostics,
     current_page_url: currentPageURL(),
-    entry_query: readQueryParam("entry"),
-    open_kfid_query: readQueryParam("open_kfid"),
-    external_userid_query: readQueryParam("external_userid"),
-    chat_id_query: readQueryParam("chat_id"),
+    entry_query: "",
+    open_kfid_query: "",
+    external_userid_query: "",
+    chat_id_query: "",
   };
 }
 
@@ -689,29 +683,6 @@ export async function resolveSidebarRuntimeContext(): Promise<SidebarRuntimeCont
       }
     }
 
-    if (!chatID && modeByEntry === "group") {
-      chatID = readQueryParam("chat_id");
-      if (chatID) {
-        logJSSDKDiagnostic("chat_id_fallback_from_query", { chat_id: chatID });
-      }
-    }
-    if (!openKFID) {
-      openKFID = readQueryParam("open_kfid");
-      if (openKFID) {
-        logJSSDKDiagnostic("open_kfid_fallback_from_query", {
-          open_kfid: openKFID,
-        });
-      }
-    }
-    if (!externalUserID) {
-      externalUserID = readQueryParam("external_userid");
-      if (externalUserID) {
-        logJSSDKDiagnostic("external_userid_fallback_from_query", {
-          external_userid: externalUserID,
-        });
-      }
-    }
-
     return {
       entry,
       mode: inferMode(entry, externalUserID, chatID),
@@ -765,6 +736,24 @@ export async function sendTextToCurrentSession(
   const externalUserID =
     readString(target?.external_userid) || runtime.external_userid;
   const chatID = readString(target?.chat_id) || runtime.chat_id;
+  const expectedExternalUserID = readString(target?.external_userid);
+  const expectedChatID = readString(target?.chat_id);
+  if (
+    expectedExternalUserID &&
+    runtime.external_userid &&
+    runtime.external_userid !== expectedExternalUserID
+  ) {
+    throw new JSSDKRuntimeError(
+      "context_unavailable",
+      "当前会话不是目标客户，已停止自动填入。",
+    );
+  }
+  if (expectedChatID && runtime.chat_id && runtime.chat_id !== expectedChatID) {
+    throw new JSSDKRuntimeError(
+      "context_unavailable",
+      "当前群聊不是目标会话，已停止自动填入。",
+    );
+  }
   if (runtime.entry && !SEND_ALLOWED_ENTRIES.has(runtime.entry)) {
     throw new JSSDKRuntimeError(
       "context_unavailable",
@@ -960,7 +949,7 @@ export async function inspectSidebarJSSDKContext(): Promise<JSSDKContextInspecti
   const contextRecord = toUnknownRecord(context);
   const entry = normalizeEntry(context?.entry);
   const modeByEntry = inferMode(entry, "", "");
-  let openKFID = readQueryParam("open_kfid");
+  let openKFID = "";
   let externalUserID = readExternalUserID(contextRecord);
   let chatID = "";
   let contactRecord: Record<string, unknown> = {};
@@ -990,13 +979,6 @@ export async function inspectSidebarJSSDKContext(): Promise<JSSDKContextInspecti
     } catch {
       chatRecord = {};
     }
-  }
-
-  if (!chatID && modeByEntry === "group") {
-    chatID = readQueryParam("chat_id");
-  }
-  if (!externalUserID) {
-    externalUserID = readQueryParam("external_userid");
   }
 
   return {

@@ -77,16 +77,24 @@ body {
 }
 
 .wecom-sidebar-frame {
-  width: min(100%, var(--wecom-sidebar-max-width));
+  width: 100%;
+  max-width: none;
   min-height: 100dvh;
-  margin: 0 auto;
+  margin: 0;
   overflow: hidden;
 }
 
 .wecom-sidebar-page {
   min-height: 100dvh;
   width: 100%;
+  min-width: 0;
   font-size: var(--wecom-sidebar-text-size);
+}
+
+.wecom-sidebar-page,
+.wecom-toolbar-message-content {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .wecom-sidebar-header {

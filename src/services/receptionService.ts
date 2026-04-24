@@ -35,6 +35,7 @@ export type ReceptionChannel = {
   status?: string;
   sync_status?: string;
   last_interaction?: string;
+  last_sync?: string;
   lag_seconds?: number;
   pending_tasks?: number;
   failed_tasks?: number;
@@ -90,7 +91,7 @@ export type ReceptionChannelDetail = {
     priority?: number;
     is_default?: boolean;
     enabled?: boolean;
-    hits_7d?: number;
+    hits?: number;
     transfer_rate?: string;
     response_time?: string;
     last_hit?: string;
@@ -109,7 +110,7 @@ export type ReceptionChannelDetail = {
     inactive_rules?: number;
     has_default_rule?: boolean;
     overlapped_scenes?: number;
-    total_hits_7d?: number;
+    total_hits?: number;
     top_rule_name?: string;
     top_rule_percent?: string;
     latest_rule_update_at?: string;
@@ -158,6 +159,14 @@ export type KFServicerUpsertResponse = {
 export type ReceptionChannelsView = {
   overview?: ReceptionOverview;
   channels?: ReceptionChannel[];
+};
+
+export type ReceptionChannelSyncResult = {
+  synced?: boolean;
+  open_kfid?: string;
+  sync_status?: string;
+  sync_reason?: string;
+  synced_at?: string;
 };
 
 export type UploadedMedia = {
@@ -301,8 +310,8 @@ export async function upsertKFServicerAssignments(input: {
 
 export async function triggerReceptionChannelSync(
   openKFID: string,
-): Promise<boolean> {
-  const payload = await requestJSON<APIReply<{ accepted?: boolean }>>(
+): Promise<ReceptionChannelSyncResult | null> {
+  const payload = await requestJSON<APIReply<ReceptionChannelSyncResult>>(
     "/api/v1/reception/channels/sync",
     {
       method: "POST",
@@ -311,13 +320,13 @@ export async function triggerReceptionChannelSync(
       }),
     },
   );
-  return payload?.data?.accepted === true;
+  return payload?.data || null;
 }
 
 export async function retryReceptionChannelSync(
   openKFID: string,
-): Promise<number> {
-  const payload = await requestJSON<APIReply<{ retried_count?: number }>>(
+): Promise<boolean> {
+  await requestJSON<APIReply<{ retried_count?: number }>>(
     "/api/v1/reception/channels/retry",
     {
       method: "POST",
@@ -326,5 +335,5 @@ export async function retryReceptionChannelSync(
       }),
     },
   );
-  return Number(payload?.data?.retried_count || 0);
+  return true;
 }

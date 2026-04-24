@@ -1,4 +1,5 @@
 import { requestJSON } from "./http";
+import type { ToolbarRPABootstrap } from "./rpaToolbarService";
 
 type APIReply<T> = {
   code?: number;
@@ -13,7 +14,6 @@ export type KFToolbarSuggestion = {
   sentences?: string[];
   has_followups?: boolean;
   display_mode?: string;
-  next_step_label?: string;
   reason?: string;
   source?: string;
 };
@@ -31,28 +31,30 @@ export type KFToolbarBootstrap = {
   entry?: string;
   open_kfid?: string;
   external_userid?: string;
+  rpa?: ToolbarRPABootstrap | null;
   header?: {
-    session_status?: string;
     session_status_id?: number;
     session_status_code?: string;
     contact_name?: string;
     risk_tags?: string[];
-    last_active?: string;
-    can_upgrade_contact?: boolean;
   };
   summary?: {
     status?: string;
-    headline?: string;
+    text?: string;
+    customer_intent?: string;
     customer_goal?: string;
-    journey_stage?: string;
     relationship_stage?: string;
     priority?: string;
-    opportunity_level?: string;
+    profile_summary?: string;
+    profile_tags?: string[];
     blocking_issues?: string[];
     decision_signals?: string[];
+    required_information?: string[];
+    opportunity_signals?: string[];
     next_best_actions?: string[];
     reply_guardrails?: string[];
     profile_facts?: string[];
+    recommended_offer?: string;
   };
   suggestions?: KFToolbarSuggestionBatch;
   conversation?: {
@@ -75,7 +77,6 @@ export type KFToolbarBootstrap = {
   capabilities?: {
     fill_reply?: boolean;
     copy_reply?: boolean;
-    upgrade_contact?: boolean;
     regenerate?: boolean;
     show_analysis_panel?: boolean;
     show_suggestion_panel?: boolean;
@@ -90,7 +91,7 @@ export type KFToolbarBootstrap = {
       open_kfid?: string;
       external_userid?: string;
       contact_name?: string;
-      session_status?: string;
+      session_status_code?: string;
       channel_token?: string;
       last_active?: string;
       last_message?: string;
@@ -102,14 +103,20 @@ export type KFToolbarBootstrap = {
 
 export async function getKFToolbarBootstrap(params: {
   entry?: string;
+  run_id?: string;
   open_kfid?: string;
   external_userid?: string;
+  light?: boolean;
+  expect_rpa?: boolean;
 }): Promise<KFToolbarBootstrap | null> {
   const search = new URLSearchParams();
   if (params.entry) search.set("entry", params.entry);
+  if (params.run_id) search.set("run_id", params.run_id);
   if (params.open_kfid) search.set("open_kfid", params.open_kfid);
   if (params.external_userid)
     search.set("external_userid", params.external_userid);
+  if (params.light) search.set("light", "true");
+  if (params.expect_rpa) search.set("expect_rpa", "true");
   const payload = await requestJSON<APIReply<KFToolbarBootstrap>>(
     `/api/v1/kf/toolbar/bootstrap?${search.toString()}`,
   );

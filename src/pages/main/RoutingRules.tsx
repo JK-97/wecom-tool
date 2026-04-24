@@ -56,7 +56,7 @@ import {
 
 const initialRoutingRulesView: RoutingRulesViewModel = {
   rules: [],
-  totalHits7d: 0,
+  totalHits: 0,
   transferRate: "0%",
   avgResponseTime: "0s",
   distributions: [],
@@ -920,7 +920,7 @@ export default function RoutingRules() {
 
   const filteredRules = view.rules
 
-  const statsTotal = Number(view.totalHits7d || 0)
+  const statsTotal = Number(view.totalHits || 0)
   const diagnosticItems = view.diagnostics?.items || []
   const diagnostics = view.diagnostics?.warnings || []
   const activeAdvancedFilterCount = [
@@ -1332,14 +1332,14 @@ export default function RoutingRules() {
               <BarChart3 className="h-4 w-4 text-blue-600" />
               规则运行统计
             </h3>
-            <button onClick={() => setNotice("统计口径：基于近 7 天 routing 执行日志聚合。")}>
+            <button onClick={() => setNotice("统计口径：基于路由规则运行统计物化数据。")}>
               <HelpCircle className="h-4 w-4 text-gray-300 cursor-pointer" />
             </button>
           </div>
 
           <div className="space-y-4">
             <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
-              <p className="text-xs text-blue-600 font-medium">今日总命中次数</p>
+              <p className="text-xs text-blue-600 font-medium">累计命中次数</p>
               <p className="text-2xl font-bold text-blue-700 mt-1">{statsTotal.toLocaleString("zh-CN")}</p>
             </div>
 
@@ -1361,7 +1361,7 @@ export default function RoutingRules() {
                   <div className="text-[11px] text-gray-500">暂无命中分布数据</div>
                 ) : (
                   view.distributions.map((item) => (
-                    <div key={`${item.ruleName}-${item.hits7d}`} className="space-y-1">
+                    <div key={`${item.ruleName}-${item.hits}`} className="space-y-1">
                       <div className="flex justify-between text-[10px]">
                         <span className="text-gray-600 truncate" title={item.ruleName}>
                           {item.ruleName}

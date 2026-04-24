@@ -23,7 +23,7 @@ export type RoutingRuleViewModel = {
   isDefault: boolean
   status: "active" | "inactive" | string
   lastHit: string
-  hits7d: number
+  hits: number
   transferRate: string
   responseTime: string
   conditionsJson: string
@@ -32,7 +32,7 @@ export type RoutingRuleViewModel = {
 
 export type RoutingDistribution = {
   ruleName: string
-  hits7d: number
+  hits: number
   percent: string
 }
 
@@ -59,7 +59,7 @@ export type RoutingTargetOption = {
 
 export type RoutingRulesViewModel = {
   rules: RoutingRuleViewModel[]
-  totalHits7d: number
+  totalHits: number
   transferRate: string
   avgResponseTime: string
   distributions: RoutingDistribution[]
@@ -102,7 +102,7 @@ type RawRoutingRuleView = {
   is_default?: boolean
   status?: string
   last_hit?: string
-  hits_7d?: number
+  hits?: number
   transfer_rate?: string
   response_time?: string
   conditions_json?: string
@@ -121,13 +121,13 @@ type RawRoutingTarget = {
 
 type RawRoutingDistribution = {
   rule_name?: string
-  hits_7d?: number
+  hits?: number
   percent?: string
 }
 
 type RawRoutingRulesViewData = {
   rules?: RawRoutingRuleView[]
-  total_hits_7d?: number
+  total_hits?: number
   transfer_rate?: string
   avg_response_time?: string
   distributions?: RawRoutingDistribution[]
@@ -182,12 +182,12 @@ export async function getRoutingRulesView(params?: {
   const data = payload?.data || {}
   return {
     rules: (data.rules || []).map(mapRule),
-    totalHits7d: Number(data.total_hits_7d || 0),
+    totalHits: Number(data.total_hits || 0),
     transferRate: String(data.transfer_rate || "0%"),
     avgResponseTime: String(data.avg_response_time || "0s"),
     distributions: (data.distributions || []).map((item) => ({
       ruleName: String(item.rule_name || "").trim(),
-      hits7d: Number(item.hits_7d || 0),
+      hits: Number(item.hits || 0),
       percent: String(item.percent || "0%").trim(),
     })),
     channelOptions: (data.channel_options || [])
@@ -260,7 +260,7 @@ function mapRule(item: RawRoutingRuleView): RoutingRuleViewModel {
     isDefault: item.is_default === true,
     status: String(item.status || "inactive").trim(),
     lastHit: String(item.last_hit || "").trim(),
-    hits7d: Number(item.hits_7d || 0),
+    hits: Number(item.hits || 0),
     transferRate: String(item.transfer_rate || "0%").trim(),
     responseTime: String(item.response_time || "0s").trim(),
     conditionsJson: String(item.conditions_json || "{}").trim() || "{}",

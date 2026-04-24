@@ -74,6 +74,30 @@ const selectionItemsFromAssignments = (
       })),
   ]);
 
+const assignmentsFromDetailPool = (
+  detail: ReceptionChannelDetail | null,
+): KFServicerAssignment[] => {
+  const pool = detail?.reception_pool;
+  return [
+    ...(pool?.user_ids || [])
+      .map((userid) => String(userid || "").trim())
+      .filter(Boolean)
+      .map((userid) => ({
+        userid,
+        raw_servicer_userid: userid,
+        display_fallback: userid,
+        resolution_status: "local_view",
+      })),
+    ...(pool?.department_ids || [])
+      .map((departmentID) => Number(departmentID || 0))
+      .filter((departmentID) => Number.isInteger(departmentID) && departmentID > 0)
+      .map((departmentID) => ({ department_id: departmentID })),
+  ];
+};
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));
+
 const isSameSelection = (
   left: DirectorySelectionItem[],
   right: DirectorySelectionItem[],
@@ -301,6 +325,9 @@ export default function ReceptionChannels() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedChannel, setSelectedChannel] =
     useState<ReceptionChannel | null>(null);
+  const [syncingChannelIDs, setSyncingChannelIDs] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [selectedChannelDetail, setSelectedChannelDetail] =
     useState<ReceptionChannelDetail | null>(null);
   const [servicerAssignments, setServicerAssignments] = useState<KFServicerAssignment[]>([]);
@@ -346,9 +373,15 @@ export default function ReceptionChannels() {
   const [isSavingFallbackRoute, setIsSavingFallbackRoute] = useState(false);
   const [isFallbackEditorOpen, setIsFallbackEditorOpen] = useState(false);
 
-  const loadChannels = async (query?: string) => {
+  const loadChannels = async (
+    query?: string,
+    options?: { showLoading?: boolean },
+  ) => {
+    const showLoading = options?.showLoading !== false && channels.length === 0;
     try {
-      setIsLoading(true);
+      if (showLoading) {
+        setIsLoading(true);
+      }
       const view = await getReceptionChannelsView({
         query: query || "",
         limit: 200,
@@ -358,7 +391,9 @@ export default function ReceptionChannels() {
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -399,17 +434,59 @@ export default function ReceptionChannels() {
       setIsSyncing(false);
       return;
     }
+    setSyncingChannelIDs((prev) => new Set(prev).add(target));
+    setChannels((prev) =>
+      prev.map((channel) =>
+        (channel.open_kfid || "").trim() === target
+          ? {
+              ...channel,
+              sync_status: "syncing",
+              pending_tasks: Math.max(1, Number(channel.pending_tasks || 0)),
+            }
+          : channel,
+      ),
+    );
     try {
-      const accepted = await triggerReceptionChannelSync(target);
-      setNotice(
-        accepted
-          ? "已提交接待渠道刷新任务。成员树和部门树如需更新，请前往“组织与设置”同步组织架构。"
-          : "接待渠道刷新任务未被接受",
+      const [result] = await Promise.all([
+        triggerReceptionChannelSync(target),
+        wait(420),
+      ]);
+      const syncStatus = (result?.sync_status || "success").trim();
+      const syncReason = (result?.sync_reason || "manual_sync_done").trim();
+      const syncedAt = (result?.synced_at || new Date().toISOString()).trim();
+      setChannels((prev) =>
+        prev.map((channel) =>
+          (channel.open_kfid || "").trim() === target
+            ? {
+                ...channel,
+                sync_status: syncStatus,
+                sync_reason: syncReason,
+                last_sync: syncedAt,
+                pending_tasks: 0,
+                failed_tasks: syncStatus === "success" ? 0 : channel.failed_tasks,
+              }
+            : channel,
+        ),
       );
-      await loadChannels(keyword);
+      setNotice("接待渠道已刷新，成员和部门树请在组织与设置中单独同步。");
+      await loadChannels(keyword, { showLoading: false });
+      if (
+        isDetailOpen &&
+        (selectedChannelDetail?.channel?.open_kfid || selectedChannel?.open_kfid || "").trim() ===
+          target
+      ) {
+        const detail = await getReceptionChannelDetail(target);
+        setSelectedChannelDetail(detail);
+        syncFallbackDraftFromDetail(detail, assignmentsFromDetailPool(detail));
+      }
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
     } finally {
+      setSyncingChannelIDs((prev) => {
+        const next = new Set(prev);
+        next.delete(target);
+        return next;
+      });
       setIsSyncing(false);
     }
   };
@@ -431,7 +508,7 @@ export default function ReceptionChannels() {
     try {
       const detail = await getReceptionChannelDetail(channel.open_kfid);
       setSelectedChannelDetail(detail);
-      const assignments = await listKFServicerAssignments(channel.open_kfid);
+      const assignments = assignmentsFromDetailPool(detail);
       setServicerAssignments(assignments);
       setSelectedServicerTargets(
         selectionItemsFromAssignments(assignments),
@@ -451,10 +528,8 @@ export default function ReceptionChannels() {
   const retrySync = async (openKFID: string) => {
     if (!openKFID) return;
     try {
-      const retried = await retryReceptionChannelSync(openKFID);
-      setNotice(
-        retried > 0 ? `已重试 ${retried} 个失败任务` : "没有需要重试的失败任务",
-      );
+      await retryReceptionChannelSync(openKFID);
+      setNotice("已提交重试请求，接待账号状态会从本地视图刷新");
       await loadChannels(keyword);
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
@@ -849,34 +924,56 @@ export default function ReceptionChannels() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const getEffectiveSyncStatus = (channel: ReceptionChannel): string => {
+    const openKFID = (channel.open_kfid || "").trim();
+    if (openKFID && syncingChannelIDs.has(openKFID)) return "syncing";
+    return (channel.sync_status || "").trim();
+  };
+
+  const getStatusBadge = (channel: ReceptionChannel) => {
+    const status = (channel.status || "").trim();
+    const syncStatus = getEffectiveSyncStatus(channel);
+    switch (syncStatus) {
+      case "syncing":
+      case "pending":
+        return (
+          <Badge className="min-w-[72px] justify-center bg-blue-50 text-blue-700 border-blue-200">
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            刷新中
+          </Badge>
+        );
+      case "stale":
+        return (
+          <Badge className="min-w-[72px] justify-center bg-orange-50 text-orange-700 border-orange-200">
+            待刷新
+          </Badge>
+        );
+      case "failed":
+      case "error":
+        return (
+          <Badge className="min-w-[72px] justify-center bg-red-50 text-red-700 border-red-200">
+            刷新失败
+          </Badge>
+        );
+      default:
+        break;
+    }
     switch (status) {
       case "active":
         return (
-          <Badge className="bg-green-50 text-green-700 border-green-200">
+          <Badge className="min-w-[72px] justify-center bg-green-50 text-green-700 border-green-200">
             正常
           </Badge>
         );
       case "error":
         return (
-          <Badge className="bg-red-50 text-red-700 border-red-200">异常</Badge>
-        );
-      case "syncing":
-      case "pending":
-        return (
-          <Badge className="bg-blue-50 text-blue-700 border-blue-200">
-            同步中
-          </Badge>
-        );
-      case "failed":
-        return (
-          <Badge className="bg-red-50 text-red-700 border-red-200">
-            同步失败
+          <Badge className="min-w-[72px] justify-center bg-red-50 text-red-700 border-red-200">
+            异常
           </Badge>
         );
       case "muted":
         return (
-          <Badge className="bg-gray-50 text-gray-700 border-gray-200">
+          <Badge className="min-w-[72px] justify-center bg-gray-50 text-gray-700 border-gray-200">
             停用
           </Badge>
         );
@@ -1136,12 +1233,29 @@ export default function ReceptionChannels() {
     }
   };
 
-  const openPoolEditor = () => {
-    setSelectedServicerTargets(
-      selectionItemsFromAssignments(servicerAssignments),
-    );
+  const openPoolEditor = async () => {
+    const openKFID = (
+      selectedChannelDetail?.channel?.open_kfid ||
+      selectedChannel?.open_kfid ||
+      ""
+    ).trim();
     setServicerUpsertResult(null);
     setPoolEditorNotice("");
+    if (!openKFID) {
+      setPoolEditorNotice("当前渠道缺少 Open KFID");
+      setIsPoolEditorOpen(true);
+      return;
+    }
+    try {
+      const assignments = await listKFServicerAssignments(openKFID);
+      setServicerAssignments(assignments);
+      setSelectedServicerTargets(selectionItemsFromAssignments(assignments));
+    } catch (error) {
+      setSelectedServicerTargets(
+        selectionItemsFromAssignments(servicerAssignments),
+      );
+      setPoolEditorNotice(normalizeErrorMessage(error));
+    }
     setIsPoolEditorOpen(true);
   };
 
@@ -1225,51 +1339,117 @@ export default function ReceptionChannels() {
     );
   };
 
+  const overviewStats = useMemo(() => {
+    const stats = {
+      total: channels.length,
+      active: 0,
+      abnormal: 0,
+      pending: 0,
+      syncing: 0,
+      stale: 0,
+      failed: 0,
+    };
+    channels.forEach((channel) => {
+      const status = (channel.status || "").trim();
+      const syncStatus = getEffectiveSyncStatus(channel);
+      if (status === "active") stats.active += 1;
+      if (syncStatus === "syncing" || syncStatus === "pending") {
+        stats.syncing += 1;
+      }
+      if (
+        syncStatus === "stale" ||
+        (!["syncing", "pending", "failed", "error"].includes(syncStatus) &&
+          !(channel.last_sync || "").trim())
+      ) {
+        stats.stale += 1;
+      }
+      if (syncStatus === "failed" || syncStatus === "error" || status === "error") {
+        stats.failed += 1;
+      }
+    });
+    stats.abnormal = stats.failed;
+    stats.pending = stats.syncing + stats.stale;
+    if (stats.total === 0 && overview) {
+      stats.total = Number(overview.total_channels || 0);
+      stats.active = Number(overview.active_channels || 0);
+      stats.abnormal = Number(overview.abnormal_channels || 0);
+      stats.pending = Number(overview.pending_sync || 0);
+    }
+    return stats;
+  }, [channels, overview, syncingChannelIDs]);
+
+  const overviewTipText = (code: string): string => {
+    switch ((code || "").trim()) {
+      case "empty_channels":
+        return "还没有客服账号，可以先创建一个接待渠道。";
+      case "has_abnormal_channels":
+        return "存在刷新失败或配置异常的渠道，建议优先打开详情处理。";
+      case "has_pending_sync":
+        return "存在待刷新或刷新中的渠道，完成后页面会自动更新。";
+      case "healthy":
+        return "接待渠道本地视图状态正常。";
+      default:
+        return code;
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="p-4 flex items-center gap-4 border-none shadow-sm">
+        <Card className="min-h-[104px] p-4 flex items-center gap-4 border-none shadow-sm">
           <div className="h-12 w-12 rounded-lg bg-blue-50 flex items-center justify-center">
             <LinkIcon className="h-6 w-6 text-blue-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm text-gray-500">渠道总数</p>
             <p className="text-2xl font-bold text-gray-900">
-              {overview?.total_channels ?? 0}
+              {overviewStats.total}
             </p>
+            <p className="mt-1 text-[11px] text-gray-400">本地物化视图</p>
           </div>
         </Card>
-        <Card className="p-4 flex items-center gap-4 border-none shadow-sm">
+        <Card className="min-h-[104px] p-4 flex items-center gap-4 border-none shadow-sm">
           <div className="h-12 w-12 rounded-lg bg-green-50 flex items-center justify-center">
             <CheckCircle2 className="h-6 w-6 text-green-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm text-gray-500">启用中</p>
             <p className="text-2xl font-bold text-gray-900">
-              {overview?.active_channels ?? 0}
+              {overviewStats.active}
             </p>
+            <p className="mt-1 text-[11px] text-gray-400">状态为 active</p>
           </div>
         </Card>
-        <Card className="p-4 flex items-center gap-4 border-none shadow-sm">
+        <Card className="min-h-[104px] p-4 flex items-center gap-4 border-none shadow-sm">
           <div className="h-12 w-12 rounded-lg bg-red-50 flex items-center justify-center">
             <AlertCircle className="h-6 w-6 text-red-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm text-gray-500">异常渠道</p>
             <p className="text-2xl font-bold text-gray-900">
-              {overview?.abnormal_channels ?? 0}
+              {overviewStats.abnormal}
+            </p>
+            <p className="mt-1 text-[11px] text-gray-400">
+              刷新失败 {overviewStats.failed}
             </p>
           </div>
         </Card>
-        <Card className="p-4 flex items-center gap-4 border-none shadow-sm">
+        <Card className="min-h-[104px] p-4 flex items-center gap-4 border-none shadow-sm">
           <div className="h-12 w-12 rounded-lg bg-orange-50 flex items-center justify-center">
-            <RefreshCw className="h-6 w-6 text-orange-600" />
+            <RefreshCw
+              className={`h-6 w-6 text-orange-600 ${
+                overviewStats.syncing > 0 ? "animate-spin" : ""
+              }`}
+            />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm text-gray-500">待同步</p>
             <p className="text-2xl font-bold text-gray-900">
-              {overview?.pending_sync ?? 0}
+              {overviewStats.pending}
+            </p>
+            <p className="mt-1 text-[11px] text-gray-400">
+              进行中 {overviewStats.syncing} / 待刷新 {overviewStats.stale}
             </p>
           </div>
         </Card>
@@ -1286,7 +1466,7 @@ export default function ReceptionChannels() {
               </span>
             ) : null}
             {(overview?.tips || []).map((tip) => (
-              <span key={tip}>提示：{tip}</span>
+              <span key={tip}>提示：{overviewTipText(tip)}</span>
             ))}
           </div>
         </Card>
@@ -1373,7 +1553,11 @@ export default function ReceptionChannels() {
                 ? channels.map((channel) => (
                     <tr
                       key={channel.open_kfid || channel.name}
-                      className="hover:bg-gray-50 transition-colors group"
+                      className={`hover:bg-gray-50 transition-colors group ${
+                        getEffectiveSyncStatus(channel) === "syncing"
+                          ? "bg-blue-50/40"
+                          : ""
+                      }`}
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -1391,6 +1575,9 @@ export default function ReceptionChannels() {
                           <span className="font-medium text-gray-900">
                             {getDisplayName(channel)}
                           </span>
+                          {getEffectiveSyncStatus(channel) === "syncing" ? (
+                            <span className="inline-flex h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                          ) : null}
                         </div>
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-gray-500">
@@ -1405,7 +1592,7 @@ export default function ReceptionChannels() {
                         </Badge>
                       </td>
                       <td className="px-6 py-4">
-                        {getStatusBadge(channel.status || "")}
+                        {getStatusBadge(channel)}
                       </td>
                       <td className="px-6 py-4">
                         <div className="space-y-0.5">
@@ -1550,7 +1737,7 @@ export default function ReceptionChannels() {
                     </p>
                   </div>
                   <div className="ml-auto">
-                    {getStatusBadge(detailChannel.status || "")}
+                    {getStatusBadge(detailChannel)}
                   </div>
                 </div>
               );
@@ -1648,10 +1835,10 @@ export default function ReceptionChannels() {
                   </div>
                 </div>
                 <div className="rounded border border-gray-100 bg-gray-50 px-3 py-2">
-                  <div className="text-[10px] text-gray-500">近7天总命中</div>
+                  <div className="text-[10px] text-gray-500">累计命中</div>
                   <div className="text-xs font-semibold text-gray-800">
                     {Number(
-                      selectedChannelDetail?.routing_summary?.total_hits_7d ||
+                      selectedChannelDetail?.routing_summary?.total_hits ||
                         0,
                     ).toLocaleString("zh-CN")}
                   </div>

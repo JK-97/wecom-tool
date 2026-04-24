@@ -2,17 +2,20 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
+import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import { normalizeErrorMessage } from "@/services/http";
 import {
+  openWecomKfConversation,
   resolveSidebarRuntimeContext,
   sendTextToCurrentSession,
   toJSSDKErrorMessage,
 } from "@/services/jssdkService";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import {
-  openCommandCenterRealtimeSocket,
+  openRealtimeUpdatesSocket,
+  type CommandCenterRealtimeEvent,
   type CommandCenterRealtimeEnvelope,
 } from "@/services/commandCenterService";
 import {
@@ -25,33 +28,41 @@ import {
 } from "@/services/toolbarService";
 import {
   sidebarBody,
-  sidebarHeader,
-  sidebarMeta,
   sidebarNotice,
   sidebarPageShell,
   sidebarSectionLabel,
-  sidebarTitle,
 } from "./sidebarChrome";
 import { ToolbarDebugView } from "./ToolbarDebugView";
+import {
+  getKFToolbarRPAOperatorBinding,
+  saveKFToolbarRPAOperatorBinding,
+  updateKFToolbarRPAAutomationMode,
+  type ToolbarRPAOperatorBindingSnapshot,
+  type ToolbarRPAAutomationState,
+  type ToolbarRPABootstrap,
+} from "@/services/rpaToolbarService";
 import { listReceptionChannels } from "@/services/receptionService";
 import { getOrganizationSettingsView } from "@/services/organizationSettingsService";
 import {
-  ArrowUpRight,
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
   Bug,
   Bot,
   CheckCircle2,
-  GitBranch,
-  ChevronRight,
   Clock,
-  Copy,
   Lightbulb,
+  Loader2,
   MessageSquareText,
   RefreshCcw,
   Send,
+  ShieldCheck,
   Sparkles,
+  Tags,
   UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ToolbarRPAMode } from "./ToolbarRPAMode";
 
 type NormalizedSuggestion = {
   id: string;
@@ -63,6 +74,25 @@ type NormalizedSuggestion = {
   reason: string;
   source: string;
 };
+
+type ToolbarBootstrapFetchResult = {
+  data?: KFToolbarBootstrap | null;
+};
+
+function mergeToolbarHeader(
+  prev?: KFToolbarBootstrap["header"] | null,
+  next?: KFToolbarBootstrap["header"] | null,
+): KFToolbarBootstrap["header"] | undefined {
+  if (!prev && !next) return undefined;
+  return {
+    session_status_id: next?.session_status_id ?? prev?.session_status_id,
+    session_status_code: next?.session_status_code || prev?.session_status_code,
+    contact_name: next?.contact_name || prev?.contact_name,
+    risk_tags: Array.from(
+      new Set([...(prev?.risk_tags || []), ...(next?.risk_tags || [])].filter(Boolean)),
+    ),
+  };
+}
 
 type ToolbarConversationMessage = NonNullable<
   NonNullable<KFToolbarBootstrap["conversation"]>["messages"]
@@ -90,7 +120,7 @@ function normalizeSuggestion(
     displayMode:
       (item.display_mode || "").trim() ||
       (safeSentences.length > 1 ? "threaded" : "single"),
-    nextStepLabel: (item.next_step_label || "").trim() || "继续填入下一句",
+    nextStepLabel: "继续填入下一句",
     reason: (item.reason || "").trim(),
     source: (item.source || "").trim(),
   };
@@ -106,22 +136,98 @@ function ToolbarSkeleton() {
   );
 }
 
-function shouldRefreshToolbarSession(
-  payload: CommandCenterRealtimeEnvelope,
+function parseRealtimeEventPayload(
+  event?: CommandCenterRealtimeEvent,
+): Record<string, unknown> {
+  const raw = (event?.payload_json || "").trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readRealtimeEventString(
+  event: CommandCenterRealtimeEvent,
+  key: string,
+): string {
+  const payload = parseRealtimeEventPayload(event);
+  const value = payload[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function realtimeEventExternalUserID(
+  event: CommandCenterRealtimeEvent,
+): string {
+  return (
+    event.external_userid ||
+    readRealtimeEventString(event, "external_userid") ||
+    readRealtimeEventString(event, "external_user_id") ||
+    ""
+  ).trim();
+}
+
+function realtimeEventOpenKFID(event: CommandCenterRealtimeEvent): string {
+  return (
+    event.open_kfid ||
+    readRealtimeEventString(event, "open_kfid") ||
+    readRealtimeEventString(event, "openKfid") ||
+    ""
+  ).trim();
+}
+
+function realtimeEventType(event: CommandCenterRealtimeEvent): string {
+  return (
+    event.event_type ||
+    readRealtimeEventString(event, "event_type") ||
+    readRealtimeEventString(event, "eventType") ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function matchesToolbarRealtimeSession(
+  event: CommandCenterRealtimeEvent,
   openKFID: string,
   externalUserID: string,
 ): boolean {
   const targetOpenKFID = openKFID.trim();
   const targetExternalUserID = externalUserID.trim();
   if (!targetOpenKFID || !targetExternalUserID) return false;
-  return (payload.events || []).some((event) => {
-    const eventExternalUserID = (event.external_userid || "").trim();
-    const eventOpenKFID = (event.open_kfid || "").trim();
-    if (!eventExternalUserID || eventExternalUserID !== targetExternalUserID)
-      return false;
-    if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
-    return true;
-  });
+  return (
+    realtimeEventExternalUserID(event) === targetExternalUserID &&
+    realtimeEventOpenKFID(event) === targetOpenKFID
+  );
+}
+
+function isToolbarSuggestionRealtimeEvent(eventType: string): boolean {
+  return (
+    eventType.startsWith("chat.message.") ||
+    eventType === "chat.session_state.changed"
+  );
+}
+
+function isToolbarAnalysisRealtimeEvent(eventType: string): boolean {
+  return (
+    eventType.startsWith("chat.session_analysis.") ||
+    eventType.startsWith("chat.message.") ||
+    eventType === "chat.session_state.changed"
+  );
+}
+
+function shouldRefreshToolbarSession(
+  payload: CommandCenterRealtimeEnvelope,
+  openKFID: string,
+  externalUserID: string,
+): boolean {
+  return (payload.events || []).some((event) =>
+    matchesToolbarRealtimeSession(event, openKFID, externalUserID),
+  );
 }
 
 function formatToolbarSelectionTime(value?: string): string {
@@ -142,6 +248,212 @@ function buildToolbarSessionKey(input?: {
   if (input?.selection_required) return `selection::${externalUserID}`;
   if (!openKFID || !externalUserID) return "";
   return `${openKFID}\u001f${externalUserID}`;
+}
+
+const MANUAL_SELECTION_HANDOFF_STORAGE_KEY =
+  "wecom-toolbar-manual-selection-handoff-v1";
+const MANUAL_SELECTION_HANDOFF_TTL_MS = 45_000;
+const AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY =
+  "wecom-toolbar-rpa-automation-handoff-v1";
+const AUTOMATION_NAVIGATION_HANDOFF_TTL_MS = 60_000;
+
+type ManualSelectionHandoff = {
+  open_kfid?: string;
+  external_userid?: string;
+  source?: "manual_selection" | string;
+  selected_at?: string;
+  expires_at?: number;
+};
+
+type AutomationNavigationHandoff = {
+  run_id?: string;
+  open_kfid?: string;
+  external_userid?: string;
+  source?: "automation_dispatch" | string;
+  selected_at?: string;
+  expires_at?: number;
+};
+
+function readManualSelectionHandoff(): ManualSelectionHandoff | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw =
+      window.sessionStorage.getItem(MANUAL_SELECTION_HANDOFF_STORAGE_KEY) ||
+      window.localStorage.getItem(MANUAL_SELECTION_HANDOFF_STORAGE_KEY) ||
+      "";
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ManualSelectionHandoff;
+    if (!parsed || typeof parsed !== "object") return null;
+    const expiresAt = Number(parsed.expires_at || 0);
+    if (expiresAt > 0 && Date.now() > expiresAt) {
+      clearManualSelectionHandoff();
+      return null;
+    }
+    if ((parsed.source || "").trim() !== "manual_selection") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearManualSelectionHandoff(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(MANUAL_SELECTION_HANDOFF_STORAGE_KEY);
+  } catch {
+    // Best effort only.
+  }
+  try {
+    window.localStorage.removeItem(MANUAL_SELECTION_HANDOFF_STORAGE_KEY);
+  } catch {
+    // Best effort only.
+  }
+}
+
+function readAutomationNavigationHandoff(): AutomationNavigationHandoff | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw =
+      window.sessionStorage.getItem(
+        AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY,
+      ) ||
+      window.localStorage.getItem(AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY) ||
+      "";
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AutomationNavigationHandoff;
+    if (!parsed || typeof parsed !== "object") return null;
+    const expiresAt = Number(parsed.expires_at || 0);
+    if (expiresAt > 0 && Date.now() > expiresAt) {
+      clearAutomationNavigationHandoff();
+      return null;
+    }
+    if ((parsed.source || "").trim() !== "automation_dispatch") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearAutomationNavigationHandoff(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY);
+  } catch {
+    // Best effort only.
+  }
+  try {
+    window.localStorage.removeItem(AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY);
+  } catch {
+    // Best effort only.
+  }
+}
+
+function writeManualSelectionHandoff(input?: {
+  open_kfid?: string;
+  external_userid?: string;
+}): void {
+  if (typeof window === "undefined") return;
+  const openKFID = (input?.open_kfid || "").trim();
+  const externalUserID = (input?.external_userid || "").trim();
+  if (!openKFID || !externalUserID) return;
+  const payload: ManualSelectionHandoff = {
+    open_kfid: openKFID,
+    external_userid: externalUserID,
+    source: "manual_selection",
+    selected_at: new Date().toISOString(),
+    expires_at: Date.now() + MANUAL_SELECTION_HANDOFF_TTL_MS,
+  };
+  try {
+    const raw = JSON.stringify(payload);
+    window.sessionStorage.setItem(MANUAL_SELECTION_HANDOFF_STORAGE_KEY, raw);
+    window.localStorage.setItem(MANUAL_SELECTION_HANDOFF_STORAGE_KEY, raw);
+  } catch {
+    // Best effort only.
+  }
+}
+
+function consumeManualSelectionHandoff(
+  externalUserID?: string,
+): ManualSelectionHandoff | null {
+  const handoff = readManualSelectionHandoff();
+  if (!handoff) return null;
+  const handoffExternalUserID = (handoff.external_userid || "").trim();
+  if (!handoffExternalUserID) {
+    clearManualSelectionHandoff();
+    return null;
+  }
+  if (
+    (externalUserID || "").trim() &&
+    handoffExternalUserID !== (externalUserID || "").trim()
+  ) {
+    return null;
+  }
+  clearManualSelectionHandoff();
+  return handoff;
+}
+
+function consumeAutomationNavigationHandoff(input?: {
+  run_id?: string;
+  external_userid?: string;
+}): AutomationNavigationHandoff | null {
+  const handoff = readAutomationNavigationHandoff();
+  if (!handoff) return null;
+  const handoffExternalUserID = (handoff.external_userid || "").trim();
+  const handoffRunID = (handoff.run_id || "").trim();
+  if (!handoffExternalUserID) {
+    clearAutomationNavigationHandoff();
+    return null;
+  }
+  const expectedExternalUserID = (input?.external_userid || "").trim();
+  if (
+    expectedExternalUserID &&
+    handoffExternalUserID !== expectedExternalUserID
+  ) {
+    return null;
+  }
+  const expectedRunID = (input?.run_id || "").trim();
+  if (expectedRunID && handoffRunID && handoffRunID !== expectedRunID) {
+    return null;
+  }
+  clearAutomationNavigationHandoff();
+  return handoff;
+}
+
+function readInitialToolbarQuery() {
+  if (typeof window === "undefined") {
+    return {
+      entry: "single_kf_tools",
+      open_kfid: "",
+      external_userid: "",
+      rpa_run_id: "",
+      toolbar_mode: "",
+    };
+  }
+  const manualHandoff = consumeManualSelectionHandoff();
+  const automationHandoff = !manualHandoff
+    ? consumeAutomationNavigationHandoff()
+    : null;
+  return {
+    entry: "single_kf_tools",
+    open_kfid: (
+      manualHandoff?.open_kfid ||
+      automationHandoff?.open_kfid ||
+      ""
+    ).trim(),
+    external_userid: (
+      manualHandoff?.external_userid ||
+      automationHandoff?.external_userid ||
+      ""
+    ).trim(),
+    rpa_run_id: (automationHandoff?.run_id || "").trim(),
+    toolbar_mode: automationHandoff ? "rpa" : "",
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function sanitizeToolbarNotice(error: unknown): string {
@@ -172,12 +484,127 @@ function compactToolbarFacts(items?: string[], limit = 3): string[] {
   return next.slice(0, limit);
 }
 
+function toolbarSessionStatusLabel(raw?: string, statusID?: number): string {
+  const value = (raw || "").trim().toLowerCase();
+  switch (value) {
+    case "selection_required":
+      return "待选择会话";
+    case "unassigned":
+      return "未处理";
+    case "assistant":
+      return "AI 接待中";
+    case "queueing":
+      return "排队中";
+    case "human":
+      return "人工辅助中";
+    case "closed":
+      return "已结束";
+    case "unknown":
+      return "会话中";
+    default:
+      break;
+  }
+  switch (statusID) {
+    case -1:
+      return "待选择会话";
+    case 0:
+      return "未处理";
+    case 1:
+      return "AI 接待中";
+    case 2:
+      return "排队中";
+    case 3:
+      return "人工辅助中";
+    case 4:
+      return "已结束";
+    default:
+      return raw && /[\u4e00-\u9fa5]/.test(raw) ? raw : "会话中";
+  }
+}
+
+function toolbarRiskTagLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "high_risk":
+      return "高风险";
+    case "attention_required":
+      return "需关注";
+    case "high_intent":
+      return "高意向";
+    case "pending_upgrade":
+      return "待升级";
+    case "price_sensitive":
+      return "价格敏感";
+    case "complaint_risk":
+      return "投诉风险";
+    case "executive_attention_required":
+      return "需高管介入";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function toolbarJourneyStageLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "discovery":
+      return "初步了解";
+    case "evaluation":
+      return "意向沟通中";
+    case "purchase":
+      return "准备下单";
+    case "fulfillment":
+      return "履约跟进";
+    case "after_sales":
+      return "售后处理中";
+    case "complaint":
+      return "投诉处理";
+    case "unknown":
+      return "阶段未知";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function toolbarOpportunityLevelLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "none":
+      return "无明显机会";
+    case "low":
+      return "低意向机会";
+    case "medium":
+      return "中意向机会";
+    case "high":
+      return "高意向潜力";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function toolbarProfileTagLabel(raw?: string): string {
+  const value = (raw || "").trim();
+  if (value.startsWith("journey_")) {
+    return toolbarJourneyStageLabel(value.slice("journey_".length));
+  }
+  if (value.startsWith("opportunity_")) {
+    return toolbarOpportunityLevelLabel(value.slice("opportunity_".length));
+  }
+  return toolbarRiskTagLabel(value);
+}
+
 function normalizeToolbarSummaryStatus(raw?: string): string {
   const value = (raw || "").trim().toLowerCase();
   if (!value) return "pending";
   if (["succeeded", "success", "completed"].includes(value)) return "ready";
   if (value === "processing") return "running";
-  if (["selection_required", "running", "queued", "failed", "ready", "pending"].includes(value)) {
+  if (
+    [
+      "selection_required",
+      "running",
+      "queued",
+      "failed",
+      "ready",
+      "pending",
+    ].includes(value)
+  ) {
     return value;
   }
   return value;
@@ -214,7 +641,9 @@ function normalizeToolbarSuggestionStatus(raw?: string): string {
   return "idle";
 }
 
-function toolbarBatchTimeValue(batch?: KFToolbarSuggestionBatch | null): number {
+function toolbarBatchTimeValue(
+  batch?: KFToolbarSuggestionBatch | null,
+): number {
   const raw = (batch?.updated_at || batch?.generated_at || "").trim();
   if (!raw) return 0;
   const value = Date.parse(raw);
@@ -244,6 +673,15 @@ function mergeToolbarSuggestionBatch(
     (nextStatus === "ready" || nextStatus === "failed") &&
     prevStatus !== nextStatus
   ) {
+    if (
+      (prevStatus === "queued" || prevStatus === "running") &&
+      nextStatus === "ready" &&
+      prevTime > 0 &&
+      nextTime > 0 &&
+      nextTime < prevTime
+    ) {
+      return prev;
+    }
     return next;
   }
   if (nextItemsCount > 0 && prevItemsCount === 0) {
@@ -276,20 +714,10 @@ function shouldRefreshToolbarSuggestions(
   openKFID: string,
   externalUserID: string,
 ): boolean {
-  const targetOpenKFID = openKFID.trim();
-  const targetExternalUserID = externalUserID.trim();
-  if (!targetOpenKFID || !targetExternalUserID) return false;
   return (payload.events || []).some((event) => {
-    const eventExternalUserID = (event.external_userid || "").trim();
-    const eventOpenKFID = (event.open_kfid || "").trim();
-    const eventType = (event.event_type || "").trim().toLowerCase();
-    if (!eventExternalUserID || eventExternalUserID !== targetExternalUserID)
+    if (!matchesToolbarRealtimeSession(event, openKFID, externalUserID))
       return false;
-    if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
-    return (
-      eventType === "chat.message.received" ||
-      eventType === "chat.session_state.changed"
-    );
+    return isToolbarSuggestionRealtimeEvent(realtimeEventType(event));
   });
 }
 
@@ -298,23 +726,58 @@ function shouldRefreshToolbarAnalysis(
   openKFID: string,
   externalUserID: string,
 ): boolean {
+  return (payload.events || []).some((event) => {
+    if (!matchesToolbarRealtimeSession(event, openKFID, externalUserID))
+      return false;
+    return isToolbarAnalysisRealtimeEvent(realtimeEventType(event));
+  });
+}
+
+function shouldRefreshToolbarImmediately(eventTypes: string[]): boolean {
+  return eventTypes.some(
+    (eventType) =>
+      isToolbarAnalysisRealtimeEvent(eventType) ||
+      isToolbarSuggestionRealtimeEvent(eventType),
+  );
+}
+
+function matchingToolbarEventTypes(
+  payload: CommandCenterRealtimeEnvelope,
+  openKFID: string,
+  externalUserID: string,
+): string[] {
   const targetOpenKFID = openKFID.trim();
   const targetExternalUserID = externalUserID.trim();
-  if (!targetOpenKFID || !targetExternalUserID) return false;
-  return (payload.events || []).some((event) => {
-    const eventExternalUserID = (event.external_userid || "").trim();
-    const eventOpenKFID = (event.open_kfid || "").trim();
-    const eventType = (event.event_type || "").trim().toLowerCase();
-    if (!eventExternalUserID || eventExternalUserID !== targetExternalUserID)
-      return false;
-    if (!eventOpenKFID || eventOpenKFID !== targetOpenKFID) return false;
-    return (
-      eventType === "chat.message.received" ||
-      eventType === "chat.session_state.changed" ||
-      eventType === "chat.session_analysis.updated" ||
-      eventType === "chat.session_analysis.state_changed"
-    );
-  });
+  if (!targetOpenKFID || !targetExternalUserID) return [];
+  return (payload.events || [])
+    .filter((event) =>
+      matchesToolbarRealtimeSession(event, targetOpenKFID, targetExternalUserID),
+    )
+    .map((event) => realtimeEventType(event))
+    .filter(Boolean);
+}
+
+function buildRealtimeEnvelopeSignature(
+  payload: CommandCenterRealtimeEnvelope,
+  openKFID: string,
+  externalUserID: string,
+): string {
+  const eventKeys = (payload.events || [])
+    .filter((event) =>
+      matchesToolbarRealtimeSession(event, openKFID, externalUserID),
+    )
+    .map((event) =>
+      [
+        (event.event_id || "").trim(),
+        Number(event.cursor || 0),
+        realtimeEventType(event),
+      ].join(":"),
+    )
+    .filter(Boolean)
+    .sort();
+  const latestCursor = Number(payload.latest_cursor || 0);
+  if (eventKeys.length === 0 && latestCursor <= 0) return "";
+  return `${latestCursor}\u001f${eventKeys.join("|")}`;
 }
 
 function formatToolbarMessageTime(value?: string): string {
@@ -331,11 +794,9 @@ function formatToolbarMessageTime(value?: string): string {
   });
 }
 
-function resolveToolbarMessageRole(message?: ToolbarConversationMessage | null):
-  | "assistant"
-  | "staff"
-  | "customer"
-  | "system" {
+function resolveToolbarMessageRole(
+  message?: ToolbarConversationMessage | null,
+): "assistant" | "staff" | "customer" | "system" {
   const sender = (message?.sender || "").trim().toLowerCase();
   if (sender === "assistant") return "assistant";
   if (sender === "staff") return "staff";
@@ -357,7 +818,7 @@ function summarizeToolbarStatusCopy(input?: {
     return {
       badgeText: "待更新",
       badgeVariant: "warning",
-      helperText: "检测到会话有新变化，AI 正在等待本轮消息窗口收齐。",
+      helperText: "检测到新的客户消息，AI 正在准备本轮分析与回复建议。",
     };
   }
   if (summaryStatus === "running") {
@@ -379,19 +840,22 @@ function summarizeToolbarStatusCopy(input?: {
       return {
         badgeText: "待建模",
         badgeVariant: "secondary",
-        helperText: "当前会话仍处于未处理状态，建议等待客户表达更多信息后再形成稳定判断。",
+        helperText:
+          "当前会话仍处于未处理状态，建议等待客户表达更多信息后再形成稳定判断。",
       };
     case 1:
       return {
         badgeText: "助手监测中",
         badgeVariant: "success",
-        helperText: "智能助手接待中，分析重点放在客户目标、风险信号和接手前上下文准备。",
+        helperText:
+          "智能助手接待中，分析重点放在客户目标、风险信号和接手前上下文准备。",
       };
     case 2:
       return {
         badgeText: "待人工接手",
         badgeVariant: "warning",
-        helperText: "会话在待接入池排队中，当前分析更偏向接手摘要和优先级判断。",
+        helperText:
+          "会话在待接入池排队中，当前分析更偏向接手摘要和优先级判断。",
       };
     case 3:
       return {
@@ -415,37 +879,47 @@ function summarizeToolbarStatusCopy(input?: {
 }
 
 export default function CSSidebar() {
-  const query = useMemo(() => {
-    if (typeof window === "undefined")
-      return { entry: "single_kf_tools", open_kfid: "", external_userid: "" };
-    const params = new URLSearchParams(window.location.search);
-    return {
-      entry: (params.get("entry") || "single_kf_tools").trim(),
-      open_kfid: (params.get("open_kfid") || "").trim(),
-      external_userid: (params.get("external_userid") || "").trim(),
-    };
-  }, []);
+  const query = useMemo(() => readInitialToolbarQuery(), []);
   const shouldResolveRuntimeContext =
     (query.entry || "").trim() === "single_kf_tools" &&
-    !(query.external_userid || "").trim();
+    (!(query.external_userid || "").trim() || !(query.open_kfid || "").trim());
 
   const [bootstrap, setBootstrap] = useState<KFToolbarBootstrap | null>(null);
   const [notice, setNotice] = useState("");
   const [suggestionNotice, setSuggestionNotice] = useState("");
   const [conversationNotice, setConversationNotice] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [rpaBootstrap, setRPABootstrap] = useState<ToolbarRPABootstrap | null>(
+    null,
+  );
+  const [rpaAutomation, setRPAAutomation] =
+    useState<ToolbarRPAAutomationState | null>(null);
+  const [rpaOperatorBinding, setRPAOperatorBinding] =
+    useState<ToolbarRPAOperatorBindingSnapshot | null>(null);
+  const [rpaClientIDDraft, setRPAClientIDDraft] = useState("");
+  const [rpaBindingNotice, setRPABindingNotice] = useState("");
+  const [isLoadingRPABinding, setIsLoadingRPABinding] = useState(false);
+  const [isSavingRPABinding, setIsSavingRPABinding] = useState(false);
+  const [isUpdatingAutomationMode, setIsUpdatingAutomationMode] =
+    useState(false);
+  const [isRPABindingModalOpen, setIsRPABindingModalOpen] = useState(false);
+  const [pendingEnableAutoMode, setPendingEnableAutoMode] = useState(false);
   const [isResolvingContext, setIsResolvingContext] = useState(
     shouldResolveRuntimeContext,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
-  const [isRefreshingConversation, setIsRefreshingConversation] = useState(false);
+  const [isRefreshingConversation, setIsRefreshingConversation] =
+    useState(false);
+  const [isChatHistoryOpen, setIsChatHistoryOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"main" | "debug">("main");
   const [isToolbarDebugEnabled, setIsToolbarDebugEnabled] = useState(false);
-  const [isLoadingToolbarDebugConfig, setIsLoadingToolbarDebugConfig] = useState(true);
+  const [isLoadingToolbarDebugConfig, setIsLoadingToolbarDebugConfig] =
+    useState(true);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isUpgraded, setIsUpgraded] = useState(false);
+  const [selectingSessionKey, setSelectingSessionKey] = useState("");
   const [upgradeOwner, setUpgradeOwner] = useState("销售 A");
   const [upgradeIntent, setUpgradeIntent] = useState("高");
   const [upgradeNote, setUpgradeNote] = useState("");
@@ -454,10 +928,19 @@ export default function CSSidebar() {
     Record<string, string>
   >({});
   const refreshTimerRef = useRef<number | null>(null);
-  const suggestionProbeTimerRef = useRef<number | null>(null);
+  const bootstrapProbeTimerRef = useRef<number | null>(null);
+  const toolbarNoticeTimerRef = useRef<number | null>(null);
   const suggestionNoticeTimerRef = useRef<number | null>(null);
   const conversationNoticeTimerRef = useRef<number | null>(null);
-  const realtimeVersionRef = useRef(0);
+  const bootstrapFetchRef = useRef<{
+    key: string;
+    promise: Promise<ToolbarBootstrapFetchResult>;
+  } | null>(null);
+  const bootstrapApplyKeyRef = useRef("");
+  const realtimeCursorRef = useRef(0);
+  const realtimeEnvelopeRef = useRef<{ signature: string; at: number } | null>(
+    null,
+  );
   const bootstrapSessionKeyRef = useRef("");
   const suggestionRequestSeqRef = useRef(0);
   const conversationScrollRef = useRef<HTMLDivElement | null>(null);
@@ -477,6 +960,19 @@ export default function CSSidebar() {
       conversationNoticeTimerRef.current = null;
     }
     setConversationNotice("");
+  };
+
+  const pushToolbarNotice = (message: string) => {
+    const next = message.trim();
+    if (!next) return;
+    if (toolbarNoticeTimerRef.current !== null) {
+      window.clearTimeout(toolbarNoticeTimerRef.current);
+    }
+    setNotice(next);
+    toolbarNoticeTimerRef.current = window.setTimeout(() => {
+      toolbarNoticeTimerRef.current = null;
+      setNotice("");
+    }, 2800);
   };
 
   const pushSuggestionNotice = (message: string) => {
@@ -505,12 +1001,57 @@ export default function CSSidebar() {
     }, 2800);
   };
 
+  const fetchToolbarBootstrap = async (input: {
+    entry: string;
+    openKFID: string;
+    externalUserID: string;
+    light: boolean;
+  }): Promise<ToolbarBootstrapFetchResult> => {
+    const key = [
+      input.entry,
+      input.openKFID,
+      input.externalUserID,
+      input.light ? "light" : "full",
+    ].join("\u001f");
+    if (bootstrapFetchRef.current?.key === key) {
+      return bootstrapFetchRef.current.promise;
+    }
+    const promise = (async () => {
+      const data = await getKFToolbarBootstrap({
+        entry: input.entry,
+        open_kfid: input.openKFID,
+        external_userid: input.externalUserID,
+        light: input.light,
+        expect_rpa: false,
+      });
+      return { data };
+    })();
+    bootstrapFetchRef.current = { key, promise };
+    try {
+      return await promise;
+    } finally {
+      if (bootstrapFetchRef.current?.promise === promise) {
+        bootstrapFetchRef.current = null;
+      }
+    }
+  };
+
   useEffect(() => {
-    setSessionLocator(query);
+    setSessionLocator({
+      ...query,
+      open_kfid: (query.open_kfid || "").trim(),
+      external_userid: (query.external_userid || "").trim(),
+    });
   }, [query]);
 
   useEffect(() => {
     return () => {
+      if (bootstrapProbeTimerRef.current !== null) {
+        window.clearTimeout(bootstrapProbeTimerRef.current);
+      }
+      if (toolbarNoticeTimerRef.current !== null) {
+        window.clearTimeout(toolbarNoticeTimerRef.current);
+      }
       if (suggestionNoticeTimerRef.current !== null) {
         window.clearTimeout(suggestionNoticeTimerRef.current);
       }
@@ -519,6 +1060,38 @@ export default function CSSidebar() {
       }
     };
   }, []);
+
+  const loadRPAOperatorBinding = async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsLoadingRPABinding(true);
+    }
+    try {
+      const snapshot = await getKFToolbarRPAOperatorBinding();
+      setRPAOperatorBinding(snapshot);
+      setRPAAutomation(snapshot?.automation || null);
+      setRPAClientIDDraft((prev) => {
+        if ((prev || "").trim()) return prev;
+        return (snapshot?.binding?.rpa_client_id || "").trim();
+      });
+      return snapshot;
+    } catch (error) {
+      if (!options?.silent) {
+        setRPABindingNotice(
+          normalizeErrorMessage(error) || "读取 RPA 识别码绑定失败，请稍后再试",
+        );
+      }
+      return null;
+    } finally {
+      if (!options?.silent) {
+        setIsLoadingRPABinding(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isResolvingContext) return;
+    void loadRPAOperatorBinding();
+  }, [isResolvingContext]);
 
   useEffect(() => {
     let alive = true;
@@ -534,6 +1107,7 @@ export default function CSSidebar() {
         const runtimeExternalUserID = (runtime.external_userid || "").trim();
         const runtimeEntry = (runtime.entry || "").trim();
         setSessionLocator((prev) => ({
+          ...prev,
           entry: runtimeEntry || prev.entry || query.entry,
           open_kfid: prev.open_kfid || query.open_kfid,
           external_userid:
@@ -671,7 +1245,10 @@ export default function CSSidebar() {
         reason: (input?.reason || "bootstrap").trim(),
       });
       if (suggestionRequestSeqRef.current !== requestSeq) return false;
-      const nextBatch: KFToolbarSuggestionBatch = batch || { batch_id: "", items: [] };
+      const nextBatch: KFToolbarSuggestionBatch = batch || {
+        batch_id: "",
+        items: [],
+      };
       setBootstrap((prev) => {
         if (!prev) return prev;
         const prevSessionKey = buildToolbarSessionKey({
@@ -723,6 +1300,7 @@ export default function CSSidebar() {
     preserveNotice?: boolean;
     silent?: boolean;
     preserveConversation?: boolean;
+    light?: boolean;
   }): Promise<boolean> => {
     const entry = (
       sessionLocator.entry ||
@@ -737,6 +1315,7 @@ export default function CSSidebar() {
     ).trim();
     if (!externalUserID) {
       setBootstrap(null);
+      setRPABootstrap(null);
       setIsLoading(false);
       if (!options?.preserveNotice) {
         setNotice(
@@ -748,21 +1327,42 @@ export default function CSSidebar() {
     if (!options?.silent) {
       setIsLoading(true);
     }
+    const applyKey = [entry, openKFID, externalUserID].join("\u001f");
+    bootstrapApplyKeyRef.current = applyKey;
     try {
-      const data = await getKFToolbarBootstrap({
+      const fetched = await fetchToolbarBootstrap({
         entry,
-        open_kfid: openKFID,
-        external_userid: externalUserID,
+        openKFID,
+        externalUserID,
+        light: options?.light === true,
       });
+      if (applyKey !== bootstrapApplyKeyRef.current) {
+        return false;
+      }
+      const nextRPA = fetched.data?.rpa || null;
+      if (nextRPA?.automation) {
+        setRPAAutomation(nextRPA.automation || null);
+      }
+      if ((nextRPA?.mode || "").trim() === "rpa" && nextRPA?.enabled) {
+        setRPABootstrap(nextRPA);
+        setBootstrap(null);
+        setNotice("");
+        return true;
+      }
+      setRPABootstrap(null);
+      const data = fetched.data;
+      if (!data) {
+        return false;
+      }
       const nextSessionKey = buildToolbarSessionKey({
         open_kfid: data?.open_kfid,
         external_userid: data?.external_userid,
         selection_required: data?.selection?.required,
       });
-      const sessionChanged =
-        nextSessionKey !== bootstrapSessionKeyRef.current;
+      const sessionChanged = nextSessionKey !== bootstrapSessionKeyRef.current;
       bootstrapSessionKeyRef.current = nextSessionKey;
-      let mergedSummary: KFToolbarBootstrap["summary"] | undefined = data?.summary;
+      let mergedSummary: KFToolbarBootstrap["summary"] | undefined =
+        data?.summary;
       setBootstrap((prev) => {
         if (!data) return null;
         mergedSummary =
@@ -771,6 +1371,10 @@ export default function CSSidebar() {
             : data.summary;
         return {
           ...data,
+          header:
+            options?.light && prev?.header
+              ? mergeToolbarHeader(prev.header, data.header)
+              : data.header,
           summary: mergedSummary,
           suggestions:
             !sessionChanged && prev?.suggestions
@@ -782,11 +1386,11 @@ export default function CSSidebar() {
               : data.conversation,
         };
       });
-      realtimeVersionRef.current = Number(data?.version || 0);
       setUpgradeNote(
         (
-          mergedSummary?.headline ||
           mergedSummary?.customer_goal ||
+          mergedSummary?.customer_intent ||
+          mergedSummary?.text ||
           ""
         ).trim(),
       );
@@ -833,41 +1437,69 @@ export default function CSSidebar() {
     sessionLocator.open_kfid,
   ]);
 
-  useEffect(() => {
-    realtimeVersionRef.current = Number(bootstrap?.version || 0);
-  }, [bootstrap?.version]);
-
   const header = bootstrap?.header;
   const summary = bootstrap?.summary;
   const selectionState = bootstrap?.selection;
+  const realtimeSessionKey = buildToolbarSessionKey({
+    open_kfid:
+      bootstrap?.open_kfid || sessionLocator.open_kfid || query.open_kfid,
+    external_userid:
+      bootstrap?.external_userid ||
+      sessionLocator.external_userid ||
+      query.external_userid,
+    selection_required: bootstrap?.selection?.required,
+  });
+
+  useEffect(() => {
+    realtimeCursorRef.current = 0;
+    realtimeEnvelopeRef.current = null;
+  }, [realtimeSessionKey]);
 
   useEffect(() => {
     const suggestionStatus = normalizeToolbarSuggestionStatus(
       bootstrap?.suggestions?.status,
     );
-    if (suggestionProbeTimerRef.current !== null) {
-      window.clearTimeout(suggestionProbeTimerRef.current);
-      suggestionProbeTimerRef.current = null;
+    const analysisStatus = normalizeToolbarSummaryStatus(
+      bootstrap?.summary?.status,
+    );
+    if (bootstrapProbeTimerRef.current !== null) {
+      window.clearTimeout(bootstrapProbeTimerRef.current);
+      bootstrapProbeTimerRef.current = null;
     }
     if (selectionState?.required) return;
-    if (!bootstrap?.capabilities?.auto_refresh_suggestions) return;
-    if (suggestionStatus !== "queued" && suggestionStatus !== "running") return;
-    suggestionProbeTimerRef.current = window.setTimeout(() => {
-      suggestionProbeTimerRef.current = null;
+    const delays: number[] = [];
+    if (
+      bootstrap?.capabilities?.auto_refresh_suggestions &&
+      (suggestionStatus === "queued" || suggestionStatus === "running")
+    ) {
+      delays.push(suggestionStatus === "queued" ? 900 : 1200);
+    }
+    if (
+      bootstrap?.capabilities?.auto_refresh_analysis &&
+      (analysisStatus === "queued" || analysisStatus === "running")
+    ) {
+      delays.push(analysisStatus === "queued" ? 900 : 1200);
+    }
+    if (delays.length === 0) return;
+    bootstrapProbeTimerRef.current = window.setTimeout(() => {
+      bootstrapProbeTimerRef.current = null;
       void loadBootstrap({
         preserveNotice: true,
         silent: true,
         preserveConversation: true,
+        light: true,
       });
-    }, suggestionStatus === "queued" ? 900 : 1200);
+    }, Math.min(...delays));
     return () => {
-      if (suggestionProbeTimerRef.current !== null) {
-        window.clearTimeout(suggestionProbeTimerRef.current);
-        suggestionProbeTimerRef.current = null;
+      if (bootstrapProbeTimerRef.current !== null) {
+        window.clearTimeout(bootstrapProbeTimerRef.current);
+        bootstrapProbeTimerRef.current = null;
       }
     };
   }, [
+    bootstrap?.capabilities?.auto_refresh_analysis,
     bootstrap?.capabilities?.auto_refresh_suggestions,
+    bootstrap?.summary?.status,
     bootstrap?.suggestions?.status,
     selectionState?.required,
   ]);
@@ -891,10 +1523,9 @@ export default function CSSidebar() {
 
     let stopped = false;
     let reconnectTimer: number | null = null;
-    let chatSocket: WebSocket | null = null;
-    let opsSocket: WebSocket | null = null;
+    let socket: WebSocket | null = null;
 
-    const queueRefresh = () => {
+    const queueRefresh = (options?: { preserveConversation?: boolean }) => {
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
       }
@@ -903,22 +1534,52 @@ export default function CSSidebar() {
         void loadBootstrap({
           preserveNotice: true,
           silent: true,
-          preserveConversation: true,
+          preserveConversation: options?.preserveConversation !== false,
+          light: true,
         });
       }, 180);
     };
 
     const handleMessage = (payload: CommandCenterRealtimeEnvelope) => {
-      realtimeVersionRef.current = Math.max(
-        realtimeVersionRef.current,
-        Number(payload.latest_version || 0),
+      const signature = buildRealtimeEnvelopeSignature(
+        payload,
+        openKFID,
+        externalUserID,
+      );
+      if (signature) {
+        const now = Date.now();
+        if (
+          realtimeEnvelopeRef.current?.signature === signature &&
+          now - realtimeEnvelopeRef.current.at < 1500
+        ) {
+          return;
+        }
+        realtimeEnvelopeRef.current = { signature, at: now };
+      }
+      realtimeCursorRef.current = Math.max(
+        realtimeCursorRef.current,
+        Number(payload.latest_cursor || 0),
       );
       if (!shouldRefreshToolbarSession(payload, openKFID, externalUserID))
         return;
+      const eventTypes = matchingToolbarEventTypes(
+        payload,
+        openKFID,
+        externalUserID,
+      );
+      const hasAnalysisReadyEvent = eventTypes.some(
+        (eventType) =>
+          eventType === "chat.session_analysis.updated" ||
+          eventType === "chat.session_analysis.state_changed",
+      );
+      const shouldRefreshConversation = eventTypes.some((eventType) =>
+        eventType.startsWith("chat.message."),
+      );
       if (
         bootstrap?.capabilities?.auto_refresh_suggestions &&
         shouldRefreshToolbarSuggestions(payload, openKFID, externalUserID)
       ) {
+        const now = new Date().toISOString();
         setBootstrap((prev) =>
           prev
             ? {
@@ -930,10 +1591,11 @@ export default function CSSidebar() {
                     }
                   : prev.summary,
                 suggestions: {
-                  ...(prev.suggestions || {}),
+                  batch_id: "",
+                  items: [],
                   status: "queued",
                   failure_message: "",
-                  updated_at: new Date().toISOString(),
+                  updated_at: now,
                 },
               }
             : prev,
@@ -957,26 +1619,21 @@ export default function CSSidebar() {
             : prev,
         );
       }
-      queueRefresh();
+      if (hasAnalysisReadyEvent || shouldRefreshToolbarImmediately(eventTypes)) {
+        queueRefresh({ preserveConversation: !shouldRefreshConversation });
+      }
     };
 
     const connect = () => {
       if (stopped) return;
-      chatSocket = openCommandCenterRealtimeSocket({
-        topic: "chat",
+      socket = openRealtimeUpdatesSocket({
         open_kfid: openKFID,
-        since_version: realtimeVersionRef.current,
+        since_cursor: realtimeCursorRef.current,
         onMessage: handleMessage,
         onClose: () => {
           if (stopped) return;
           reconnectTimer = window.setTimeout(connect, 1200);
         },
-      });
-      opsSocket = openCommandCenterRealtimeSocket({
-        topic: "ops",
-        open_kfid: openKFID,
-        since_version: realtimeVersionRef.current,
-        onMessage: handleMessage,
       });
     };
 
@@ -990,15 +1647,13 @@ export default function CSSidebar() {
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
       }
-      [chatSocket, opsSocket].forEach((socket) => {
-        if (!socket) return;
-        if (
-          socket.readyState === WebSocket.OPEN ||
-          socket.readyState === WebSocket.CONNECTING
-        ) {
-          socket.close();
-        }
-      });
+      if (
+        socket &&
+        (socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING)
+      ) {
+        socket.close();
+      }
     };
   }, [
     bootstrap?.capabilities?.auto_refresh_analysis,
@@ -1032,10 +1687,15 @@ export default function CSSidebar() {
     bootstrap?.suggestions?.status,
   );
   const summaryIsAnalyzing =
-    summaryStatus === "queued" || summaryStatus === "running" || summaryStatus === "pending";
+    summaryStatus === "queued" ||
+    summaryStatus === "running" ||
+    summaryStatus === "pending";
   const suggestionIsAnalyzing =
     suggestionStatus === "queued" || suggestionStatus === "running";
-  const summaryBlockingIssues = compactToolbarFacts(summary?.blocking_issues, 3);
+  const summaryBlockingIssues = compactToolbarFacts(
+    summary?.blocking_issues,
+    3,
+  );
   const summaryDecisionSignals = compactToolbarFacts(
     summary?.decision_signals,
     3,
@@ -1044,11 +1704,7 @@ export default function CSSidebar() {
     summary?.next_best_actions,
     3,
   );
-  const summaryReplyGuardrails = compactToolbarFacts(
-    summary?.reply_guardrails,
-    3,
-  );
-  const summaryProfileFacts = compactToolbarFacts(summary?.profile_facts, 3);
+  const summaryProfileTags = compactToolbarFacts(summary?.profile_tags, 3);
   const summaryStatusCopy = summarizeToolbarStatusCopy({
     sessionStatusID: header?.session_status_id,
     summaryStatus,
@@ -1075,20 +1731,52 @@ export default function CSSidebar() {
     sampleOpenDataMessage?.sender_userid ||
     ""
   ).trim();
+  const sessionStatusText = toolbarSessionStatusLabel(
+    header?.session_status_code,
+    header?.session_status_id,
+  );
+  const contactDisplayName = (
+    header?.contact_name ||
+    bootstrap?.external_userid ||
+    sessionLocator.external_userid ||
+    query.external_userid ||
+    "未识别客户"
+  ).trim();
+  const currentAgentLabel = (
+    channelDisplayMap[
+      (
+        bootstrap?.open_kfid ||
+        sessionLocator.open_kfid ||
+        query.open_kfid ||
+        ""
+      ).trim()
+    ] ||
+    bootstrap?.open_kfid ||
+    sessionLocator.open_kfid ||
+    query.open_kfid ||
+    "未指定"
+  ).trim();
+  const summaryPrimaryIntent = (
+    summary?.customer_intent ||
+    summary?.customer_goal ||
+    summary?.text ||
+    ""
+  ).trim();
+  const suggestedActionText = (
+    summaryNextBestActions[0] ||
+    summary?.recommended_offer ||
+    suggestions[0]?.reason ||
+    ""
+  ).trim();
   const humanOnlyPrompt =
     !selectionState?.required &&
     !suggestionPanelVisible &&
-    (header?.session_status || "").trim()
-      ? `当前为${(header?.session_status || "").trim()}，仅在人工接待状态下显示建议回复。`
+    sessionStatusText
+      ? `当前为${sessionStatusText}，仅在人工接待状态下显示建议回复。`
       : "仅在人工接待状态下显示建议回复。";
-  const canUpgrade = Boolean(
-    header?.can_upgrade_contact &&
-    bootstrap?.external_userid &&
-    !selectionState?.required,
-  );
   const hasStableToolbarContext = Boolean(
     (bootstrap?.open_kfid || "").trim() &&
-      (bootstrap?.external_userid || "").trim(),
+    (bootstrap?.external_userid || "").trim(),
   );
   const canOpenDebugView =
     !isResolvingContext &&
@@ -1097,9 +1785,24 @@ export default function CSSidebar() {
     isToolbarDebugEnabled &&
     hasStableToolbarContext &&
     !selectionState?.required;
-
+  const boundRPAClientID = (
+    rpaOperatorBinding?.binding?.rpa_client_id ||
+    rpaAutomation?.bound_rpa_client_id ||
+    ""
+  ).trim();
+  const hasBoundRPAClient = Boolean(
+    (rpaOperatorBinding?.bound || rpaAutomation?.bound) && boundRPAClientID,
+  );
+  const automationEnabled = Boolean(
+    rpaBootstrap?.automation?.enabled || rpaAutomation?.enabled,
+  );
+  const automationCanEnter = Boolean(
+    rpaBootstrap?.automation?.can_enter_auto_mode ||
+    rpaAutomation?.can_enter_auto_mode ||
+    hasBoundRPAClient,
+  );
   useEffect(() => {
-    if (!chatPanelVisible) return;
+    if (!chatPanelVisible || !isChatHistoryOpen) return;
     const container = conversationScrollRef.current;
     if (!container) return;
     container.scrollTo({
@@ -1108,6 +1811,7 @@ export default function CSSidebar() {
     });
   }, [
     chatPanelVisible,
+    isChatHistoryOpen,
     bootstrap?.conversation?.refreshed_at,
     bootstrap?.open_kfid,
     bootstrap?.external_userid,
@@ -1124,6 +1828,7 @@ export default function CSSidebar() {
     }
     setSuggestionNotice("");
     setConversationNotice("");
+    setIsChatHistoryOpen(false);
   }, [bootstrap?.open_kfid, bootstrap?.external_userid]);
 
   useEffect(() => {
@@ -1153,27 +1858,6 @@ export default function CSSidebar() {
     }
   };
 
-  const handleCopySuggestion = async (item: NormalizedSuggestion) => {
-    const currentStep = Math.min(
-      threadSteps[item.id] || 0,
-      item.sentences.length - 1,
-    );
-    const text = item.sentences[currentStep] || item.text;
-    try {
-      await navigator.clipboard.writeText(text);
-      pushSuggestionNotice(
-        currentStep > 0 ? "已复制下一句建议" : "已复制建议内容",
-      );
-      void safeFeedback({
-        reply_id: item.id,
-        action: "copy",
-        step: currentStep + 1,
-      });
-    } catch {
-      pushSuggestionNotice("复制失败，请手动复制");
-    }
-  };
-
   const handleFillSuggestion = async (item: NormalizedSuggestion) => {
     const currentStep = Math.min(
       threadSteps[item.id] || 0,
@@ -1195,7 +1879,9 @@ export default function CSSidebar() {
       });
       if (currentStep + 1 < item.sentences.length) {
         setThreadSteps((prev) => ({ ...prev, [item.id]: currentStep + 1 }));
-        pushSuggestionNotice(`已填入第 ${currentStep + 1} 句，可继续发送下一句`);
+        pushSuggestionNotice(
+          `已填入第 ${currentStep + 1} 句，可继续发送下一句`,
+        );
       } else {
         setThreadSteps((prev) => ({
           ...prev,
@@ -1316,6 +2002,135 @@ export default function CSSidebar() {
     }
   };
 
+  const handleToggleChatHistory = () => {
+    setIsChatHistoryOpen((open) => {
+      const next = !open;
+      if (next && conversationMessages.length === 0 && !isRefreshingConversation) {
+        window.setTimeout(() => {
+          void handleRefreshConversation();
+        }, 0);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectToolbarSession = async (input: {
+    open_kfid?: string;
+    external_userid?: string;
+    channel_label?: string;
+  }) => {
+    const openKFID = (input.open_kfid || "").trim();
+    const externalUserID = (input.external_userid || "").trim();
+    const channelLabel = (input.channel_label || openKFID || "当前会话").trim();
+    if (!openKFID || !externalUserID) {
+      setNotice("缺少会话标识，暂时无法进入该微信客服会话");
+      return;
+    }
+    const nextKey = `${openKFID}\u001f${externalUserID}`;
+    try {
+      setSelectingSessionKey(nextKey);
+      setNotice(`正在进入 ${channelLabel}...`);
+      writeManualSelectionHandoff({
+        open_kfid: openKFID,
+        external_userid: externalUserID,
+      });
+      setSessionLocator((prev) => ({
+        ...prev,
+        open_kfid: openKFID,
+        external_userid: externalUserID,
+      }));
+      await openWecomKfConversation({
+        open_kfid: openKFID,
+        external_userid: externalUserID,
+      });
+      await sleep(700);
+      const runtime = await resolveSidebarRuntimeContext().catch(() => null);
+      const runtimeExternalUserID = (
+        runtime?.external_userid || externalUserID
+      ).trim();
+      setSessionLocator((prev) => ({
+        ...prev,
+        entry: (runtime?.entry || prev.entry || query.entry).trim(),
+        open_kfid: openKFID,
+        external_userid: runtimeExternalUserID,
+      }));
+      setNotice(`已进入 ${channelLabel}，正在载入当前会话...`);
+    } catch (error) {
+      clearManualSelectionHandoff();
+      setNotice(toJSSDKErrorMessage(error));
+    } finally {
+      setSelectingSessionKey("");
+    }
+  };
+
+  const handleSaveRPAClientBinding = async () => {
+    const nextClientID = (rpaClientIDDraft || "").trim();
+    if (!nextClientID) {
+      setRPABindingNotice("请先填入 rpa_client_id");
+      return;
+    }
+    try {
+      setIsSavingRPABinding(true);
+      setRPABindingNotice("");
+      const snapshot = await saveKFToolbarRPAOperatorBinding(nextClientID);
+      setRPAOperatorBinding(snapshot);
+      setRPAAutomation(snapshot?.automation || null);
+      setRPAClientIDDraft(
+        (snapshot?.binding?.rpa_client_id || nextClientID).trim(),
+      );
+      setRPABindingNotice("已保存 RPA 识别码绑定，后续自动模式会直接复用");
+      if (pendingEnableAutoMode) {
+        setIsRPABindingModalOpen(false);
+        await handleAutomationModeChange(true, { skipBindingCheck: true });
+      }
+    } catch (error) {
+      setRPABindingNotice(
+        normalizeErrorMessage(error) || "保存 RPA 识别码绑定失败，请稍后再试",
+      );
+    } finally {
+      setIsSavingRPABinding(false);
+    }
+  };
+
+  const handleAutomationModeChange = async (
+    enabled: boolean,
+    options?: { skipBindingCheck?: boolean },
+  ) => {
+    if (enabled && !options?.skipBindingCheck && !automationCanEnter) {
+      setPendingEnableAutoMode(true);
+      setRPABindingNotice("请先绑定 rpa_client_id，再开启自动模式");
+      setIsRPABindingModalOpen(true);
+      return;
+    }
+    try {
+      setIsUpdatingAutomationMode(true);
+      const next = await updateKFToolbarRPAAutomationMode(enabled);
+      setRPAAutomation(next);
+      if (!enabled) {
+        setRPABootstrap(null);
+      }
+      pushToolbarNotice(
+        enabled
+          ? "已切换到自动模式，工具栏会优先进入 RPA 轻量界面。"
+          : "已切换到人工模式，当前会回到普通工具栏界面。",
+      );
+      await loadBootstrap({
+        preserveNotice: true,
+        silent: true,
+        preserveConversation: true,
+        light: true,
+      });
+    } catch (error) {
+      setNotice(
+        sanitizeToolbarNotice(error) ||
+          (enabled ? "切换自动模式失败" : "切换人工模式失败"),
+      );
+    } finally {
+      setIsUpdatingAutomationMode(false);
+      setPendingEnableAutoMode(false);
+    }
+  };
+
   if (viewMode === "debug") {
     return (
       <ToolbarDebugView
@@ -1335,81 +2150,114 @@ export default function CSSidebar() {
     );
   }
 
-  return (
-    <div className={sidebarPageShell}>
-      <div
-        className={`${sidebarHeader} sticky top-0 z-10 shadow-[0_8px_24px_rgba(15,23,42,0.04)]`}
-      >
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="mb-1 flex items-center gap-2">
-              <span className={sidebarTitle}>
-                {(header?.contact_name || "未识别客户").trim()}
-              </span>
-              <Badge variant="secondary" className="px-2 py-0.5 text-[10px]">
-                {(header?.session_status || "会话中").trim()}
-              </Badge>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(header?.risk_tags || []).map((tag) => (
-                <Badge
-                  key={tag}
-                  variant="warning"
-                  className="px-2 py-0.5 text-[10px]"
-                >
-                  {tag}
-                </Badge>
-              ))}
-              {header?.last_active ? (
-                <span
-                  className={`${sidebarMeta} inline-flex items-center gap-1`}
-                >
-                  <Clock className="h-3 w-3" />
-                  {header.last_active.replace("T", " ").slice(0, 16)}
-                </span>
-              ) : null}
-            </div>
-          </div>
+  if (rpaBootstrap) {
+    return (
+      <ToolbarRPAMode
+        runId={rpaBootstrap.run?.run_id || ""}
+        initialBootstrap={rpaBootstrap}
+        currentSessionContext={{
+          open_kfid:
+            sessionLocator.open_kfid || bootstrap?.open_kfid || query.open_kfid,
+          external_userid:
+            sessionLocator.external_userid ||
+            bootstrap?.external_userid ||
+            query.external_userid,
+        }}
+        onAutomationModeChange={handleAutomationModeChange}
+        isUpdatingAutomationMode={isUpdatingAutomationMode}
+        onExitRPAMode={async () => {
+          setRPABootstrap(null);
+          await loadBootstrap({
+            preserveNotice: true,
+            silent: true,
+            preserveConversation: true,
+            light: true,
+          });
+        }}
+      />
+    );
+  }
 
-          <div className="flex shrink-0 items-center gap-2">
-            {canOpenDebugView ? (
+  return (
+    <div className={`${sidebarPageShell} bg-white`}>
+      <div
+        className={`shrink-0 text-white ${
+          selectionState?.required ? "bg-[#1E293B] p-5" : "bg-[#0052D9] p-4"
+        }`}
+      >
+        <div
+          className={`flex items-center justify-between gap-3 ${
+            selectionState?.required ? "mb-2" : "mb-3"
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            {selectionState?.required ? (
+              <AlertCircle className="h-5 w-5 shrink-0 text-amber-300" />
+            ) : (
+              <UserRound className="h-5 w-5 shrink-0 text-blue-200" />
+            )}
+            <h1 className="truncate text-sm font-bold tracking-tight text-white">
+              {selectionState?.required
+                ? "选择要辅助的业务会话"
+                : "客服辅助工作台"}
+            </h1>
+          </div>
+          {!selectionState?.required ? (
+            <div className="flex shrink-0 items-center gap-2">
+              {canOpenDebugView ? (
+                <button
+                  type="button"
+                  aria-label="打开工具栏调试面板"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded bg-white/10 text-white transition-colors hover:bg-white/20"
+                  onClick={() => setViewMode("debug")}
+                >
+                  <Bug className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
               <button
                 type="button"
-                aria-label="打开工具栏调试面板"
-                className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-300 hover:text-blue-600 hover:shadow-[0_8px_18px_rgba(37,99,235,0.12)]"
-                onClick={() => setViewMode("debug")}
+                disabled={isUpdatingAutomationMode}
+                onClick={() => void handleAutomationModeChange(true)}
+                className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30 disabled:opacity-60"
               >
-                <Bug className="h-3.5 w-3.5" />
+                {isUpdatingAutomationMode ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ShieldCheck className="h-3 w-3" />
+                )}
+                切至自动模式
               </button>
-            ) : null}
-            <Button
-              size="sm"
-              className={`h-8 rounded-full px-3 text-[11px] ${isUpgraded ? "bg-slate-100 text-slate-400" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-              disabled={!canUpgrade || isUpgraded || isSubmitting}
-              onClick={() => setIsUpgradeModalOpen(true)}
-            >
-              {isUpgraded ? (
-                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-              ) : (
-                <ArrowUpRight className="mr-1 h-3.5 w-3.5" />
-              )}
-              {isUpgraded ? "已升级" : "升级客户联系"}
-            </Button>
-          </div>
+            </div>
+          ) : null}
         </div>
+        {selectionState?.required ? (
+          <p className="text-[11px] leading-relaxed text-slate-300">
+            系统发现当前客户存在多个微信客服会话，请选择本次侧边栏要介入的目标会话。
+          </p>
+        ) : (
+          <div className="flex items-center gap-2 rounded bg-black/10 p-2">
+            <span className="shrink-0 text-[11px] uppercase tracking-widest text-white/80">
+              当前客服:
+            </span>
+            <span className="truncate font-mono text-[11px] font-bold text-white">
+              {currentAgentLabel}
+            </span>
+          </div>
+        )}
 
         {notice ? (
-          <div
-            className={`${sidebarNotice} rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-blue-700`}
-          >
+          <div className="mt-3 rounded border border-white/20 bg-white/15 px-3 py-2 text-[12px] leading-5 text-white">
             {notice}
           </div>
         ) : null}
+        {rpaBindingNotice && !selectionState?.required ? (
+          <div className="mt-3 rounded border border-white/20 bg-white/15 px-3 py-2 text-[12px] leading-5 text-white">
+            {rpaBindingNotice}
+          </div>
+        ) : null}
         {bootstrap?.warnings && bootstrap.warnings.length > 0 ? (
-          <div
-            className={`${sidebarNotice} mt-2 rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-orange-700`}
-          >
-            {bootstrap.warnings.join("；")}
+          <div className="mt-3 rounded border border-amber-200/40 bg-amber-400/15 px-3 py-2 text-[12px] leading-5 text-amber-50">
+            {bootstrap.warnings.join(" / ")}
           </div>
         ) : null}
       </div>
@@ -1417,24 +2265,17 @@ export default function CSSidebar() {
       {isLoading ? (
         <ToolbarSkeleton />
       ) : (
-        <div className={`${sidebarBody} space-y-3`}>
+        <div
+          className={`${sidebarBody} flex-1 space-y-4 overflow-y-auto p-4 ${
+            selectionState?.required ? "bg-[#F8FAFC]" : "bg-white/50"
+          }`}
+        >
           {selectionState?.required ? (
-            <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
-              <div className="mb-3 flex items-start gap-2">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
-                  <GitBranch className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className={sidebarSectionLabel}>
-                    选择当前微信客服会话
-                  </div>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
-                    同一客户最近命中过多个微信客服账号。工具栏不再自动猜测当前客服号，请先明确本次要辅助的会话。
-                  </p>
-                </div>
+            <>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                检测到 {(selectionState.candidates || []).length} 个候选会话
               </div>
-
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {(selectionState.candidates || []).map((candidate, idx) => {
                   const openKFID = (candidate.open_kfid || "").trim();
                   const externalUserID = (
@@ -1450,6 +2291,8 @@ export default function CSSidebar() {
                     openKFID ||
                     "未知客服"
                   ).trim();
+                  const candidateKey = `${openKFID}\u001f${externalUserID}`;
+                  const isSelecting = selectingSessionKey === candidateKey;
                   const contactName = (
                     candidate.contact_name ||
                     header?.contact_name ||
@@ -1459,290 +2302,184 @@ export default function CSSidebar() {
                     <button
                       key={`${openKFID}-${externalUserID}-${idx}`}
                       type="button"
-                      className="group w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-300 hover:bg-blue-50/70 hover:shadow-[0_12px_28px_rgba(37,99,235,0.10)]"
-                      onClick={() => {
-                        setNotice(
-                          `已切换到 ${channelLabel}，正在载入当前会话...`,
-                        );
-                        setSessionLocator((prev) => ({
-                          ...prev,
+                      disabled={!!selectingSessionKey}
+                      className="group w-full rounded-xl border border-gray-200 bg-white p-3.5 text-left shadow-sm transition-all hover:border-[#0052D9] hover:shadow-md hover:ring-1 hover:ring-[#0052D9]/20 disabled:opacity-70"
+                      onClick={() =>
+                        void handleSelectToolbarSession({
                           open_kfid: openKFID,
-                          external_userid:
-                            externalUserID || prev.external_userid,
-                        }));
-                      }}
+                          external_userid: externalUserID,
+                          channel_label: channelLabel,
+                        })
+                      }
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-slate-900">
-                              {channelLabel}
-                            </span>
-                            <Badge
-                              variant="secondary"
-                              className="px-2 py-0.5 text-[10px]"
-                            >
-                              {(candidate.session_status || "会话中").trim()}
-                            </Badge>
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            当前客户：{contactName}
-                          </div>
-                          {(candidate.last_message || "").trim() ? (
-                            <div className="mt-2 line-clamp-2 text-sm leading-6 text-slate-700">
-                              {candidate.last_message}
-                            </div>
-                          ) : (
-                            <div className="mt-2 text-sm text-slate-500">
-                              该会话暂无可展示的最新消息摘要
-                            </div>
+                      <div className="mb-2.5 flex items-start justify-between gap-3">
+                        <span className="rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-800 shadow-sm">
+                          客服号: {channelLabel}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-bold text-gray-500">
+                          <Clock className="h-3 w-3" />
+                          {formatToolbarSelectionTime(candidate.last_active) ||
+                            "时间未知"}
+                        </div>
+                      </div>
+                      <div className="text-sm font-bold text-gray-800">
+                        {contactName}
+                      </div>
+                      {(candidate.last_message || "").trim() ? (
+                        <div className="mt-2 truncate text-[11px] font-medium italic text-gray-600">
+                          “{candidate.last_message}”
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-[11px] font-medium italic text-gray-400">
+                          暂无最近消息
+                        </div>
+                      )}
+                      <div className="mt-3 flex items-center justify-between border-t border-gray-100 pt-3">
+                        <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700">
+                          状态:{" "}
+                          {toolbarSessionStatusLabel(
+                            candidate.session_status_code,
                           )}
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-xs text-slate-400">
-                            {formatToolbarSelectionTime(
-                              candidate.last_active,
-                            ) || "最近时间未知"}
-                          </div>
-                          <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-transform duration-200 group-hover:translate-x-0.5">
-                            进入此会话
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </div>
-                        </div>
+                        </span>
+                        <span className="flex items-center gap-1 text-xs font-bold text-[#0052D9] transition-transform group-hover:translate-x-1">
+                          {isSelecting ? "进入中" : "选择进入"}
+                          {isSelecting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ArrowRight className="h-3.5 w-3.5" />
+                          )}
+                        </span>
                       </div>
                     </button>
                   );
                 })}
               </div>
-            </Card>
+              <div className="rounded border border-dashed border-gray-200 bg-white px-3 py-2 text-center text-[10px] font-medium text-gray-400">
+                本次选择仅改变当前侧边栏上下文，不会成为永久绑定。
+              </div>
+            </>
           ) : (
             <>
+              <div className="rounded-r border-y border-r border-blue-100 border-l-4 border-l-[#0052D9] bg-white p-4 shadow-sm">
+                <div className="mb-2.5 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="truncate text-lg font-bold text-gray-800">
+                        {contactDisplayName}
+                      </div>
+                      <span className="shrink-0 rounded border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">
+                        微信客户
+                      </span>
+                    </div>
+                    <div className="mt-1 truncate font-mono text-[10px] text-gray-400">
+                      extId:{" "}
+                      {bootstrap?.external_userid ||
+                        sessionLocator.external_userid ||
+                        query.external_userid ||
+                        "-"}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span className="relative rounded border border-amber-200 bg-amber-50 px-2 py-1 pr-3 text-[10px] font-bold text-amber-700 shadow-sm">
+                      {sessionStatusText}
+                      <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
+                    </span>
+                  </div>
+                </div>
+                {summaryProfileTags.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-gray-50 pt-3">
+                    {summaryProfileTags.map((tag, idx) => (
+                      <span
+                        key={tag}
+                        className="flex items-center gap-1 rounded border border-gray-200 bg-gray-100/80 px-2 py-1 text-[10px] font-bold text-gray-600"
+                      >
+                        {idx === 0 ? <Tags className="h-2.5 w-2.5" /> : null}
+                        {toolbarProfileTagLabel(tag)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               {analysisPanelVisible ? (
-                <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
-                  <div className="mb-3 flex items-start gap-2">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                      <Lightbulb className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="mb-1 flex items-center gap-2">
-                        <div className={sidebarSectionLabel}>会话摘要</div>
-                        <Badge
-                          variant={summaryStatusCopy.badgeVariant}
-                          className="px-2 py-0.5 text-[10px]"
-                        >
-                          {summaryStatusCopy.badgeText}
-                        </Badge>
-                      </div>
-                      <div className="space-y-2">
-                        <p className="wecom-toolbar-summary-text m-0 text-slate-800">
-                          {(summary?.headline || "正在整理当前会话分析...").trim()}
-                        </p>
-                        <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
-                          {summaryStatusCopy.helperText}
-                        </div>
-                        {summaryIsAnalyzing ? (
-                          <div className="flex items-center gap-2 text-[11px] text-blue-600">
-                            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1">
-                              <span className="relative flex h-2.5 w-2.5">
-                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
-                                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
-                              </span>
-                              {summaryStatus === "queued"
-                                ? "正在等待回复窗口收齐后分析"
-                                : "AI 正在更新本轮会话分析"}
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
+                <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                  <div className="flex items-center gap-2 border-b border-gray-100 bg-purple-50/50 px-3 py-2.5">
+                    <Sparkles className="h-3.5 w-3.5 text-purple-600" />
+                    <span className="text-xs font-bold text-gray-800">
+                      AI 会话感知
+                    </span>
                   </div>
-
-                  <div className="space-y-3 rounded-2xl bg-slate-50/90 p-3">
-                    <div className="flex flex-wrap gap-2">
-                      {summary?.journey_stage ? (
-                        <Badge
-                          variant="secondary"
-                          className="border-none bg-white text-[10px] text-slate-600"
-                        >
-                          阶段：{summary.journey_stage}
-                        </Badge>
-                      ) : null}
-                      {summary?.relationship_stage ? (
-                        <Badge
-                          variant="secondary"
-                          className="border-none bg-white text-[10px] text-slate-600"
-                        >
-                          关系：{summary.relationship_stage}
-                        </Badge>
-                      ) : null}
-                      {summary?.priority ? (
-                        <Badge
-                          variant="secondary"
-                          className="border-none bg-white text-[10px] text-slate-600"
-                        >
-                          优先级：{summary.priority}
-                        </Badge>
-                      ) : null}
-                      {summary?.opportunity_level ? (
-                        <Badge
-                          variant="secondary"
-                          className="border-none bg-white text-[10px] text-slate-600"
-                        >
-                          机会：{summary.opportunity_level}
-                        </Badge>
-                      ) : null}
+                  <div className="space-y-3.5 p-3.5">
+                    <div>
+                      <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                        核心诉求与意图
+                      </div>
+                      <div className="text-xs font-medium leading-relaxed text-gray-700">
+                        {summaryPrimaryIntent ||
+                          (summaryIsAnalyzing
+                            ? "正在整理当前会话分析..."
+                            : "暂未形成稳定的客户意图判断。")}
+                      </div>
                     </div>
-
-                    {summary?.customer_goal ? (
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-medium text-slate-500">
-                          客户当前诉求
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-md border border-green-100 bg-green-50 p-2.5">
+                        <div className="mb-1 flex items-center gap-1 text-[10px] font-bold text-green-700">
+                          <CheckCircle2 className="h-3 w-3" />
+                          积极信号
                         </div>
-                        <div className="text-[12px] leading-6 text-slate-700">
-                          {summary.customer_goal.trim()}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {summaryBlockingIssues.length > 0 ? (
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-medium text-slate-500">
-                          主要成交阻力
-                        </div>
-                        <div className="space-y-1">
-                          {summaryBlockingIssues.map((item, idx) => (
-                            <div
-                              key={`${item}-${idx}`}
-                              className="flex items-start gap-2 text-[12px] text-slate-600"
-                            >
-                              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                              <span>{item}</span>
-                            </div>
-                          ))}
+                        <div className="text-[11px] font-medium leading-5 text-green-800">
+                          {summaryDecisionSignals[0] || "等待更多客户信号"}
                         </div>
                       </div>
-                    ) : null}
-
+                      <div className="rounded-md border border-red-100 bg-red-50 p-2.5">
+                        <div className="mb-1 flex items-center gap-1 text-[10px] font-bold text-red-700">
+                          <AlertTriangle className="h-3 w-3" />
+                          风险/阻力
+                        </div>
+                        <div className="text-[11px] font-medium leading-5 text-red-800">
+                          {summaryBlockingIssues[0] || "暂未发现明确风险"}
+                        </div>
+                      </div>
+                    </div>
                     {summaryNextBestActions.length > 0 ? (
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-medium text-slate-500">
-                          建议服务动作
-                        </div>
-                        <div className="space-y-1">
-                          {summaryNextBestActions.map((item, idx) => (
-                            <div
-                              key={`${item}-${idx}`}
-                              className="flex items-start gap-2 text-[12px] text-slate-600"
-                            >
-                              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                              <span>{item}</span>
-                            </div>
-                          ))}
+                      <div className="grid gap-1.5 text-[11px] leading-5 text-gray-600">
+                        <div>
+                          <span className="font-bold text-gray-700">
+                            下一步：
+                          </span>
+                          {summaryNextBestActions.join("；")}
                         </div>
                       </div>
                     ) : null}
-
-                    {summaryDecisionSignals.length > 0 ? (
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-medium text-slate-500">
-                          关键决策信号
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {summaryDecisionSignals.map((item) => (
-                            <Badge
-                              key={item}
-                              variant="secondary"
-                              className="border-none bg-white text-[10px] text-slate-600"
-                            >
-                              {item}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {summaryReplyGuardrails.length > 0 ? (
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-medium text-slate-500">
-                          沟通约束与风险提示
-                        </div>
-                        <div className="space-y-1">
-                          {summaryReplyGuardrails.map((item, idx) => (
-                            <div
-                              key={`${item}-${idx}`}
-                              className="flex items-start gap-2 text-[12px] text-slate-600"
-                            >
-                              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                              <span>{item}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {summaryProfileFacts.length > 0 ? (
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-medium text-slate-500">
-                          长期关系资产
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {summaryProfileFacts.map((item) => (
-                            <Badge
-                              key={item}
-                              variant="secondary"
-                              className="border-none bg-white text-[10px] text-slate-600"
-                            >
-                              {item}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                    {summaryBlockingIssues.length === 0 &&
-                    summaryNextBestActions.length === 0 &&
-                    summaryDecisionSignals.length === 0 &&
-                    summaryReplyGuardrails.length === 0 &&
-                    summaryProfileFacts.length === 0 &&
-                    !summary?.customer_goal ? (
-                      <div className="rounded-2xl border border-dashed border-blue-100 bg-white px-3 py-3 text-[12px] text-slate-500">
-                        {summaryIsAnalyzing ? (
-                          <div className="space-y-2">
-                            <div className="h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
-                            <div className="h-2.5 w-full animate-pulse rounded-full bg-slate-200" />
-                            <div className="h-2.5 w-5/6 animate-pulse rounded-full bg-slate-200" />
-                          </div>
-                        ) : (
-                          "当前结构化分析仍在整理中，稍后会补齐更完整的客户判断。"
-                        )}
+                    {summaryIsAnalyzing ? (
+                      <div className="flex items-center gap-2 text-[11px] text-[#0052D9]">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
+                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#0052D9]" />
+                        </span>
+                        <span>{summaryStatusCopy.helperText}</span>
                       </div>
                     ) : null}
                   </div>
-                </Card>
+                </div>
               ) : null}
 
               {suggestionPanelVisible ? (
                 <>
-                  <Card className="wecom-toolbar-panel wecom-toolbar-enter rounded-2xl border-slate-200 bg-white/95">
-                    <div className="mb-3 flex items-center justify-between gap-2">
+                  <Card className="wecom-toolbar-panel wecom-toolbar-enter overflow-hidden rounded-lg border-[#0052D9]/30 bg-white shadow-md ring-1 ring-[#0052D9]/5">
+                    <div className="-mx-3 -mt-3 mb-3 flex items-center justify-between gap-2 border-b border-blue-100 bg-blue-50 px-3 py-2.5">
                       <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
-                          <Sparkles className="h-4 w-4" />
-                        </div>
-                        <div>
-                          <div className={sidebarSectionLabel}>AI 建议回复</div>
-                          <div className={`${sidebarMeta} mt-0.5`}>
-                            {suggestionIsAnalyzing
-                              ? suggestionStatus === "queued"
-                                ? "已收到新消息，正在等待回复窗口收齐"
-                                : "AI 正在基于本轮新消息生成建议回复"
-                              : "支持单句直发，也支持分步逐句填入"}
+                        <Lightbulb className="h-4 w-4 text-[#0052D9]" />
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-bold text-[#0052D9]">
+                            建议操作：{suggestedActionText || "继续安抚并确认下一步"}
                           </div>
                         </div>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                        className="h-7 shrink-0 rounded border-blue-200 bg-white px-2 text-[10px] font-bold text-[#0052D9] shadow-sm"
                         disabled={
                           isRegenerating ||
                           isSubmitting ||
@@ -1753,7 +2490,7 @@ export default function CSSidebar() {
                         <RefreshCcw
                           className={`mr-1 h-3.5 w-3.5 ${isRegenerating ? "animate-spin" : ""}`}
                         />
-                        换一批
+                        换一换
                       </Button>
                     </div>
 
@@ -1763,9 +2500,9 @@ export default function CSSidebar() {
                       </div>
                     ) : null}
 
-                    <div className="rounded-2xl border border-slate-100 bg-slate-50/45">
+                    <div className="space-y-3.5 p-0.5">
                       {suggestionIsAnalyzing ? (
-                        <div className="border-b border-slate-100 px-4 py-3">
+                        <div className="rounded border border-blue-100 bg-blue-50 px-3 py-2">
                           <div className="flex items-center gap-2 text-[11px] text-blue-600">
                             <span className="relative flex h-2.5 w-2.5">
                               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400/70" />
@@ -1773,14 +2510,14 @@ export default function CSSidebar() {
                             </span>
                             <span>
                               {suggestionStatus === "queued"
-                                ? "新消息已进入回复窗口，窗口收齐后会统一生成建议"
+                                ? "AI 已收到新的客户消息，正在准备回复建议"
                                 : "AI 正在重新组织本轮建议回复"}
                             </span>
                           </div>
                         </div>
                       ) : null}
                       {suggestions.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[12px] text-slate-500">
+                        <div className="rounded border border-dashed border-gray-300 bg-[#F9FAFB] px-4 py-8 text-center text-[12px] text-gray-500">
                           {isLoadingSuggestions || suggestionIsAnalyzing ? (
                             <div className="space-y-3">
                               <div className="mx-auto h-2.5 w-28 animate-pulse rounded-full bg-blue-100" />
@@ -1802,9 +2539,9 @@ export default function CSSidebar() {
                           const isFinished =
                             currentStep >= item.sentences.length;
                           const primaryLabel = isFinished
-                            ? "已完成本组回复"
+                            ? "再次填入"
                             : !item.hasFollowups
-                              ? "填入回复"
+                              ? "填入聊天框"
                               : currentStep === 0
                                 ? "填入首句"
                                 : item.nextStepLabel;
@@ -1812,26 +2549,26 @@ export default function CSSidebar() {
                           return (
                             <div
                               key={item.id}
-                              className={`wecom-toolbar-list-item wecom-toolbar-enter ${
-                                item.displayMode === "threaded"
-                                  ? "wecom-toolbar-thread-row"
-                                  : ""
-                              } ${
-                                idx < suggestions.length - 1
-                                  ? "border-b border-slate-100"
+                              className={`wecom-toolbar-enter ${
+                                idx > 0
+                                  ? "border-t border-gray-100 pt-3.5"
                                   : ""
                               } ${suggestionIsAnalyzing ? "opacity-75" : ""}`}
                               style={{ animationDelay: `${idx * 70}ms` }}
                             >
-                              <div className="mb-1.5 flex items-start justify-between gap-2">
+                              <div className="mb-2 flex items-start justify-between gap-2">
                                 <div className="flex min-w-0 items-center gap-2">
                                   <Badge
                                     variant={
-                                      item.hasFollowups ? "default" : "secondary"
+                                      item.hasFollowups
+                                        ? "default"
+                                        : "secondary"
                                     }
                                     className="shrink-0 px-2 py-0.5 text-[10px]"
                                   >
-                                    {item.hasFollowups ? "分步发送" : "直接回复"}
+                                    {item.hasFollowups
+                                      ? "分步发送"
+                                      : "直接回复"}
                                   </Badge>
                                   <span className="text-[10px] text-slate-400">
                                     已填{" "}
@@ -1844,18 +2581,17 @@ export default function CSSidebar() {
                                 </div>
                               </div>
 
-                              <div className="mb-2 space-y-1.5 rounded-xl bg-white/90 px-2.5 py-2.5 shadow-[inset_0_0_0_1px_rgba(226,232,240,0.9)]">
+                              <div className="mb-3 space-y-2 rounded border border-gray-200 bg-white p-3 text-xs font-medium leading-relaxed text-gray-800 shadow-inner">
                                 {item.sentences.map((sentence, sentenceIdx) => {
                                   const isSent = sentenceIdx < currentStep;
                                   const isCurrent =
-                                    !isFinished &&
-                                    sentenceIdx === currentStep;
+                                    !isFinished && sentenceIdx === currentStep;
                                   return (
                                     <div
                                       key={`${item.id}-sentence-${sentenceIdx}`}
                                       className="flex items-start gap-2"
                                     >
-                                      <div className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center">
+                                      <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
                                         {isSent ? (
                                           <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
                                         ) : (
@@ -1869,7 +2605,7 @@ export default function CSSidebar() {
                                         )}
                                       </div>
                                       <div
-                                        className={`min-w-0 text-[11.5px] leading-5 transition-colors duration-200 ${
+                                        className={`min-w-0 transition-colors duration-200 ${
                                           isSent
                                             ? "text-slate-500"
                                             : isCurrent
@@ -1884,40 +2620,30 @@ export default function CSSidebar() {
                                 })}
                               </div>
 
-                              {isFinished ? (
-                                <div className="mb-2 text-[11px] text-emerald-700">
-                                  这组建议已填入完成。
+                              {item.reason ? (
+                                <div className="mb-3 text-[11px] font-medium leading-5 text-gray-500">
+                                  {item.reason}
                                 </div>
                               ) : null}
 
-                              <div className="flex items-center justify-end gap-2">
+                              <div>
                                 <Button
-                                  variant="outline"
+                                  type="button"
                                   size="sm"
-                                  className="h-7 rounded-full px-2.5 text-[10.5px]"
-                                  disabled={!bootstrap?.capabilities?.copy_reply}
-                                  onClick={() => void handleCopySuggestion(item)}
-                                >
-                                  <Copy className="mr-1 h-3.5 w-3.5" />
-                                  {item.hasFollowups && currentStep > 0
-                                    ? "复制当前句"
-                                    : "复制"}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  className={`h-7 rounded-full px-2.5 text-[10.5px] ${
+                                  className={`h-9 w-full rounded bg-[#0052D9] px-3 text-xs font-bold text-white shadow-sm hover:bg-blue-700 ${
                                     isFinished
-                                      ? "bg-slate-100 text-slate-400"
-                                      : "bg-blue-600 hover:bg-blue-700"
+                                      ? "bg-white text-[#0052D9] ring-1 ring-blue-200 hover:bg-blue-50"
+                                      : ""
                                   }`}
                                   disabled={
                                     isSubmitting ||
-                                    isFinished ||
                                     !bootstrap?.capabilities?.fill_reply
                                   }
-                                  onClick={() => void handleFillSuggestion(item)}
+                                  onClick={() =>
+                                    void handleFillSuggestion(item)
+                                  }
                                 >
-                                  <Send className="mr-1 h-3.5 w-3.5" />
+                                  <Send className="mr-1.5 h-3.5 w-3.5" />
                                   {primaryLabel}
                                 </Button>
                               </div>
@@ -1945,179 +2671,214 @@ export default function CSSidebar() {
               )}
 
               {chatPanelVisible ? (
-                <Card className="wecom-toolbar-panel rounded-2xl border-slate-200 bg-white/95">
-                  <div className="mb-3 flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-slate-100 text-slate-600">
-                        <MessageSquareText className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <div className={sidebarSectionLabel}>会话聊天内容</div>
-                        <div className={`${sidebarMeta} mt-0.5`}>
-                          展示最近 30 条消息，此区域不跟随实时消息流自动刷新
+                <Card className="wecom-toolbar-panel overflow-hidden rounded-lg border-gray-200 bg-white shadow-sm">
+                  <button
+                    type="button"
+                    className="-mx-3 -my-3 flex w-[calc(100%+24px)] items-center justify-between gap-3 border-b border-gray-100 bg-gray-50 px-3 py-2.5 text-left transition-colors hover:bg-blue-50/60"
+                    onClick={handleToggleChatHistory}
+                    aria-expanded={isChatHistoryOpen}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <MessageSquareText className="h-3.5 w-3.5 shrink-0 text-[#0052D9]" />
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-bold text-gray-800">
+                          历史聊天记录
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] font-medium text-gray-400">
+                          {conversationMessages.length > 0
+                            ? `最近 ${conversationMessages.length} 条`
+                            : "默认折叠，展开后查看聊天"}
+                          {conversationRefreshedAt
+                            ? ` · ${conversationRefreshedAt}`
+                            : ""}
                         </div>
                       </div>
                     </div>
-                    {conversationRefreshedAt ? (
-                      <div className="flex flex-col items-end gap-1">
+                    <div className="flex shrink-0 items-center gap-1.5 text-[10px] font-bold text-[#0052D9]">
+                      <span>{isChatHistoryOpen ? "收起" : "展开"}</span>
+                      <ArrowRight
+                        className={`h-3.5 w-3.5 transition-transform ${
+                          isChatHistoryOpen ? "rotate-90" : ""
+                        }`}
+                      />
+                    </div>
+                  </button>
+
+                  {isChatHistoryOpen ? (
+                    <div className="pt-6">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                          最近聊天记录
+                        </div>
                         <Button
+                          type="button"
                           variant="outline"
                           size="sm"
-                          className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
+                          className="h-7 shrink-0 rounded border-gray-200 bg-white px-2 text-[10px] font-bold text-gray-600 shadow-sm"
                           disabled={isRefreshingConversation}
                           onClick={() => void handleRefreshConversation()}
                         >
                           <RefreshCcw
                             className={`mr-1 h-3.5 w-3.5 ${isRefreshingConversation ? "animate-spin" : ""}`}
                           />
-                          刷新聊天
+                          刷新
                         </Button>
-                        <span className="text-[10px] text-slate-400">
-                          刷新于 {conversationRefreshedAt}
-                        </span>
                       </div>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 rounded-full border-slate-200 px-3 text-[11px]"
-                        disabled={isRefreshingConversation}
-                        onClick={() => void handleRefreshConversation()}
-                      >
-                        <RefreshCcw
-                          className={`mr-1 h-3.5 w-3.5 ${isRefreshingConversation ? "animate-spin" : ""}`}
-                        />
-                        刷新聊天
-                      </Button>
-                    )}
-                  </div>
 
-                  {conversationNotice ? (
-                    <div className="mb-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] text-blue-700 transition-all duration-200">
-                      {conversationNotice}
+                      {conversationNotice ? (
+                        <div className="mb-3 rounded border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] text-blue-700 transition-all duration-200">
+                          {conversationNotice}
+                        </div>
+                      ) : null}
+
+                      {conversationMessages.length === 0 ? (
+                        <div className="rounded border border-dashed border-gray-300 bg-[#F9FAFB] px-4 py-8 text-center text-[12px] text-gray-500">
+                          当前会话暂时没有可展示的聊天记录。
+                        </div>
+                      ) : (
+                        <div
+                          ref={conversationScrollRef}
+                          className="max-h-[320px] space-y-2 overflow-y-auto pr-1"
+                        >
+                          {conversationMessages.map((message, idx) => {
+                            const role = resolveToolbarMessageRole(message);
+                            const timeText = formatToolbarMessageTime(
+                              message?.timestamp,
+                            );
+                            const content = (message?.content || "").trim();
+                            const staffDisplayUserID = (
+                              message?.sender_display_userid || ""
+                            ).trim();
+                            const staffFallback = (
+                              message?.sender_display_fallback ||
+                              message?.sender_userid ||
+                              "人工客服"
+                            ).trim();
+                            const roleClass =
+                              role === "assistant"
+                                ? "border-l-violet-500 bg-violet-50/45"
+                                : role === "staff"
+                                  ? "border-l-[#0052D9] bg-blue-50/50"
+                                  : role === "system"
+                                    ? "border-l-gray-300 bg-gray-50"
+                                    : "border-l-emerald-500 bg-emerald-50/45";
+
+                            return (
+                              <div
+                                key={`${message?.id || "msg"}-${idx}`}
+                                className={`rounded-md border border-gray-200 border-l-4 px-3 py-2 shadow-sm ${roleClass}`}
+                              >
+                                <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                                  <div className="min-w-0 truncate text-[11px] font-bold text-gray-700">
+                                    {role === "assistant" ? (
+                                      <span className="inline-flex items-center gap-1 text-violet-700">
+                                        <Bot className="h-3 w-3" />
+                                        AI 回复
+                                      </span>
+                                    ) : role === "staff" ? (
+                                      staffDisplayUserID ? (
+                                        <WecomOpenDataName
+                                          userid={staffDisplayUserID}
+                                          corpId=""
+                                          fallback={staffFallback}
+                                          className="font-bold text-blue-700"
+                                        />
+                                      ) : (
+                                        <span className="text-blue-700">
+                                          {staffFallback}
+                                        </span>
+                                      )
+                                    ) : role === "system" ? (
+                                      <span className="text-gray-500">
+                                        系统事件
+                                      </span>
+                                    ) : (
+                                      <span className="text-emerald-700">
+                                        客户
+                                      </span>
+                                    )}
+                                  </div>
+                                  {timeText ? (
+                                    <span className="shrink-0 font-mono text-[10px] text-gray-400">
+                                      {timeText}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="wecom-toolbar-message-content text-[12px] font-medium leading-5 text-gray-800">
+                                  {content || "暂不支持展示该消息内容"}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   ) : null}
-
-                  {conversationMessages.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[12px] text-slate-500">
-                      当前会话暂时没有可展示的聊天记录。
-                    </div>
-                  ) : (
-                    <div
-                      ref={conversationScrollRef}
-                      className="max-h-[420px] space-y-3 overflow-y-auto pr-1"
-                    >
-                      {conversationMessages.map((message, idx) => {
-                        const role = resolveToolbarMessageRole(message);
-                        const isRight =
-                          role === "assistant" || role === "staff";
-                        const timeText = formatToolbarMessageTime(
-                          message?.timestamp,
-                        );
-                        const content = (message?.content || "").trim();
-                        const staffDisplayUserID = (
-                          message?.sender_display_userid || ""
-                        ).trim();
-                        const staffFallback = (
-                          message?.sender_display_fallback ||
-                          message?.sender_userid ||
-                          "人工客服"
-                        ).trim();
-
-                        return (
-                          <div
-                            key={`${message?.id || "msg"}-${idx}`}
-                            className={`flex gap-2 ${isRight ? "justify-end" : "justify-start"}`}
-                          >
-                            {!isRight ? (
-                              <div
-                                className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl ${
-                                  role === "system"
-                                    ? "bg-slate-100 text-slate-500"
-                                    : "bg-slate-100 text-slate-600"
-                                }`}
-                              >
-                                <UserRound className="h-4 w-4" />
-                              </div>
-                            ) : null}
-
-                            <div
-                              className={`max-w-[85%] ${
-                                isRight ? "items-end" : "items-start"
-                              } flex flex-col gap-1`}
-                            >
-                              <div
-                                className={`flex flex-wrap items-center gap-1.5 text-[11px] ${
-                                  isRight ? "justify-end text-slate-500" : "text-slate-500"
-                                }`}
-                              >
-                                {role === "assistant" ? (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-violet-600">
-                                    <Bot className="h-3.5 w-3.5" />
-                                    AI 回复
-                                  </span>
-                                ) : role === "staff" ? (
-                                  staffDisplayUserID ? (
-                                    <WecomOpenDataName
-                                      userid={staffDisplayUserID}
-                                      corpId=""
-                                      fallback={staffFallback}
-                                      className="font-medium text-slate-600"
-                                    />
-                                  ) : (
-                                    <span className="font-medium text-slate-600">
-                                      {staffFallback}
-                                    </span>
-                                  )
-                                ) : role === "system" ? (
-                                  <span>系统事件</span>
-                                ) : (
-                                  <span>客户</span>
-                                )}
-                                {timeText ? <span>{timeText}</span> : null}
-                              </div>
-
-                              <div
-                                className={`rounded-2xl px-3 py-2 text-[12px] leading-6 shadow-[0_8px_24px_rgba(15,23,42,0.05)] ${
-                                  role === "assistant"
-                                    ? "bg-violet-50 text-slate-800"
-                                    : role === "staff"
-                                      ? "bg-blue-50 text-slate-800"
-                                      : role === "system"
-                                        ? "border border-dashed border-slate-200 bg-slate-50 text-slate-500"
-                                        : "bg-slate-100 text-slate-800"
-                                }`}
-                              >
-                                {content || "暂不支持展示该消息内容"}
-                              </div>
-                            </div>
-
-                            {isRight ? (
-                              <div
-                                className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl ${
-                                  role === "assistant"
-                                    ? "bg-violet-50 text-violet-600"
-                                    : "bg-blue-50 text-blue-600"
-                                }`}
-                              >
-                                {role === "assistant" ? (
-                                  <Bot className="h-4 w-4" />
-                                ) : (
-                                  <UserRound className="h-4 w-4" />
-                                )}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
                 </Card>
               ) : null}
             </>
           )}
         </div>
       )}
+
+      <Dialog
+        isOpen={isRPABindingModalOpen}
+        onClose={() => {
+          setIsRPABindingModalOpen(false);
+          setPendingEnableAutoMode(false);
+        }}
+        title="绑定 RPA 识别码"
+        className="max-w-[360px]"
+        footer={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsRPABindingModalOpen(false);
+                setPendingEnableAutoMode(false);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              className="bg-slate-900 text-white hover:bg-slate-800"
+              disabled={isSavingRPABinding}
+              onClick={() => void handleSaveRPAClientBinding()}
+            >
+              {isSavingRPABinding ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              保存并开启
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-700">
+            开启自动模式前，需要先为当前工具栏成员绑定一个固定的{" "}
+            <code>rpa_client_id</code>。 RPA
+            客户端登录母语AI后可直接复制该识别码。
+          </div>
+          <div className="space-y-2">
+            <label className="text-[12px] font-medium text-slate-700">
+              rpa_client_id
+            </label>
+            <Input
+              value={rpaClientIDDraft}
+              onChange={(event) => setRPAClientIDDraft(event.target.value)}
+              placeholder="请粘贴 RPA 客户端显示的 rpa_client_id"
+              className="h-10 rounded-2xl border-slate-200 bg-white text-sm"
+            />
+          </div>
+          {rpaBindingNotice ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] leading-5 text-slate-600">
+              {rpaBindingNotice}
+            </div>
+          ) : null}
+        </div>
+      </Dialog>
 
       <Dialog
         isOpen={isUpgradeModalOpen}

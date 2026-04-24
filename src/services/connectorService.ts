@@ -13,8 +13,11 @@ export type MuYuAIConnectorStatus = {
 export type MuYuAIConnection = {
   CorpID?: string
   MuYuAITenantID?: string
-  MuYuAIUserID?: string
-  MuYuAIUserPhone?: string
+  AuthorizedUserID?: string
+  AuthorizedUserPhone?: string
+  TenantName?: string
+  TenantLogo?: string
+  TenantType?: string
   Scopes?: string
   Status?: string
   TokenExpiresAt?: string
@@ -22,8 +25,11 @@ export type MuYuAIConnection = {
   UpdatedAt?: string
   corp_id?: string
   muyuai_tenant_id?: string
-  muyuai_user_id?: string
-  muyuai_user_phone?: string
+  authorized_user_id?: string
+  authorized_user_phone?: string
+  tenant_name?: string
+  tenant_logo?: string
+  tenant_type?: string
   scopes?: string
   status?: string
   token_expires_at?: string

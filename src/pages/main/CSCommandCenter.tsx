@@ -25,7 +25,7 @@ import {
   getCSCommandCenterSessionDetail,
   getCSCommandCenterView,
   markCommandCenterSessionRead,
-  openCommandCenterRealtimeSocket,
+  openRealtimeUpdatesSocket,
   transitionKFServiceState,
   type CommandCenterMessage,
   type CommandCenterRealtimeEnvelope,
@@ -98,6 +98,104 @@ type SessionStatusPresentation = {
   label: string;
   badgeClassName: string;
 };
+
+function commandCenterJourneyStageLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "discovery":
+      return "初步了解";
+    case "evaluation":
+      return "意向沟通中";
+    case "purchase":
+      return "准备下单";
+    case "fulfillment":
+      return "履约跟进";
+    case "after_sales":
+      return "售后处理中";
+    case "complaint":
+      return "投诉处理";
+    case "unknown":
+      return "阶段未知";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function commandCenterRelationshipStageLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "new":
+      return "新客户";
+    case "active":
+      return "活跃客户";
+    case "repeat":
+      return "复购客户";
+    case "vip":
+      return "重点客户";
+    case "at_risk":
+      return "流失风险";
+    case "lost":
+      return "已流失";
+    case "unknown":
+      return "关系未知";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function commandCenterPriorityLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "low":
+      return "低";
+    case "medium":
+      return "中";
+    case "high":
+      return "高";
+    case "urgent":
+      return "紧急";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function commandCenterConfidenceLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "low":
+      return "低";
+    case "medium":
+      return "中";
+    case "high":
+      return "高";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function commandCenterOpportunityLevelLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "none":
+      return "暂无明显机会";
+    case "low":
+      return "低机会";
+    case "medium":
+      return "中机会";
+    case "high":
+      return "高机会";
+    default:
+      return (raw || "").trim();
+  }
+}
+
+function commandCenterHandoffLabel(raw?: string): string {
+  switch ((raw || "").trim()) {
+    case "ai_can_continue":
+      return "AI 可继续处理";
+    case "human_recommended":
+      return "建议人工关注";
+    case "human_required":
+      return "需要人工接管";
+    default:
+      return (raw || "").trim();
+  }
+}
 
 type MessageWindowState = {
   messages: CommandCenterMessage[];
@@ -535,8 +633,7 @@ export default function CSCommandCenter() {
   const sessionsRef = useRef<CommandCenterSession[]>([]);
   const prevSelectedBucketRef = useRef<string>("");
   const messageWindowRef = useRef<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
-  const chatStreamVersionRef = useRef(0);
-  const opsStreamVersionRef = useRef(0);
+  const realtimeCursorRef = useRef(0);
   const refreshTimerRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
@@ -848,8 +945,7 @@ export default function CSCommandCenter() {
   }, [messageWindow]);
 
   useEffect(() => {
-    chatStreamVersionRef.current = 0;
-    opsStreamVersionRef.current = 0;
+    realtimeCursorRef.current = 0;
     refreshViewRequestedRef.current = false;
     refreshDetailRequestedRef.current = false;
   }, [queryOpenKFID]);
@@ -987,55 +1083,34 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const sockets = [
-      openCommandCenterRealtimeSocket({
-        topic: "chat",
-        open_kfid: queryOpenKFID,
-        since_version: chatStreamVersionRef.current,
-        onMessage: (payload: CommandCenterRealtimeEnvelope) => {
-          chatStreamVersionRef.current = Math.max(
-            chatStreamVersionRef.current,
-            Number(payload.latest_version || 0),
-          );
-          queueLiveRefresh({
-            refreshDetail: shouldRefreshSelectedDetail(
-              payload,
-              selectedSessionKeyRef.current,
-            ),
-          });
-        },
-      }),
-      openCommandCenterRealtimeSocket({
-        topic: "ops",
-        open_kfid: queryOpenKFID,
-        since_version: opsStreamVersionRef.current,
-        onMessage: (payload: CommandCenterRealtimeEnvelope) => {
-          opsStreamVersionRef.current = Math.max(
-            opsStreamVersionRef.current,
-            Number(payload.latest_version || 0),
-          );
-          queueLiveRefresh({
-            refreshDetail: shouldRefreshSelectedDetail(
-              payload,
-              selectedSessionKeyRef.current,
-            ),
-          });
-        },
-      }),
-    ];
+    const socket = openRealtimeUpdatesSocket({
+      open_kfid: queryOpenKFID,
+      since_cursor: realtimeCursorRef.current,
+      onMessage: (payload: CommandCenterRealtimeEnvelope) => {
+        const latestCursor = Number(payload.latest_cursor || 0);
+        realtimeCursorRef.current = Math.max(
+          realtimeCursorRef.current,
+          latestCursor,
+        );
+        queueLiveRefresh({
+          refreshDetail: shouldRefreshSelectedDetail(
+            payload,
+            selectedSessionKeyRef.current,
+          ),
+        });
+      },
+    });
     return () => {
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
       }
-      sockets.forEach((socket) => {
-        if (
-          socket.readyState === WebSocket.OPEN ||
-          socket.readyState === WebSocket.CONNECTING
-        ) {
-          socket.close();
-        }
-      });
+      if (
+        socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING
+      ) {
+        socket.close();
+      }
     };
   }, [queryOpenKFID]);
 
@@ -2072,22 +2147,34 @@ export default function CSCommandCenter() {
                             ) : null}
                             {activeMonitor?.summary_detail?.journey_stage ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
-                                阶段：{activeMonitor.summary_detail.journey_stage.trim()}
+                                阶段：
+                                {commandCenterJourneyStageLabel(
+                                  activeMonitor.summary_detail.journey_stage,
+                                )}
                               </Badge>
                             ) : null}
                             {activeMonitor?.summary_detail?.relationship_stage ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
-                                关系：{activeMonitor.summary_detail.relationship_stage.trim()}
+                                关系：
+                                {commandCenterRelationshipStageLabel(
+                                  activeMonitor.summary_detail.relationship_stage,
+                                )}
                               </Badge>
                             ) : null}
                             {activeMonitor?.summary_detail?.priority ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
-                                优先级：{activeMonitor.summary_detail.priority.trim()}
+                                优先级：
+                                {commandCenterPriorityLabel(
+                                  activeMonitor.summary_detail.priority,
+                                )}
                               </Badge>
                             ) : null}
                             {activeMonitor?.summary_detail?.confidence ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
-                                置信度：{activeMonitor.summary_detail.confidence.trim()}
+                                置信度：
+                                {commandCenterConfidenceLabel(
+                                  activeMonitor.summary_detail.confidence,
+                                )}
                               </Badge>
                             ) : null}
                           </div>
@@ -2121,7 +2208,10 @@ export default function CSCommandCenter() {
                               {activeMonitor?.summary_detail?.opportunity_level ? (
                                 <div>
                                   机会等级：
-                                  {activeMonitor.summary_detail.opportunity_level.trim()}
+                                  {commandCenterOpportunityLevelLabel(
+                                    activeMonitor.summary_detail
+                                      .opportunity_level,
+                                  )}
                                 </div>
                               ) : null}
                               {analysisFacts.opportunitySignals.length > 0 ? (
@@ -2170,7 +2260,10 @@ export default function CSCommandCenter() {
                               {activeMonitor?.summary_detail?.handoff_recommendation ? (
                                 <div>
                                   转人工建议：
-                                  {activeMonitor.summary_detail.handoff_recommendation.trim()}
+                                  {commandCenterHandoffLabel(
+                                    activeMonitor.summary_detail
+                                      .handoff_recommendation,
+                                  )}
                                   {activeMonitor?.summary_detail?.handoff_reason
                                     ? `，${activeMonitor.summary_detail.handoff_reason.trim()}`
                                     : ""}

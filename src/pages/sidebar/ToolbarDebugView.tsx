@@ -62,7 +62,7 @@ type ToolbarDebugSessionCandidate = {
   open_kfid?: string;
   external_userid?: string;
   contact_name?: string;
-  session_status?: string;
+  session_status_code?: string;
   channel_token?: string;
   last_active?: string;
   last_message?: string;
@@ -304,7 +304,7 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
           openKFID,
           externalUserID,
           label: firstNonEmpty(item.contact_name, externalUserID, "未识别客户"),
-          sessionStatus: item.session_status,
+          sessionStatus: item.session_status_code,
           lastActive: item.last_active,
           lastMessage: item.last_message,
         };

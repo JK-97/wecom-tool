@@ -150,6 +150,7 @@ export type CommandCenterSessionDetail = {
 
 export type CommandCenterRealtimeEvent = {
   open_kfid?: string;
+  cursor?: number;
   update_version?: number;
   event_id?: string;
   event_type?: string;
@@ -166,7 +167,7 @@ export type CommandCenterRealtimeEnvelope = {
   code?: number;
   message?: string;
   events?: CommandCenterRealtimeEvent[];
-  latest_version?: number;
+  latest_cursor?: number;
   request_id?: string;
 };
 
@@ -223,17 +224,16 @@ export async function getCSCommandCenterSessionDetail(params: {
   return payload?.data || null;
 }
 
-export function openCommandCenterRealtimeSocket(input: {
-  topic: "chat" | "ops";
+export function openRealtimeUpdatesSocket(input: {
   open_kfid?: string;
-  since_version?: number;
+  since_cursor?: number;
   onMessage: (payload: CommandCenterRealtimeEnvelope) => void;
   onClose?: () => void;
   onError?: (event: Event) => void;
 }): WebSocket {
-  const url = buildRealtimeSocketURL(input.topic, {
+  const url = buildRealtimeSocketURL({
     open_kfid: input.open_kfid,
-    since_version: input.since_version,
+    since_cursor: input.since_cursor,
   });
   const socket = new WebSocket(url);
   socket.onmessage = (event) => {
@@ -255,16 +255,16 @@ export function openCommandCenterRealtimeSocket(input: {
   return socket;
 }
 
-function buildRealtimeSocketURL(
-  topic: "chat" | "ops",
-  params?: { open_kfid?: string; since_version?: number },
-): string {
+function buildRealtimeSocketURL(params?: {
+  open_kfid?: string;
+  since_cursor?: number;
+}): string {
   const base =
     (import.meta.env.VITE_API_BASE_URL || "").trim() ||
     (typeof window !== "undefined"
       ? window.location.origin
       : "http://localhost");
-  const url = new URL(`/api/v1/realtime/${topic}/ws`, base);
+  const url = new URL("/api/v1/realtime/ws", base);
   if (url.protocol === "https:") {
     url.protocol = "wss:";
   } else {
@@ -273,8 +273,8 @@ function buildRealtimeSocketURL(
   if (params?.open_kfid) {
     url.searchParams.set("open_kfid", params.open_kfid);
   }
-  if (params?.since_version && params.since_version > 0) {
-    url.searchParams.set("since_version", String(params.since_version));
+  if (params?.since_cursor && params.since_cursor > 0) {
+    url.searchParams.set("since_cursor", String(params.since_cursor));
   }
   return url.toString();
 }

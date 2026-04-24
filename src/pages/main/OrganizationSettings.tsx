@@ -1216,6 +1216,11 @@ export default function OrganizationSettings() {
                   const badge = connectorStatusBadge(status?.status || "unavailable")
                   const connection = (status?.connection || {}) as Record<string, unknown>
                   const connected = Boolean(status?.connected)
+                  const tenantLogo = readConnectionText(connection, "TenantLogo", "tenant_logo")
+                  const tenantName = readConnectionText(connection, "TenantName", "tenant_name")
+                  const tenantType = readConnectionText(connection, "TenantType", "tenant_type")
+                  const authorizedUserPhone = readConnectionText(connection, "AuthorizedUserPhone", "authorized_user_phone")
+                  const isTeamTenant = tenantType === "team" && tenantName !== "-"
                   return (
                     <Card key={item.key} className="overflow-hidden border-gray-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg">
                       <CardHeader className="relative p-6 pb-4">
@@ -1223,7 +1228,7 @@ export default function OrganizationSettings() {
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex items-start gap-4">
                             <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-[0_10px_24px_rgba(37,99,235,0.16)] ring-1 ring-blue-100">
-                              <img src={muyuaiLogo} alt="母语AI" className="h-full w-full object-cover" />
+                              <img src={tenantLogo !== "-" ? tenantLogo : muyuaiLogo} alt="母语AI" className="h-full w-full object-cover" />
                             </div>
                             <div>
                               <CardTitle className="text-base font-bold text-gray-900">{item.title}</CardTitle>
@@ -1246,9 +1251,16 @@ export default function OrganizationSettings() {
                             <div className="mt-1 break-all font-mono text-xs font-semibold text-gray-800">{readConnectionText(connection, "MuYuAITenantID", "muyuai_tenant_id")}</div>
                           </div>
                           <div>
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">连接账号</div>
-                            <div className="mt-1 break-all text-xs font-semibold text-gray-800">{readConnectionText(connection, "MuYuAIUserPhone", "muyuai_user_phone")}</div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{isTeamTenant ? "团队名称" : "个人账号"}</div>
+                            <div className="mt-1 break-all text-xs font-semibold text-gray-800">{isTeamTenant ? tenantName : authorizedUserPhone}</div>
+                            <div className="mt-1 text-[10px] text-gray-500">{isTeamTenant ? "团队版授权" : "个人版授权"}</div>
                           </div>
+                          {isTeamTenant ? (
+                            <div>
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">授权成员</div>
+                              <div className="mt-1 break-all text-xs font-semibold text-gray-800">{authorizedUserPhone}</div>
+                            </div>
+                          ) : null}
                           <div>
                             <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">授权有效期</div>
                             <div className="mt-1 text-xs font-semibold text-gray-800">{formatDateTime(readConnectionText(connection, "TokenExpiresAt", "token_expires_at"))}</div>
