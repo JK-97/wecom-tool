@@ -128,7 +128,10 @@ function normalizeSuggestion(
 
 function ToolbarSkeleton() {
   return (
-    <div className={`${sidebarBody} space-y-3`}>
+    <div
+      className={`${sidebarBody} min-h-0 flex-1 space-y-3`}
+      style={{ overflowX: "hidden", overflowY: "auto" }}
+    >
       <div className="wecom-toolbar-skeleton h-24 rounded-2xl" />
       <div className="wecom-toolbar-skeleton h-28 rounded-2xl" />
       <div className="wecom-toolbar-skeleton h-40 rounded-2xl" />
@@ -2230,6 +2233,7 @@ export default function CSSidebar() {
             bootstrap?.external_userid ||
             query.external_userid,
         }}
+        channelDisplayMap={channelDisplayMap}
         onAutomationModeChange={handleAutomationModeChange}
         isUpdatingAutomationMode={isUpdatingAutomationMode}
         onExitRPAMode={async () => {
@@ -2247,7 +2251,10 @@ export default function CSSidebar() {
   }
 
   return (
-    <div className={`${sidebarPageShell} bg-white`}>
+    <div
+      className={`${sidebarPageShell} bg-white`}
+      style={{ height: "100dvh", minHeight: 0, overflow: "hidden" }}
+    >
       <div
         className={`shrink-0 text-white ${
           selectionState?.required ? "bg-[#1E293B] p-5" : "bg-[#0052D9] p-4"
@@ -2300,7 +2307,7 @@ export default function CSSidebar() {
         ) : (
           <div className="flex items-center gap-2 rounded bg-black/10 p-2">
             <span className="shrink-0 text-[11px] uppercase tracking-widest text-white/80">
-              当前客服:
+              当前客服号:
             </span>
             <span className="truncate font-mono text-[11px] font-bold text-white">
               {currentAgentLabel}
@@ -2329,9 +2336,10 @@ export default function CSSidebar() {
         <ToolbarSkeleton />
       ) : (
         <div
-          className={`${sidebarBody} flex-1 space-y-4 overflow-y-auto p-4 ${
+          className={`${sidebarBody} min-h-0 flex-1 space-y-4 p-4 ${
             selectionState?.required ? "bg-[#F8FAFC]" : "bg-white/50"
           }`}
+          style={{ overflowX: "hidden", overflowY: "auto" }}
         >
           {selectionState?.required ? (
             <>

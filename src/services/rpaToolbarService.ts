@@ -157,6 +157,7 @@ export type ToolbarRPABootstrap = {
   poll_after_ms?: number;
   server_time?: string;
   request_id?: string;
+  paused_auto_stop_remaining_ms?: number;
   queue_summary?: RPAStateSnapshot["queue_summary"];
   current_session?: RPAStateSnapshot["current_session"];
   target_session?: RPAStateSnapshot["target_session"];
@@ -233,6 +234,7 @@ export type RPAStateSnapshot = {
   can_stop?: boolean;
   server_time?: string;
   request_id?: string;
+  paused_auto_stop_remaining_ms?: number;
 };
 
 export type ToolbarRPAOperatorBinding = {
@@ -344,6 +346,8 @@ function normalizeRPAStateSnapshot(
     poll_after_ms: state.action?.poll_after_ms || 0,
     server_time: state.server_time,
     request_id: state.request_id,
+    paused_auto_stop_remaining_ms:
+      state.paused_auto_stop_remaining_ms || 0,
     queue_summary: state.queue_summary || null,
     current_session: state.current_session || null,
     target_session: state.target_session || null,

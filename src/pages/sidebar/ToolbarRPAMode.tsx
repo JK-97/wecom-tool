@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
+import { Dialog } from "@/components/ui/Dialog";
 import { normalizeErrorMessage } from "@/services/http";
 import {
   normalizeJSSDKRuntimeError,
@@ -14,6 +14,7 @@ import {
   getKFToolbarRPAState,
   markKFToolbarRPAMessageDraftFilled,
   markKFToolbarRPAMessageFailed,
+  updateKFToolbarRPAAutomationMode,
   type ToolbarRPAAction,
   type ToolbarRPABootstrap,
   type ToolbarRPASessionTask,
@@ -80,6 +81,7 @@ type Props = {
     open_kfid?: string;
     external_userid?: string;
   } | null;
+  channelDisplayMap?: Record<string, string>;
   onAutomationModeChange?: (enabled: boolean) => Promise<void> | void;
   isUpdatingAutomationMode?: boolean;
   onExitRPAMode?: () => Promise<void> | void;
@@ -303,7 +305,6 @@ function actionExecutionKey(
   runID: string,
   actionType: string,
   action?: ToolbarRPAAction | null,
-  version?: number,
 ): string {
   const message = action?.message || action?.messages?.[0];
   const messageHash = (message?.message_hash || "").trim();
@@ -315,7 +316,6 @@ function actionExecutionKey(
   ).trim();
   return [
     (runID || "").trim(),
-    String(Number(version || 0)),
     (actionType || "").trim(),
     (action?.session_task_id || "").trim(),
     taskID,
@@ -788,6 +788,8 @@ function phaseEyebrow(value?: string): string {
       return "待复核";
     case "completed":
       return "已完成";
+    case "pausing":
+      return "暂停待生效";
     case "paused":
       return "已暂停";
     case "idle":
@@ -801,6 +803,8 @@ function runStatusLabel(value?: string): string {
   switch ((value || "").trim()) {
     case "running":
       return "处理中";
+    case "pausing":
+      return "暂停待生效";
     case "paused":
       return "已暂停";
     case "stopped":
@@ -979,6 +983,7 @@ export function ToolbarRPAMode({
   initialAutomationEnabled = false,
   allowInactivePanel = false,
   currentSessionContext,
+  channelDisplayMap,
   onAutomationModeChange,
   isUpdatingAutomationMode = false,
   onExitRPAMode,
@@ -991,6 +996,8 @@ export function ToolbarRPAMode({
   const [errorText, setErrorText] = useState("");
   const [commandLoading, setCommandLoading] = useState("");
   const [isTargetFlashing, setIsTargetFlashing] = useState(false);
+  const [isReturnManualDialogOpen, setIsReturnManualDialogOpen] =
+    useState(false);
   const [skippedNavigationPipelineKey, setSkippedNavigationPipelineKey] =
     useState("");
   const [knownCurrentConversation, setKnownCurrentConversation] = useState(() => {
@@ -1033,6 +1040,14 @@ export function ToolbarRPAMode({
   const automationEnabled = snapshot
     ? Boolean(snapshot.automation?.enabled || snapshot.enabled)
     : Boolean(initialAutomationEnabled);
+  const isPausing =
+    runStatus === "pausing" || (snapshot?.status || "").trim() === "pausing";
+  const isPaused =
+    runStatus === "paused" || (snapshot?.status || "").trim() === "paused";
+  const isStopped =
+    runStatus === "stopped" ||
+    (snapshot?.status || "").trim() === "closed" ||
+    (!automationEnabled && Boolean(stableRunID));
 
   const commitKnownCurrentConversation = (context?: {
     openKFID?: string;
@@ -1279,6 +1294,13 @@ export function ToolbarRPAMode({
     if (!snapshot) return;
     if (allowInactivePanel) return;
     if (
+      (snapshot.run?.status || "").trim() === "stopped" ||
+      ((snapshot.status || "").trim() === "closed" &&
+        Boolean(snapshot.run?.run_id))
+    ) {
+      return;
+    }
+    if (
       (snapshot.mode || "").trim() === "rpa" &&
       (snapshot.enabled || snapshot.automation?.enabled)
     ) {
@@ -1293,6 +1315,9 @@ export function ToolbarRPAMode({
     snapshot?.automation?.enabled,
     snapshot?.enabled,
     snapshot?.mode,
+    snapshot?.run?.run_id,
+    snapshot?.run?.status,
+    snapshot?.status,
   ]);
 
   useEffect(() => {
@@ -1341,12 +1366,7 @@ export function ToolbarRPAMode({
       return;
     const shouldConsumeOnce = ONE_SHOT_ACTION_TYPES.has(actionType);
     const oneShotActionKey = shouldConsumeOnce
-      ? actionExecutionKey(
-          stableRunID,
-          actionType,
-          action,
-          snapshot.run?.version,
-        )
+      ? actionExecutionKey(stableRunID, actionType, action)
       : "";
     if (
       shouldConsumeOnce &&
@@ -1776,9 +1796,22 @@ export function ToolbarRPAMode({
     };
   }, [snapshot, actionType, stableRunID]);
 
-  const messages = (
+  const actionMessages = (
     action?.message ? [action.message] : action?.messages || []
   ).filter(Boolean);
+  const pausedMessage =
+    isPaused && (snapshot?.message_task?.text || "").trim()
+      ? [
+          {
+            message_id: snapshot?.message_task?.message_task_id || "",
+            order: snapshot?.message_task?.send_order || 0,
+            text: snapshot?.message_task?.text || "",
+            message_hash: snapshot?.message_task?.message_hash || "",
+          },
+        ]
+      : [];
+  const messages =
+    actionMessages.length > 0 ? actionMessages : pausedMessage;
   const currentTarget = action?.target || {
     open_kfid: snapshot?.session_task?.open_kfid,
     external_userid: snapshot?.session_task?.external_userid,
@@ -1837,11 +1870,21 @@ export function ToolbarRPAMode({
     ? "idle_poll"
     : actionType;
   const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
+  const pauseAutoStopRemainingMS = Math.max(
+    0,
+    Number(snapshot?.paused_auto_stop_remaining_ms || 0),
+  );
+  const pauseAutoStopSeconds = Math.max(
+    0,
+    Math.ceil(pauseAutoStopRemainingMS / 1000),
+  );
   const isCompleted = displayActionType === "completed";
   const isIdlePoll =
-    displayActionType === "idle_poll" ||
-    (!displayActionType && !hasActiveRun && automationEnabled && !pendingWindow);
-  const showStandalonePipeline = isIdlePoll || isCompleted;
+    !isPausing &&
+    !isPaused &&
+    (displayActionType === "idle_poll" ||
+      (!displayActionType && !hasActiveRun && automationEnabled && !pendingWindow));
+  const showStandalonePipeline = isPaused || isIdlePoll || isCompleted;
   const presentation = buildFlowPresentation({
     actionType: displayActionType,
     snapshot,
@@ -1872,17 +1915,22 @@ export function ToolbarRPAMode({
     currentTarget.open_kfid ||
     snapshot?.session_task?.open_kfid ||
     pendingWindow?.open_kfid ||
+    currentSessionContext?.open_kfid ||
     "";
+  const mappedAgentLabel = (channelDisplayMap?.[agentOpenKFID] || "").trim();
   const agentChannelLabel = (
     currentTarget.channel_label ||
     snapshot?.session_task?.channel_label ||
     ""
   ).trim();
   const agentName =
-    agentChannelLabel && agentChannelLabel !== agentOpenKFID
+    mappedAgentLabel ||
+    (agentChannelLabel && agentChannelLabel !== agentOpenKFID
       ? agentChannelLabel
-      : agentOpenKFID || "待确认";
-  const targetCardToneClass = isIdlePoll
+      : agentOpenKFID || "待确认");
+  const targetCardToneClass = isPaused
+    ? "border-amber-500 bg-amber-50"
+    : isIdlePoll
     ? "border-gray-400 bg-gray-50"
     : isCompleted
       ? "border-green-500 bg-green-50"
@@ -1891,7 +1939,9 @@ export function ToolbarRPAMode({
           ? "border-gray-400 bg-gray-50"
           : "border-indigo-500 bg-indigo-50 animate-pulse"
       : "border-blue-500 bg-blue-50";
-  const targetCardLabelClass = isIdlePoll
+  const targetCardLabelClass = isPaused
+    ? "text-amber-600"
+    : isIdlePoll
     ? "text-gray-500"
     : isCompleted
       ? "text-green-600"
@@ -1902,6 +1952,10 @@ export function ToolbarRPAMode({
       : "text-blue-600";
   const targetCardLabel = pendingWindow && !hasActiveRun
     ? "待恢复发送会话"
+    : isPausing
+      ? "当前任务完成后暂停"
+    : isPaused
+      ? "待恢复发送任务"
     : isIdlePoll
       ? "等待新发送任务"
     : isCompleted
@@ -1925,7 +1979,6 @@ export function ToolbarRPAMode({
     snapshot?.can_pause ||
     snapshot?.can_resume ||
     snapshot?.can_skip ||
-    snapshot?.can_retry ||
     snapshot?.can_stop,
   );
 
@@ -1975,6 +2028,53 @@ export function ToolbarRPAMode({
     }
   };
 
+  const handleStopAutomation = async () => {
+    if (commandLoading || isUpdatingAutomationMode) return;
+    clearTimer();
+    setCommandLoading("stop");
+    setErrorText("");
+    try {
+      if (stableRunID) {
+        const next = await executeKFToolbarRPARunCommand(stableRunID, {
+          command: "stop",
+          session_task_id:
+            action?.session_task_id ||
+            snapshot?.session_task?.session_task_id ||
+            "",
+          message_task_id:
+            action?.message_task_id ||
+            snapshot?.message_task?.message_task_id ||
+            "",
+        });
+        setSnapshot(next);
+      } else {
+        const automation = await updateKFToolbarRPAAutomationMode(false);
+        const next = await getKFToolbarRPAState({
+          open_kfid: currentSessionContext?.open_kfid || "",
+          external_userid: currentSessionContext?.external_userid || "",
+        });
+        setSnapshot(
+          next || {
+            mode: "normal",
+            enabled: false,
+            status: "closed",
+            automation: automation || { enabled: false },
+            action: {
+              type: "idle_poll",
+              reason: "stopped",
+              poll_after_ms: 0,
+            },
+          },
+        );
+      }
+      setNotice("已停止发送，未完成任务已丢弃。");
+    } catch (error) {
+      setErrorText(normalizeErrorMessage(error));
+    } finally {
+      setCommandLoading("");
+    }
+  };
+
   const handleStartAutomation = async () => {
     if (isUpdatingAutomationMode || commandLoading) return;
     setErrorText("");
@@ -1983,14 +2083,16 @@ export function ToolbarRPAMode({
 
   const handleReturnManualMode = async () => {
     if (isUpdatingAutomationMode) return;
-    const confirmed =
-      typeof window === "undefined" ||
-      window.confirm(
-        automationEnabled
-          ? "确认返回人工处理？自动发送会立即退出，未完成的任务会留在队列中等待后续处理。"
-          : "确认返回人工处理？当前会关闭自动发送面板。",
-      );
-    if (!confirmed) return;
+    if (isStopped || !automationEnabled) {
+      await onAutomationModeChange?.(false);
+      return;
+    }
+    setIsReturnManualDialogOpen(true);
+  };
+
+  const confirmReturnManualMode = async () => {
+    if (isUpdatingAutomationMode) return;
+    setIsReturnManualDialogOpen(false);
     await onAutomationModeChange?.(false);
   };
 
@@ -2041,7 +2143,9 @@ export function ToolbarRPAMode({
     "review_auto_resend",
   ];
   const actionTone =
-    pendingWindow && !hasActiveRun
+    isPaused
+      ? "amber"
+      : pendingWindow && !hasActiveRun
       ? "amber"
       : displayActionType === "wait_rpa_ack"
       ? "amber"
@@ -2068,24 +2172,38 @@ export function ToolbarRPAMode({
               : "border-blue-200 bg-blue-50 text-blue-800";
   const headerStatus = !automationEnabled
     ? "待启动"
-    : runStatus === "paused"
+    : isPausing
+      ? "暂停待生效"
+    : isPaused
       ? "已暂停"
       : hasActiveRun
         ? "执行中"
         : "守护中";
   const headerBg = automationEnabled
-    ? runStatus === "paused"
+    ? isPaused
       ? "bg-amber-600"
       : "bg-[#0052D9]"
     : "bg-slate-600";
+  const canPauseNow =
+    automationEnabled &&
+    Boolean(stableRunID) &&
+    !runIsTerminal &&
+    !isPausing &&
+    !isPaused &&
+    !commandLoading;
+  const canResumeNow =
+    automationEnabled && Boolean(stableRunID) && isPaused && !commandLoading;
+  const canStopNow =
+    automationEnabled && !commandLoading && !isUpdatingAutomationMode;
 
   return (
     <div
       className={`${sidebarPageShell} bg-white transition-all duration-500 ${
         isCompleted
           ? "border border-green-400 shadow-[inset_0_0_34px_rgba(34,197,94,0.22)]"
-            : ""
+          : ""
       }`}
+      style={{ height: "100dvh", minHeight: 0, overflow: "hidden" }}
     >
       <style>{`
         @keyframes toolbar-rpa-dot {
@@ -2129,12 +2247,12 @@ export function ToolbarRPAMode({
             </h1>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                disabled={isUpdatingAutomationMode}
-                onClick={() => void handleReturnManualMode()}
-                className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30 disabled:opacity-60"
-              >
+            <button
+              type="button"
+              disabled={isUpdatingAutomationMode}
+              onClick={() => void handleReturnManualMode()}
+              className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30 disabled:opacity-60"
+            >
               {isUpdatingAutomationMode ? (
                 <LoaderCircle className="h-3 w-3 animate-spin" />
               ) : (
@@ -2160,27 +2278,28 @@ export function ToolbarRPAMode({
         </div>
         <div className="flex items-center gap-2 rounded bg-black/10 p-2">
           <span className="shrink-0 text-[11px] uppercase tracking-widest text-white/80">
-            当前服务账号:
+            当前客服号:
           </span>
           <span className="truncate font-mono text-[11px] font-bold text-white">
-            <WecomOpenDataName
-              userid={agentOpenKFID}
-              fallback={agentName}
-              className="truncate font-mono text-[11px] font-bold text-white"
-            />
+            {agentName}
           </span>
         </div>
       </div>
 
-      <div className={`${sidebarBody} flex-1 overflow-y-auto bg-white/50 p-4`}>
+      <div
+        className={`${sidebarBody} min-h-0 flex-1 bg-white/50 p-4`}
+        style={{ overflowX: "hidden", overflowY: "auto" }}
+      >
         {!automationEnabled ? (
           <div className="flex flex-col items-center justify-center space-y-4 py-12 text-center">
             <ShieldCheck className="h-12 w-12 text-gray-300" />
             <p className="text-sm font-medium text-gray-500">
-              自动发送未启动
+              {isStopped ? "自动发送已停止" : "自动发送未启动"}
             </p>
             <span className="px-4 text-xs leading-5 text-gray-400">
-              点击底部“自动发送”后，工具栏会开始守护待发送任务。
+              {isStopped
+                ? "暂停超过 60 秒未恢复，系统已自动停止自动发送。"
+                : "点击底部“自动发送”后，工具栏会开始守护待发送任务。"}
             </span>
           </div>
         ) : (
@@ -2252,8 +2371,20 @@ export function ToolbarRPAMode({
                   <span>
                     发送进度
                   </span>
-                  <span className={isCompleted ? "text-green-500" : "text-gray-400"}>
-                    {isCompleted ? "已完成" : "待命中"}
+                  <span
+                    className={
+                      isPaused
+                        ? "text-amber-500"
+                        : isCompleted
+                          ? "text-green-500"
+                          : "text-gray-400"
+                    }
+                  >
+                    {isPaused
+                      ? "待恢复"
+                      : isCompleted
+                        ? "已完成"
+                        : "待命中"}
                   </span>
                 </div>
 
@@ -2262,7 +2393,11 @@ export function ToolbarRPAMode({
                     <div
                       key={step}
                       className={`relative h-1.5 rounded-full ${
-                        isCompleted ? "bg-green-500" : "bg-gray-200"
+                        isCompleted
+                          ? "bg-green-500"
+                          : isPaused
+                            ? "bg-amber-200"
+                            : "bg-gray-200"
                       }`}
                     >
                       {isCompleted && idx === pipelineSteps.length - 1 ? (
@@ -2281,6 +2416,32 @@ export function ToolbarRPAMode({
                       : "border-gray-200"
                   }`}
                 >
+                  {isPaused ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-600">
+                        <PauseCircle className="h-3.5 w-3.5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <div className="text-xs font-bold uppercase tracking-tight text-amber-800">
+                            待恢复
+                          </div>
+                          <span className="rounded bg-amber-200/60 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                            已暂停
+                          </span>
+                        </div>
+                        <div className="text-[11px] italic leading-snug text-gray-600">
+                          当前会话和消息会保持在这里，队列数量继续实时刷新；点击“恢复执行”后继续处理。
+                        </div>
+                        <div className="mt-2 rounded border border-amber-200 bg-white/70 px-2 py-1.5 text-[10px] font-bold text-amber-700">
+                          {pauseAutoStopSeconds > 0
+                            ? `${pauseAutoStopSeconds} 秒内未恢复将自动停止自动发送`
+                            : "正在自动停止自动发送..."}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {isIdlePoll ? (
                     <div className="flex items-start gap-3 opacity-60">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-600">
@@ -2291,7 +2452,16 @@ export function ToolbarRPAMode({
                       </div>
                       <div>
                         <div className="text-xs font-bold text-gray-800">
-                          正在等待新任务...
+                          <span>正在等待新任务</span>
+                          <span className="ml-1 inline-flex items-center gap-0.5 align-middle">
+                            {[0, 1, 2].map((idx) => (
+                              <span
+                                key={idx}
+                                className="h-1 w-1 rounded-full bg-gray-500 animate-bounce"
+                                style={{ animationDelay: `${idx * 140}ms` }}
+                              />
+                            ))}
+                          </span>
                         </div>
                         <div className="mt-0.5 text-[11px] text-gray-500">
                           有新的待发送会话时会自动处理
@@ -2642,7 +2812,16 @@ export function ToolbarRPAMode({
               <PauseCircle className="h-4 w-4" />
               等待启动
             </button>
-          ) : snapshot?.can_resume ? (
+          ) : isPausing ? (
+            <button
+              type="button"
+              disabled
+              className="flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 py-2.5 text-sm font-bold text-blue-700 shadow-sm disabled:cursor-not-allowed"
+            >
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              等当前任务完成
+            </button>
+          ) : canResumeNow ? (
             <button
               type="button"
               disabled={!!commandLoading}
@@ -2655,8 +2834,10 @@ export function ToolbarRPAMode({
           ) : (
             <button
               type="button"
-              disabled={!snapshot?.can_pause || !!commandLoading}
-              onClick={() => void executeCommand("pause", "已暂停自动发送。")}
+              disabled={!canPauseNow}
+              onClick={() =>
+                void executeCommand("pause", "当前任务完成后会自动暂停。")
+              }
               className="flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white py-2.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <PauseCircle className="h-4 w-4" />
@@ -2680,11 +2861,15 @@ export function ToolbarRPAMode({
           ) : (
             <button
               type="button"
-              disabled={!snapshot?.can_stop || !!commandLoading}
-              onClick={() => void executeCommand("stop", "已停止自动发送。")}
+              disabled={!canStopNow}
+              onClick={() => void handleStopAutomation()}
               className="flex items-center justify-center gap-2 rounded-md border border-red-200 bg-white py-2.5 text-sm font-bold text-red-600 shadow-sm hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Square className="h-4 w-4 fill-current" />
+              {commandLoading === "stop" ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="h-4 w-4 fill-current" />
+              )}
               停止发送
             </button>
           )}
@@ -2701,22 +2886,61 @@ export function ToolbarRPAMode({
             >
               跳过当前
             </button>
-            <button
-              type="button"
-              disabled={!snapshot?.can_retry || !!commandLoading}
-              onClick={() =>
-                void executeCommand("retry_message", "已重新排队当前消息。")
-              }
-              className="text-[11px] font-medium text-gray-500 underline underline-offset-4 hover:text-[#0052D9] disabled:opacity-50"
-            >
-              重新发送
-            </button>
           </div>
           <div className="shrink-0 rounded bg-white px-2 py-1 text-[10px] font-bold text-gray-500 shadow-sm">
-            排队任务：{queuePendingTotal}
+            待发任务：{queuePendingTotal}
           </div>
         </div>
       </div>
+
+      <Dialog
+        isOpen={isReturnManualDialogOpen}
+        onClose={() => {
+          if (!isUpdatingAutomationMode) setIsReturnManualDialogOpen(false);
+        }}
+        title="返回人工处理"
+        className="max-w-[340px]"
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isUpdatingAutomationMode}
+              onClick={() => setIsReturnManualDialogOpen(false)}
+            >
+              继续留在面板
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={isUpdatingAutomationMode}
+              onClick={() => void confirmReturnManualMode()}
+              className="bg-[#0052D9] hover:bg-blue-700"
+            >
+              {isUpdatingAutomationMode ? (
+                <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <UserRound className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              返回人工
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-[13px] leading-5 text-gray-600">
+          <p className="font-medium text-gray-900">
+            {automationEnabled
+              ? "确认退出自动发送并回到人工处理？"
+              : "确认关闭自动发送面板？"}
+          </p>
+          <p>
+            {automationEnabled
+              ? "未完成的发送任务会保留在队列中，后续可以重新进入自动面板继续处理。"
+              : "关闭后会回到人工工具栏，当前没有正在执行的自动发送任务。"}
+          </p>
+        </div>
+      </Dialog>
     </div>
   );
 }
