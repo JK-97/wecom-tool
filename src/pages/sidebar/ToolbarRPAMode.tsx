@@ -10,12 +10,12 @@ import {
 } from "@/services/jssdkService";
 import {
   executeKFToolbarRPARunCommand,
+  getKFToolbarRPAState,
   markKFToolbarRPAMessageDraftFilled,
   markKFToolbarRPAMessageFailed,
   type ToolbarRPABootstrap,
   type ToolbarRPASessionTask,
 } from "@/services/rpaToolbarService";
-import { getKFToolbarBootstrap } from "@/services/toolbarService";
 import {
   sidebarBody,
   sidebarHeader,
@@ -35,6 +35,7 @@ import {
   MessageSquareText,
   PauseCircle,
   PlayCircle,
+  RefreshCw,
   RefreshCcw,
   ShieldCheck,
   SkipForward,
@@ -414,8 +415,8 @@ function buildFlowPresentation(input: {
     return {
       eyebrow: "恢复中",
       title: "客户消息已进入恢复队列",
-      subtitle: "已记录待发送任务，正在等待 RPA 服务和连接器恢复后生成发送流程。",
-      nextStep: "服务恢复后会自动生成 run 并继续发送，无需重新触发客户消息。",
+      subtitle: "已记录待发送任务，正在等待发送服务恢复后继续处理。",
+      nextStep: "服务恢复后会自动生成发送任务，无需重新触发客户消息。",
       tone: "amber",
       visual: "ack",
     };
@@ -435,7 +436,7 @@ function buildFlowPresentation(input: {
       eyebrow: "正在准备",
       title: "正在填入消息",
       subtitle: "已经进入目标会话，正在把当前回复内容填入输入框。",
-      nextStep: "填入完成后，会等待 RPA 点击发送。",
+      nextStep: "填入完成后，会等待发送端点击发送。",
       tone: "blue",
       visual: "typing",
     };
@@ -443,9 +444,9 @@ function buildFlowPresentation(input: {
   if (actionType === "wait_rpa_ack") {
     return {
       eyebrow: "等待确认",
-      title: "等待 RPA 点击发送",
-      subtitle: "消息已填入输入框，正在等待 clicked ACK 确认已点击发送。",
-      nextStep: "收到 clicked ACK 后，才会继续推进后续会话。",
+      title: "等待点击发送",
+      subtitle: "消息已填入输入框，正在等待发送端确认已点击发送。",
+      nextStep: "确认点击后，才会继续推进后续会话。",
       tone: "amber",
       visual: "ack",
     };
@@ -454,7 +455,7 @@ function buildFlowPresentation(input: {
     return {
       eyebrow: "后台确认",
       title: "已点击发送，正在后台确认",
-      subtitle: "RPA 已确认点击发送，企业微信消息记录会继续异步确认。",
+      subtitle: "发送端已点击发送，企业微信消息记录会继续异步确认。",
       nextStep: "当前界面保持守护中，确认结果回来后会继续推进。",
       tone: "emerald",
       visual: "confirm",
@@ -611,6 +612,20 @@ function liveDots(colorClass: string) {
   );
 }
 
+function bounceDots(colorClass: string) {
+  return (
+    <span className="ml-0.5 mt-0.5 flex items-center justify-center gap-0.5">
+      {[0, 1, 2].map((index) => (
+        <span
+          key={index}
+          className={`h-1 w-1 animate-bounce rounded-full ${colorClass}`}
+          style={{ animationDelay: `${index * 150}ms` }}
+        />
+      ))}
+    </span>
+  );
+}
+
 function FlowVisualGlyph({
   visual,
   tone,
@@ -705,6 +720,9 @@ export function ToolbarRPAMode({
   const [notice, setNotice] = useState("");
   const [errorText, setErrorText] = useState("");
   const [commandLoading, setCommandLoading] = useState("");
+  const [isTargetFlashing, setIsTargetFlashing] = useState(false);
+  const [skippedNavigationPipelineKey, setSkippedNavigationPipelineKey] =
+    useState("");
   const [boundRunID, setBoundRunID] = useState(
     (initialBootstrap?.run?.run_id || runId || "").trim(),
   );
@@ -715,6 +733,14 @@ export function ToolbarRPAMode({
   const stableRunID = (snapshot?.run?.run_id || boundRunID || "").trim();
   const action = snapshot?.action || null;
   const actionType = (action?.type || "").trim();
+  const currentPipelineKey = [
+    stableRunID || runId || "",
+    action?.session_task_id ||
+      snapshot?.run?.current_session_task_id ||
+      snapshot?.session_task?.session_task_id ||
+      action?.task_id ||
+      "",
+  ].join(":");
   const pendingWindow = snapshot?.pending_window || null;
   const runStatus = (snapshot?.run?.status || "").trim().toLowerCase();
   const runIsTerminal =
@@ -755,19 +781,16 @@ export function ToolbarRPAMode({
       );
       const useTargetContext =
         recentlyNavigated && isSameConversation(context, target, true);
-      const next = (
-        await getKFToolbarBootstrap({
+      const next = await getKFToolbarRPAState({
         run_id: runIDForBootstrap,
         open_kfid:
           context.openKFID || (useTargetContext ? target.open_kfid || "" : ""),
         external_userid:
           context.externalUserID ||
           (useTargetContext ? target.external_userid || "" : ""),
-          expect_rpa: true,
-        })
-      )?.rpa;
+      });
       if (!next) {
-        throw new Error("RPA 自动发送状态暂时不可用");
+        throw new Error("自动发送状态暂时不可用");
       }
       setBoundRunID((next?.run?.run_id || "").trim());
       setSnapshot(next);
@@ -840,30 +863,54 @@ export function ToolbarRPAMode({
       try {
         if (actionType === "navigate_to_chat") {
           const context = await resolveRuntimeContext(currentSessionContext);
+          const navigation = snapshot.navigation || {};
           if (
+            navigation.already_matched ||
             isSameConversation(
               context,
               action.target,
               hasRecentAutomationNavigation(stableRunID, action.target),
             )
           ) {
-            setNotice("当前已在目标会话，继续执行下一步...");
-            const next = (
-              await getKFToolbarBootstrap({
+            setSkippedNavigationPipelineKey(currentPipelineKey);
+            setNotice("当前已在目标会话，跳过会话切换。");
+            const next = await getKFToolbarRPAState({
               run_id: stableRunID || "",
               open_kfid: context.openKFID || action.target?.open_kfid || "",
               external_userid:
                 context.externalUserID || action.target?.external_userid || "",
-                expect_rpa: true,
-              })
-            )?.rpa;
+            });
             if (!next) {
-              throw new Error("RPA 自动发送状态暂时不可用");
+              throw new Error("自动发送状态暂时不可用");
             }
             if (!active) return;
             setSnapshot(next);
             return;
           }
+          if (navigation.required === false) {
+            const next = await getKFToolbarRPAState({
+              run_id: stableRunID || "",
+              open_kfid: context.openKFID || action.target?.open_kfid || "",
+              external_userid:
+                context.externalUserID || action.target?.external_userid || "",
+            });
+            if (!next) {
+              throw new Error("自动发送状态暂时不可用");
+            }
+            if (!active) return;
+            setSnapshot(next);
+            return;
+          }
+          setNotice("即将切换目标会话...");
+          const flashCount = Math.max(1, navigation.flash_count || 4);
+          const flashDelay = Math.max(
+            navigation.delay_ms || 0,
+            flashCount * 360,
+          );
+          setIsTargetFlashing(true);
+          await sleep(flashDelay);
+          if (!active) return;
+          setIsTargetFlashing(false);
           setNotice("正在进入下一个微信客服会话...");
           rememberAutomationNavigation(
             stableRunID || runId || "",
@@ -877,19 +924,16 @@ export function ToolbarRPAMode({
           const nextContext = await resolveRuntimeContext(
             currentSessionContext,
           );
-          const next = (
-            await getKFToolbarBootstrap({
+          const next = await getKFToolbarRPAState({
             run_id: stableRunID || "",
             open_kfid: nextContext.openKFID || action.target?.open_kfid || "",
             external_userid:
               nextContext.externalUserID ||
               action.target?.external_userid ||
               "",
-              expect_rpa: true,
-            })
-          )?.rpa;
+          });
           if (!next) {
-            throw new Error("RPA 自动发送状态暂时不可用");
+            throw new Error("自动发送状态暂时不可用");
           }
           if (!active) return;
           setSnapshot(next);
@@ -959,7 +1003,7 @@ export function ToolbarRPAMode({
           });
           if (!active) return;
           setSnapshot(next);
-          setNotice("复核完成，正在继续自动化流程。");
+          setNotice("复核完成，正在继续自动发送。");
           return;
         }
         if (actionType === "fill_current_message") {
@@ -972,7 +1016,7 @@ export function ToolbarRPAMode({
           ) {
             return;
           }
-          setNotice("正在填入当前消息，随后会通知 RPA 点击发送...");
+          setNotice("正在填入当前消息，随后会等待发送端点击发送...");
           await sendTextToCurrentSession((message.text || "").trim(), {
             external_userid:
               action.target?.external_userid ||
@@ -995,9 +1039,12 @@ export function ToolbarRPAMode({
           );
           if (!active) return;
           setSnapshot(next);
-          setNotice("消息已填入，正在等待 RPA 点击发送。");
+          setNotice("消息已填入，正在等待点击发送。");
         }
       } catch (error) {
+        if (actionType === "navigate_to_chat") {
+          setIsTargetFlashing(false);
+        }
         const mapped = normalizeJSSDKRuntimeError(error);
         const message =
           actionType === "navigate_to_chat" ||
@@ -1059,6 +1106,22 @@ export function ToolbarRPAMode({
       ),
     [snapshot?.pending_session_tasks],
   );
+  const reviewManualTotal = Number(snapshot?.review_manual?.total || 0);
+  const navigationAlreadyMatched = snapshot?.navigation?.already_matched === true;
+  const navigationSkipped =
+    navigationAlreadyMatched || snapshot?.navigation?.required === false;
+  const rememberedNavigationSkipped = Boolean(
+    stableRunID &&
+      currentPipelineKey &&
+      skippedNavigationPipelineKey === currentPipelineKey,
+  );
+  const navigationSkippedInRun = navigationSkipped || rememberedNavigationSkipped;
+  const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
+  const isCompleted = actionType === "completed";
+  const isIdlePoll =
+    actionType === "idle_poll" ||
+    (!actionType && !hasActiveRun && automationEnabled && !pendingWindow);
+  const showStandalonePipeline = isIdlePoll || isCompleted;
   const presentation = buildFlowPresentation({
     actionType,
     snapshot,
@@ -1090,11 +1153,35 @@ export function ToolbarRPAMode({
     snapshot?.session_task?.open_kfid ||
     pendingWindow?.open_kfid ||
     "待确认";
-  const channelLabel =
-    currentTarget.channel_label ||
-    snapshot?.session_task?.channel_label ||
-    pendingWindow?.channel_label ||
-    "";
+  const targetCardToneClass = isIdlePoll
+    ? "border-gray-400 bg-gray-50"
+    : isCompleted
+      ? "border-green-500 bg-green-50"
+      : actionType === "navigate_to_chat"
+        ? navigationSkippedInRun
+          ? "border-gray-400 bg-gray-50"
+          : "border-indigo-500 bg-indigo-50 animate-pulse"
+        : "border-blue-500 bg-blue-50";
+  const targetCardLabelClass = isIdlePoll
+    ? "text-gray-500"
+    : isCompleted
+      ? "text-green-600"
+      : actionType === "navigate_to_chat"
+        ? navigationSkippedInRun
+          ? "text-gray-500"
+          : "text-indigo-600"
+        : "text-blue-600";
+  const targetCardLabel = pendingWindow && !hasActiveRun
+    ? "待恢复发送会话"
+    : isIdlePoll
+      ? "等待新发送任务"
+      : isCompleted
+        ? "本次发送已完成"
+        : actionType === "navigate_to_chat"
+          ? navigationSkippedInRun
+            ? "已在目标会话"
+            : "即将切换目标会话"
+          : "正在处理会话";
   const messageOrder =
     messages[0]?.order ||
     snapshot?.message_task?.send_order ||
@@ -1112,6 +1199,26 @@ export function ToolbarRPAMode({
     snapshot?.can_retry ||
     snapshot?.can_stop,
   );
+
+  useEffect(() => {
+    if (!stableRunID || actionType === "idle_poll" || actionType === "completed") {
+      if (skippedNavigationPipelineKey) setSkippedNavigationPipelineKey("");
+      return;
+    }
+    if (
+      actionType === "navigate_to_chat" &&
+      navigationSkipped &&
+      skippedNavigationPipelineKey !== currentPipelineKey
+    ) {
+      setSkippedNavigationPipelineKey(currentPipelineKey);
+    }
+  }, [
+    actionType,
+    currentPipelineKey,
+    navigationSkipped,
+    skippedNavigationPipelineKey,
+    stableRunID,
+  ]);
 
   const executeCommand = async (command: string, successText: string) => {
     if (!stableRunID || commandLoading) return;
@@ -1168,6 +1275,18 @@ export function ToolbarRPAMode({
   };
   const currentStep = stepIndexByAction[actionType] || 0;
   const showPipeline = currentStep > 0;
+  const pipelineStatusText =
+    currentStep > 0
+      ? `第 ${currentStep}/5 步${
+          actionType === "navigate_to_chat" && navigationSkippedInRun
+            ? "（已跳过）"
+            : ""
+        }`
+      : "";
+  const pipelineStatusClass =
+    actionType === "navigate_to_chat" && navigationSkippedInRun
+      ? "text-gray-500"
+      : "text-blue-500";
   const pipelineSteps = [
     "navigate_to_chat",
     "fill_current_message",
@@ -1175,24 +1294,6 @@ export function ToolbarRPAMode({
     "wait_wecom_confirm",
     "review_auto_resend",
   ];
-  const actionIcon =
-    actionType === "navigate_to_chat" ? (
-      <ArrowRightLeft className="h-3.5 w-3.5" />
-    ) : actionType === "fill_current_message" ? (
-      <FileText className="h-3.5 w-3.5" />
-    ) : actionType === "wait_rpa_ack" ? (
-      <ShieldCheck className="h-3.5 w-3.5" />
-    ) : actionType === "wait_wecom_confirm" ? (
-      <CheckCircle2 className="h-3.5 w-3.5" />
-    ) : actionType === "review_auto_resend" ? (
-      <RefreshCcw className="h-3.5 w-3.5 animate-spin" />
-    ) : actionType === "need_manual" ? (
-      <AlertCircle className="h-3.5 w-3.5" />
-    ) : actionType === "completed" ? (
-      <CheckCircle2 className="h-3.5 w-3.5" />
-    ) : (
-      <ShieldCheck className="h-3.5 w-3.5" />
-    );
   const actionTone =
     pendingWindow && !hasActiveRun
       ? "amber"
@@ -1233,13 +1334,39 @@ export function ToolbarRPAMode({
     : "bg-slate-600";
 
   return (
-    <div className={`${sidebarPageShell} bg-white`}>
+    <div
+      className={`${sidebarPageShell} bg-white transition-all duration-500 ${
+        isCompleted
+          ? "border border-green-400 shadow-[inset_0_0_34px_rgba(34,197,94,0.22)]"
+            : ""
+      }`}
+    >
       <style>{`
         @keyframes toolbar-rpa-dot {
           0%, 80%, 100% { opacity: 0.28; transform: translateY(0) scale(0.88); }
           40% { opacity: 1; transform: translateY(-2px) scale(1.05); }
         }
+        @keyframes toolbar-rpa-flash {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); transform: translateZ(0); }
+          45% { box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.24); transform: translateY(-1px); }
+        }
+        @keyframes toolbar-rpa-slide {
+          0%, 100% { transform: translateX(-2px); opacity: 0.72; }
+          50% { transform: translateX(2px); opacity: 1; }
+        }
+        @keyframes toolbar-rpa-bar {
+          0%, 100% { transform: scaleY(0.72); opacity: 0.62; }
+          50% { transform: scaleY(1.18); opacity: 1; }
+        }
+        @keyframes toolbar-rpa-soft-pop {
+          0%, 100% { transform: scale(0.96); opacity: 0.78; }
+          50% { transform: scale(1.04); opacity: 1; }
+        }
         .toolbar-rpa-dot { animation: toolbar-rpa-dot 1.2s ease-in-out infinite; }
+        .toolbar-rpa-slide { animation: toolbar-rpa-slide 1.1s ease-in-out infinite; }
+        .toolbar-rpa-bar { animation: toolbar-rpa-bar 0.9s ease-in-out infinite; transform-origin: bottom; }
+        .toolbar-rpa-soft-pop { animation: toolbar-rpa-soft-pop 1.5s ease-in-out infinite; }
+        .toolbar-rpa-flash { animation: toolbar-rpa-flash 0.36s ease-in-out 4; }
       `}</style>
       <div className={`${headerBg} shrink-0 p-4 text-white`}>
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -1252,7 +1379,7 @@ export function ToolbarRPAMode({
               }`}
             />
             <h1 className="truncate text-sm font-bold tracking-tight text-white">
-              RPA 自动发送模式
+              自动发送助手
             </h1>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -1277,7 +1404,7 @@ export function ToolbarRPAMode({
               disabled={isLoading}
               onClick={() => void loadBootstrap(false)}
               className="inline-flex h-7 w-7 items-center justify-center rounded bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-60"
-              aria-label="刷新 RPA 自动模式"
+              aria-label="刷新自动发送状态"
             >
               <RefreshCcw
                 className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`}
@@ -1287,7 +1414,7 @@ export function ToolbarRPAMode({
         </div>
         <div className="flex items-center gap-2 rounded bg-black/10 p-2">
           <span className="shrink-0 text-[11px] uppercase tracking-widest text-white/80">
-            当前客服:
+            当前服务账号:
           </span>
           <span className="truncate font-mono text-[11px] font-bold text-white">
             {agentName}
@@ -1303,7 +1430,7 @@ export function ToolbarRPAMode({
               自动模式已关闭
             </p>
             <span className="px-4 text-xs leading-5 text-gray-400">
-              开启后，工具栏会继续守护新的 RPA 发送任务。
+              开启后，工具栏会持续等待新的待发送任务。
             </span>
           </div>
         ) : (
@@ -1311,40 +1438,30 @@ export function ToolbarRPAMode({
             {(hasActiveRun ||
               currentTarget.open_kfid ||
               currentTarget.external_userid ||
-              pendingWindow) ? (
+              pendingWindow ||
+              showStandalonePipeline) ? (
               <div
-                className={`rounded-r border-y border-r p-3 shadow-sm ${
-                  actionType === "navigate_to_chat"
-                    ? "border-indigo-100 border-l-4 border-l-indigo-500 bg-indigo-50"
-                    : "border-blue-100 border-l-4 border-l-[#0052D9] bg-blue-50"
+                className={`border-l-4 p-3 rounded-r shadow-sm transition-all duration-300 ${targetCardToneClass} ${
+                  isTargetFlashing ? "toolbar-rpa-flash" : ""
                 }`}
               >
                 <div
-                  className={`mb-1 text-[10px] font-bold uppercase tracking-wider ${
-                    actionType === "navigate_to_chat"
-                      ? "text-indigo-600"
-                      : "text-[#0052D9]"
-                  }`}
+                  className={`mb-1 text-[10px] font-bold uppercase tracking-wider ${targetCardLabelClass}`}
                 >
-                  {pendingWindow && !hasActiveRun
-                    ? "等待恢复的会话"
-                    : actionType === "navigate_to_chat"
-                      ? "即将切换会话"
-                      : "当前处理会话"}
+                  {targetCardLabel}
                 </div>
                 <div className="flex items-end justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-lg font-bold text-gray-800">
-                      买家: {customerName}
+                    <div
+                      className={`truncate text-lg font-bold ${
+                        isIdlePoll ? "text-gray-400" : "text-gray-800"
+                      }`}
+                    >
+                      买家: {isIdlePoll ? "等待新客户..." : customerName}
                     </div>
                     <div className="mt-1 truncate font-mono text-[10px] text-gray-500">
-                      ext_user: {customerExternalUserID || "-"}
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="text-[10px] text-gray-400">会话上下文</div>
-                    <div className="max-w-[130px] truncate text-xs font-semibold text-gray-700">
-                      {channelLabel || "WeCom KF Window"}
+                      客户ID:{" "}
+                      {isIdlePoll ? "---" : customerExternalUserID || "-"}
                     </div>
                   </div>
                 </div>
@@ -1364,8 +1481,8 @@ export function ToolbarRPAMode({
                       <div className="text-xs font-bold">
                         {presentation.title}
                       </div>
-                      <span className="rounded bg-amber-200/70 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800">
-                        RECOVERING
+                      <span className="rounded bg-amber-200/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                        已记录
                       </span>
                     </div>
                     <div className="mt-1 text-[11px] leading-snug text-gray-600">
@@ -1379,11 +1496,91 @@ export function ToolbarRPAMode({
                   </div>
                 </div>
               </div>
+            ) : showStandalonePipeline ? (
+              <div className="space-y-2.5">
+                <div className="flex justify-between text-[11px] font-bold uppercase text-gray-500">
+                  <span>
+                    发送进度
+                  </span>
+                  <span className={isCompleted ? "text-green-500" : "text-gray-400"}>
+                    {isCompleted ? "已完成" : "待命中"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-5 gap-1">
+                  {pipelineSteps.map((step, idx) => (
+                    <div
+                      key={step}
+                      className={`relative h-1.5 rounded-full ${
+                        isCompleted ? "bg-green-500" : "bg-gray-200"
+                      }`}
+                    >
+                      {isCompleted && idx === pipelineSteps.length - 1 ? (
+                        <div className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-green-500 text-white">
+                          <CheckCircle2 className="h-3 w-3" />
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div
+                  className={`space-y-3 rounded-lg border bg-gray-50 p-3.5 transition-colors ${
+                    isCompleted
+                      ? "border-green-200"
+                      : "border-gray-200"
+                  }`}
+                >
+                  {isIdlePoll ? (
+                    <div className="flex items-start gap-3 opacity-60">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-600">
+                        <RefreshCw
+                          className="h-3.5 w-3.5 animate-spin"
+                          style={{ animationDuration: "3s" }}
+                        />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-gray-800">
+                          正在等待新任务...
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-gray-500">
+                          有新的待发送会话时会自动处理
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {isCompleted ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-green-100 text-green-600">
+                        <CheckCircle2 className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <div className="text-xs font-bold uppercase tracking-tight text-green-800">
+                            单次发送已完成
+                          </div>
+                          <span className="rounded bg-green-200/60 px-1.5 py-0.5 text-[10px] font-bold text-green-800">
+                            发送成功
+                          </span>
+                        </div>
+                        <div className="text-[11px] italic leading-snug text-gray-600">
+                          {queuePendingTotal > 0
+                            ? `还有 ${queuePendingTotal} 个任务待处理，正在拉取队列中的下一个会话任务...`
+                            : "本轮自动发送已完成"}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             ) : showPipeline ? (
               <div className="space-y-2.5">
                 <div className="flex justify-between text-[11px] font-bold uppercase text-gray-500">
-                  <span>自动化流水线</span>
-                  <span className="text-[#0052D9]">Step {currentStep}/5</span>
+                  <span>发送进度</span>
+                  <span className={pipelineStatusClass}>
+                    {pipelineStatusText}
+                  </span>
                 </div>
                 <div className="grid grid-cols-5 gap-1">
                   {pipelineSteps.map((step, idx) => {
@@ -1391,6 +1588,8 @@ export function ToolbarRPAMode({
                     const active = currentStep >= stepNumber;
                     const current = currentStep === stepNumber;
                     const review = step === "review_auto_resend";
+                    const skippedNavigation =
+                      step === "navigate_to_chat" && navigationSkippedInRun;
                     return (
                       <div
                         key={step}
@@ -1398,14 +1597,18 @@ export function ToolbarRPAMode({
                           active
                             ? review
                               ? "bg-orange-500"
+                              : skippedNavigation
+                                ? "bg-slate-300"
                               : "bg-[#0052D9]"
                             : "bg-gray-200"
                         }`}
                       >
-                        {current ? (
+                        {current && stepNumber >= 3 ? (
                           <div
                             className={`absolute -right-1 -top-1 h-3.5 w-3.5 rounded-full border-2 border-white ${
-                              review ? "bg-orange-500" : "bg-[#0052D9]"
+                              review
+                                ? "bg-orange-500"
+                                : "bg-[#0052D9]"
                             }`}
                           />
                         ) : null}
@@ -1413,52 +1616,152 @@ export function ToolbarRPAMode({
                     );
                   })}
                 </div>
-                <div
-                  className={`rounded-lg border p-3.5 shadow-sm ${actionToneClasses}`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white/80">
-                      {actionIcon}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-bold">
-                          {presentation.title}
+                <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3.5 transition-colors">
+                  {actionType === "navigate_to_chat" && navigationSkippedInRun ? (
+                    <div className="relative flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-100 text-gray-500">
+                        <SkipForward className="h-3.5 w-3.5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700">
+                          跳过会话切换
                         </div>
-                        {actionType === "wait_rpa_ack" ? (
-                          <span className="rounded bg-amber-200/70 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800">
-                            PENDING
-                          </span>
-                        ) : actionType === "wait_wecom_confirm" ? (
-                          <span className="rounded bg-sky-200/70 px-1.5 py-0.5 font-mono text-[10px] font-bold text-sky-800">
-                            ASYNC
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-1 text-[11px] leading-snug text-gray-600">
-                        {presentation.subtitle}
+                        <div className="mt-0.5 text-[11px] text-gray-500">
+                          当前聊天窗口已是目标会话，无需切换
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : null}
+
+                  {actionType === "navigate_to_chat" && !navigationSkippedInRun ? (
+                    <div className="relative flex items-start gap-3">
+                      <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-indigo-100 text-indigo-600">
+                        <ArrowRightLeft className="h-3.5 w-3.5 animate-pulse" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-gray-800">
+                          准备切换会话
+                          {bounceDots("bg-indigo-500")}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-gray-500">
+                          记录下一跳目标，即将触发企业微信面板切换
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {actionType === "fill_current_message" ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-100 text-blue-600">
+                        <FileText className="h-3.5 w-3.5 animate-pulse" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-gray-800">
+                          正在填入消息内容
+                          {bounceDots("bg-gray-500")}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-gray-500">
+                          正在注入待发送缓冲区到输入框
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {actionType === "wait_rpa_ack" ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-600">
+                        <ShieldCheck className="h-3.5 w-3.5 animate-pulse" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1.5 text-xs font-bold uppercase tracking-tight text-amber-800">
+                            等待点击发送
+                            {bounceDots("bg-amber-500")}
+                          </div>
+                          <span className="rounded bg-amber-200/60 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                            等待中
+                          </span>
+                        </div>
+                        <div className="text-[11px] italic leading-snug text-gray-600">
+                          正在等待发送端完成点击“发送”
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {actionType === "wait_wecom_confirm" ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-sky-100 text-sky-600">
+                        <CheckCircle2 className="h-3.5 w-3.5 animate-pulse" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1.5 text-xs font-bold uppercase tracking-tight text-sky-800">
+                            发送结果确认中
+                            {bounceDots("bg-sky-500")}
+                          </div>
+                          <span className="rounded bg-sky-200/60 px-1.5 py-0.5 text-[10px] font-bold text-sky-800">
+                            确认中
+                          </span>
+                        </div>
+                        <div className="text-[11px] italic leading-snug text-gray-600">
+                          正在等待企业微信消息记录确认发送结果
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {actionType === "review_auto_resend" ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-600">
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <div className="text-xs font-bold uppercase tracking-tight text-orange-800">
+                            人工复核重试
+                          </div>
+                          <span className="rounded bg-orange-200/60 px-1.5 py-0.5 text-[10px] font-bold text-orange-800">
+                            重试中
+                          </span>
+                        </div>
+                        <div className="text-[11px] italic leading-snug text-gray-600">
+                          正在等待 5 秒后复查，必要时自动重发
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
-            ) : actionType === "completed" ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center opacity-85">
-                <CheckCircle2 className="mb-2 h-10 w-10 text-green-500" />
-                <p className="text-sm font-bold text-gray-700">任务已就绪</p>
-                <p className="mt-1 text-[10px] text-gray-500">
-                  正在等待调度中心下发下一条发送任务。
-                </p>
+            ) : actionType === "need_manual" ? (
+              <div className="space-y-3 rounded-r border-l-4 border-red-500 bg-red-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 text-red-600" />
+                  <div className="text-sm font-bold uppercase tracking-wider text-red-800">
+                    需要人工处理
+                  </div>
+                </div>
+                <div className="text-xs font-medium leading-relaxed text-red-700">
+                  当前会话或消息无法继续自动发送，可能触发平台限制或发送端异常，请手动处理后再继续。
+                </div>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center space-y-3 py-12 text-center opacity-70">
-                <ShieldCheck className="h-10 w-10 text-gray-400" />
+                <ShieldCheck className="h-10 w-10 animate-pulse text-gray-400" />
                 <div className="text-xs font-bold uppercase tracking-widest text-gray-500">
-                  自动模式守护中
+                  任务池待命中
                 </div>
-                <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
-                  <span>等待新的客户消息或待发送任务</span>
-                  {liveDots("bg-gray-400")}
+                <div className="flex items-center justify-center gap-1.5 text-[10px] text-gray-400">
+                  <span>正在等待新的待发送任务...</span>
+                  <span className="flex items-center justify-center gap-0.5">
+                    {[0, 1, 2].map((index) => (
+                      <span
+                        key={index}
+                        className="h-1 w-1 rounded-full bg-gray-400 animate-bounce"
+                        style={{ animationDelay: `${index * 150}ms` }}
+                      />
+                    ))}
+                  </span>
                 </div>
               </div>
             )}
@@ -1499,9 +1802,9 @@ export function ToolbarRPAMode({
             <div className="pt-1">
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                  复核队列 ({reviewSessions.length})
+                  复核队列 ({Math.max(reviewSessions.length, reviewManualTotal)})
                 </div>
-                {reviewSessions.length > 0 ? (
+                {reviewSessions.length > 0 || reviewManualTotal > 0 ? (
                   <span className="rounded border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">
                     异常
                   </span>
@@ -1551,6 +1854,10 @@ export function ToolbarRPAMode({
                     );
                   })}
                 </div>
+              ) : reviewManualTotal > 0 ? (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                  后端复核/人工队列中还有 {reviewManualTotal} 个任务；当前自动流程完成后会继续按队列推进。
+                </div>
               ) : (
                 <div className="rounded border border-dashed border-gray-200 bg-gray-50 py-3 text-center text-[11px] italic text-gray-400">
                   暂无异常需要复核
@@ -1567,7 +1874,7 @@ export function ToolbarRPAMode({
             <button
               type="button"
               disabled={!!commandLoading}
-              onClick={() => void executeCommand("resume", "已继续自动化任务。")}
+              onClick={() => void executeCommand("resume", "已继续自动发送。")}
               className="flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white py-2.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <PlayCircle className="h-4 w-4" />
@@ -1577,21 +1884,21 @@ export function ToolbarRPAMode({
             <button
               type="button"
               disabled={!snapshot?.can_pause || !!commandLoading}
-              onClick={() => void executeCommand("pause", "已暂停自动化任务。")}
+              onClick={() => void executeCommand("pause", "已暂停自动发送。")}
               className="flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white py-2.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <PauseCircle className="h-4 w-4" />
-              暂停自动
+              暂停发送
             </button>
           )}
           <button
             type="button"
             disabled={!snapshot?.can_stop || !!commandLoading}
-            onClick={() => void executeCommand("stop", "已停止自动化任务。")}
+            onClick={() => void executeCommand("stop", "已停止自动发送。")}
             className="flex items-center justify-center gap-2 rounded-md border border-red-200 bg-white py-2.5 text-sm font-bold text-red-600 shadow-sm hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Square className="h-4 w-4 fill-current" />
-            停止守护
+            停止发送
           </button>
         </div>
         <div className="flex items-center justify-between">
@@ -1617,8 +1924,8 @@ export function ToolbarRPAMode({
               重新发送
             </button>
           </div>
-          <div className="font-mono text-[10px] italic text-gray-400">
-            {stableRunID ? `run:${stableRunID.slice(-6)}` : "auto_active"}
+          <div className="text-[10px] italic text-gray-400">
+            {stableRunID ? "当前任务处理中" : "等待任务中"}
           </div>
         </div>
       </div>

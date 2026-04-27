@@ -125,6 +125,7 @@ export type ToolbarRPAAutoReplyWindow = {
 export type ToolbarRPABootstrap = {
   mode?: "normal" | "rpa" | string;
   enabled?: boolean;
+  status?: string;
   automation?: ToolbarRPAAutomationState | null;
   pending_window?: ToolbarRPAAutoReplyWindow | null;
   run?: ToolbarRPARunInfo;
@@ -140,6 +141,81 @@ export type ToolbarRPABootstrap = {
   can_retry?: boolean;
   can_stop?: boolean;
   poll_after_ms?: number;
+  server_time?: string;
+  request_id?: string;
+  queue_summary?: RPAStateSnapshot["queue_summary"];
+  current_session?: RPAStateSnapshot["current_session"];
+  target_session?: RPAStateSnapshot["target_session"];
+  navigation?: RPAStateSnapshot["navigation"];
+  review_manual?: RPAStateSnapshot["review_manual"];
+};
+
+export type RPAStateSnapshot = {
+  mode?: "normal" | "rpa" | string;
+  enabled?: boolean;
+  status?: string;
+  run?: ToolbarRPARunInfo | null;
+  queue_summary?: {
+    pending_runs?: number;
+    pending_session_tasks?: number;
+    pending_message_tasks?: number;
+    pending_windows?: number;
+    total_pending?: number;
+  } | null;
+  current_session?: {
+    session_task_id?: string;
+    status?: string;
+    open_kfid?: string;
+    external_userid?: string;
+    contact_name?: string;
+    channel_label?: string;
+  } | null;
+  target_session?: {
+    session_task_id?: string;
+    status?: string;
+    open_kfid?: string;
+    external_userid?: string;
+    contact_name?: string;
+    channel_label?: string;
+  } | null;
+  message_task?: {
+    message_task_id?: string;
+    status?: string;
+    send_order?: number;
+    text?: string;
+    message_preview?: string;
+    message_hash?: string;
+  } | null;
+  action?: {
+    type?: string;
+    target?: {
+      open_kfid?: string;
+      external_userid?: string;
+      display_name?: string;
+      channel_label?: string;
+    } | null;
+    poll_after_ms?: number;
+    reason?: string;
+  } | null;
+  navigation?: {
+    required?: boolean;
+    already_matched?: boolean;
+    delay_ms?: number;
+    flash_count?: number;
+  } | null;
+  review_manual?: {
+    review_session_tasks?: number;
+    review_message_tasks?: number;
+    manual_session_tasks?: number;
+    manual_message_tasks?: number;
+    total?: number;
+  } | null;
+  automation?: ToolbarRPAAutomationState | null;
+  can_pause?: boolean;
+  can_resume?: boolean;
+  can_skip?: boolean;
+  can_retry?: boolean;
+  can_stop?: boolean;
   server_time?: string;
   request_id?: string;
 };
@@ -161,6 +237,111 @@ export type ToolbarRPAOperatorBindingSnapshot = {
   automation?: ToolbarRPAAutomationState | null;
 };
 
+function normalizeRPAStateSnapshot(
+  state?: RPAStateSnapshot | null,
+): ToolbarRPABootstrap | null {
+  if (!state) return null;
+  const targetSession = state.target_session || state.current_session || null;
+  const messageTask = state.message_task || null;
+  const messageText = (
+    messageTask?.text ||
+    messageTask?.message_preview ||
+    ""
+  ).trim();
+  const actionTarget = state.action?.target || {
+    open_kfid: targetSession?.open_kfid || "",
+    external_userid: targetSession?.external_userid || "",
+    display_name: targetSession?.contact_name || "",
+    channel_label: targetSession?.channel_label || "",
+  };
+  const sessionTaskID = (
+    targetSession?.session_task_id ||
+    state.current_session?.session_task_id ||
+    ""
+  ).trim();
+  const messageTaskID = (messageTask?.message_task_id || "").trim();
+  const action: ToolbarRPAAction = {
+    type: state.action?.type || "idle_poll",
+    task_id: messageTaskID || sessionTaskID,
+    message_task_id: messageTaskID,
+    session_task_id: sessionTaskID,
+    target: actionTarget || undefined,
+    reason: state.action?.reason || "",
+    poll_after_ms: state.action?.poll_after_ms || 0,
+  };
+  if (messageText || messageTask?.message_hash) {
+    action.message = {
+      message_id: messageTaskID,
+      order: messageTask?.send_order || 0,
+      text: messageText,
+      message_hash: messageTask?.message_hash || "",
+    };
+    action.messages = [action.message];
+  }
+  return {
+    mode: state.mode,
+    enabled: state.enabled,
+    automation: state.automation || null,
+    run: state.run || undefined,
+    session_task: targetSession
+      ? {
+          session_task_id: targetSession.session_task_id,
+          status: targetSession.status,
+          open_kfid: targetSession.open_kfid,
+          external_userid: targetSession.external_userid,
+          contact_name: targetSession.contact_name,
+          channel_label: targetSession.channel_label,
+          current_message_task_id: messageTaskID,
+        }
+      : undefined,
+    message_task: messageTask
+      ? {
+          message_task_id: messageTask.message_task_id,
+          session_task_id: sessionTaskID,
+          run_id: state.run?.run_id,
+          send_order: messageTask.send_order,
+          status: messageTask.status,
+          text: messageText,
+          message_hash: messageTask.message_hash,
+        }
+      : undefined,
+    pending_session_tasks: [],
+    completed_session_tasks: [],
+    action,
+    phase: state.action?.type || state.status || "",
+    can_pause: state.can_pause,
+    can_resume: state.can_resume,
+    can_skip: state.can_skip,
+    can_retry: state.can_retry,
+    can_stop: state.can_stop,
+    poll_after_ms: state.action?.poll_after_ms || 0,
+    server_time: state.server_time,
+    request_id: state.request_id,
+    queue_summary: state.queue_summary || null,
+    current_session: state.current_session || null,
+    target_session: state.target_session || null,
+    navigation: state.navigation || null,
+    review_manual: state.review_manual || null,
+    status: state.status,
+  };
+}
+
+export async function getKFToolbarRPAState(params: {
+  run_id?: string;
+  open_kfid?: string;
+  external_userid?: string;
+}): Promise<ToolbarRPABootstrap | null> {
+  const search = new URLSearchParams();
+  if (params.run_id) search.set("run_id", params.run_id);
+  if (params.open_kfid) search.set("open_kfid", params.open_kfid);
+  if (params.external_userid)
+    search.set("external_userid", params.external_userid);
+  const payload = await requestJSON<APIReply<RPAStateSnapshot>>(
+    `/api/v1/kf/toolbar/rpa/state?${search.toString()}`,
+  );
+  return normalizeRPAStateSnapshot(payload?.data || null);
+}
+
 export async function markKFToolbarRPAMessageDraftFilled(
   messageTaskID: string,
   input: {
@@ -172,7 +353,7 @@ export async function markKFToolbarRPAMessageDraftFilled(
     message_hash?: string;
   },
 ): Promise<ToolbarRPABootstrap | null> {
-  const payload = await requestJSON<APIReply<ToolbarRPABootstrap>>(
+  const payload = await requestJSON<APIReply<RPAStateSnapshot>>(
     `/api/v1/kf/toolbar/rpa/message-tasks/${encodeURIComponent(messageTaskID)}/draft-filled`,
     {
       method: "POST",
@@ -186,7 +367,7 @@ export async function markKFToolbarRPAMessageDraftFilled(
       }),
     },
   );
-  return payload?.data || null;
+  return normalizeRPAStateSnapshot(payload?.data || null);
 }
 
 export async function markKFToolbarRPAMessageFailed(
@@ -199,7 +380,7 @@ export async function markKFToolbarRPAMessageFailed(
     error_message?: string;
   },
 ): Promise<ToolbarRPABootstrap | null> {
-  const payload = await requestJSON<APIReply<ToolbarRPABootstrap>>(
+  const payload = await requestJSON<APIReply<RPAStateSnapshot>>(
     `/api/v1/kf/toolbar/rpa/message-tasks/${encodeURIComponent(messageTaskID)}/failed`,
     {
       method: "POST",
@@ -212,7 +393,7 @@ export async function markKFToolbarRPAMessageFailed(
       }),
     },
   );
-  return payload?.data || null;
+  return normalizeRPAStateSnapshot(payload?.data || null);
 }
 
 export async function executeKFToolbarRPARunCommand(
@@ -231,7 +412,7 @@ export async function executeKFToolbarRPARunCommand(
     message_task_id?: string;
   },
 ): Promise<ToolbarRPABootstrap | null> {
-  const payload = await requestJSON<APIReply<ToolbarRPABootstrap>>(
+  const payload = await requestJSON<APIReply<RPAStateSnapshot>>(
     `/api/v1/kf/toolbar/rpa/runs/${encodeURIComponent(runID)}/commands`,
     {
       method: "POST",
@@ -242,7 +423,7 @@ export async function executeKFToolbarRPARunCommand(
       }),
     },
   );
-  return payload?.data || null;
+  return normalizeRPAStateSnapshot(payload?.data || null);
 }
 
 export async function getKFToolbarRPAOperatorBinding(): Promise<ToolbarRPAOperatorBindingSnapshot | null> {

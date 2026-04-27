@@ -2206,10 +2206,10 @@ export default function CSSidebar() {
     );
   }
 
-  if (rpaBootstrap) {
+  if (rpaBootstrap || automationEnabled) {
     return (
       <ToolbarRPAMode
-        runId={rpaBootstrap.run?.run_id || ""}
+        runId={rpaBootstrap?.run?.run_id || query.rpa_run_id || ""}
         initialBootstrap={rpaBootstrap}
         currentSessionContext={{
           open_kfid:
