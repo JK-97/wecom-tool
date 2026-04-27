@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
-import { normalizeErrorMessage } from "@/services/http";
+import { isAbortLikeError, normalizeErrorMessage } from "@/services/http";
 import {
   normalizeJSSDKRuntimeError,
   openWecomKfConversation,
@@ -71,6 +71,92 @@ const POST_NAVIGATION_ACTION_TYPES = new Set([
   "review_auto_resend",
   "completed",
 ]);
+const COMPLETION_SOURCE_ACTION_TYPES = new Set([
+  "wait_wecom_confirm",
+  "review_auto_resend",
+]);
+const COMPLETED_TRANSITION_MS = 2200;
+
+function isTerminalLikeStatus(value?: string | null): boolean {
+  const next = (value || "").trim().toLowerCase();
+  return (
+    next === "completed" ||
+    next === "stopped" ||
+    next === "failed" ||
+    next === "canceled" ||
+    next === "closed"
+  );
+}
+
+function shouldAdoptIncomingBootstrap(
+  current: ToolbarRPABootstrap | null,
+  incoming: ToolbarRPABootstrap | null,
+): boolean {
+  if (!incoming) return false;
+  if (!current) return true;
+
+  const currentRunID = (current.run?.run_id || "").trim();
+  const incomingRunID = (incoming.run?.run_id || "").trim();
+  const currentVersion = Number(current.run?.version || 0);
+  const incomingVersion = Number(incoming.run?.version || 0);
+  const currentStatus = (
+    current.run?.status ||
+    current.status ||
+    current.action?.type ||
+    ""
+  ).trim();
+  const incomingStatus = (
+    incoming.run?.status ||
+    incoming.status ||
+    incoming.action?.type ||
+    ""
+  ).trim();
+  const currentPaused = Boolean(
+    current.automation?.paused ||
+      currentStatus === "paused" ||
+      currentStatus === "pausing",
+  );
+
+  if (currentRunID && incomingRunID && currentRunID === incomingRunID) {
+    return incomingVersion >= currentVersion;
+  }
+
+  if (currentPaused) {
+    if (!incomingRunID && currentRunID) {
+      return false;
+    }
+    if (incomingRunID !== currentRunID && isTerminalLikeStatus(incomingStatus)) {
+      return false;
+    }
+  }
+
+  if (currentRunID && !incomingRunID && !isTerminalLikeStatus(currentStatus)) {
+    return false;
+  }
+
+  return true;
+}
+
+function shouldShowCompletedTransition(
+  previous: ToolbarRPABootstrap | null,
+  next: ToolbarRPABootstrap | null,
+): boolean {
+  if (!previous || !next) return false;
+  const previousRunID = (previous.run?.run_id || "").trim();
+  const nextRunID = (next.run?.run_id || "").trim();
+  const previousActionType = (previous.action?.type || "").trim();
+  const nextActionType = (next.action?.type || "").trim();
+  const nextStatus = (next.status || "").trim().toLowerCase();
+
+  if (!previousRunID) return false;
+  if (!COMPLETION_SOURCE_ACTION_TYPES.has(previousActionType)) return false;
+  if (nextActionType === "completed") return false;
+  if (nextActionType === "need_manual") return false;
+  if (nextStatus === "closed") return false;
+  if (nextRunID !== "" && nextRunID === previousRunID) return false;
+
+  return nextRunID === "" || nextRunID !== previousRunID;
+}
 
 type Props = {
   runId?: string;
@@ -1004,16 +1090,28 @@ export function ToolbarRPAMode({
     const handoffContext = readAutomationNavigationContext(runId);
     return handoffContext || currentRuntimeContext(currentSessionContext);
   });
+  const [completedOverlay, setCompletedOverlay] = useState<{
+    snapshot: ToolbarRPABootstrap;
+    signature: string;
+  } | null>(null);
   const [boundRunID, setBoundRunID] = useState(
     (initialBootstrap?.run?.run_id || runId || "").trim(),
   );
   const timerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const completedOverlayTimerRef = useRef<number | null>(null);
   const inFlightRef = useRef("");
   const knownCurrentConversationRef = useRef(knownCurrentConversation);
   const consumedActionKeysRef = useRef<Set<string>>(new Set());
   const debugSignatureRef = useRef<Record<string, string>>({});
   const hasObservedActiveRunRef = useRef(false);
+  const previousSnapshotRef = useRef<ToolbarRPABootstrap | null>(
+    initialBootstrap || null,
+  );
+  const lastActualSnapshotRef = useRef<ToolbarRPABootstrap | null>(
+    initialBootstrap || null,
+  );
+  const completedOverlaySignatureRef = useRef("");
 
   const stableRunID = (snapshot?.run?.run_id || boundRunID || "").trim();
   const action = snapshot?.action || null;
@@ -1040,10 +1138,14 @@ export function ToolbarRPAMode({
   const automationEnabled = snapshot
     ? Boolean(snapshot.automation?.enabled || snapshot.enabled)
     : Boolean(initialAutomationEnabled);
+  const automationPaused = Boolean(snapshot?.automation?.paused);
   const isPausing =
     runStatus === "pausing" || (snapshot?.status || "").trim() === "pausing";
   const isPaused =
-    runStatus === "paused" || (snapshot?.status || "").trim() === "paused";
+    !isPausing &&
+    (automationPaused ||
+      runStatus === "paused" ||
+      (snapshot?.status || "").trim() === "paused");
   const isStopped =
     runStatus === "stopped" ||
     (snapshot?.status || "").trim() === "closed" ||
@@ -1115,6 +1217,13 @@ export function ToolbarRPAMode({
     if (noticeTimerRef.current !== null) {
       window.clearTimeout(noticeTimerRef.current);
       noticeTimerRef.current = null;
+    }
+  };
+
+  const clearCompletedOverlayTimer = () => {
+    if (completedOverlayTimerRef.current !== null) {
+      window.clearTimeout(completedOverlayTimerRef.current);
+      completedOverlayTimerRef.current = null;
     }
   };
 
@@ -1266,6 +1375,9 @@ export function ToolbarRPAMode({
       setBoundRunID((next?.run?.run_id || "").trim());
       setSnapshot(next);
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        return;
+      }
       setErrorText(normalizeErrorMessage(error));
     } finally {
       if (!silently) setIsLoading(false);
@@ -1279,6 +1391,9 @@ export function ToolbarRPAMode({
 
   useEffect(() => {
     if (!initialBootstrap) return;
+    if (!shouldAdoptIncomingBootstrap(snapshot, initialBootstrap)) {
+      return;
+    }
     setSnapshot(initialBootstrap);
     setBoundRunID((initialBootstrap.run?.run_id || runId || "").trim());
     setIsLoading(false);
@@ -1287,7 +1402,10 @@ export function ToolbarRPAMode({
     initialBootstrap?.request_id,
     initialBootstrap?.run?.run_id,
     initialBootstrap?.run?.version,
+    initialBootstrap?.status,
+    initialBootstrap?.automation?.paused,
     runId,
+    snapshot,
   ]);
 
   useEffect(() => {
@@ -1330,10 +1448,44 @@ export function ToolbarRPAMode({
   }, [automationEnabled, runIsTerminal, stableRunID]);
 
   useEffect(() => {
+    const previous = lastActualSnapshotRef.current;
+    previousSnapshotRef.current = previous;
+    if (shouldShowCompletedTransition(previous, snapshot) && previous) {
+      const signature = [
+        previous.run?.run_id || "",
+        previous.run?.version || 0,
+        snapshot?.run?.run_id || "",
+        snapshot?.run?.version || 0,
+        snapshot?.status || "",
+        snapshot?.action?.type || "",
+      ].join("\u001f");
+      if (completedOverlaySignatureRef.current !== signature) {
+        completedOverlaySignatureRef.current = signature;
+        setCompletedOverlay({
+          snapshot: previous,
+          signature,
+        });
+      }
+    }
+    lastActualSnapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    if (!completedOverlay) return;
+    clearCompletedOverlayTimer();
+    completedOverlayTimerRef.current = window.setTimeout(() => {
+      setCompletedOverlay(null);
+      completedOverlayTimerRef.current = null;
+    }, COMPLETED_TRANSITION_MS);
+    return clearCompletedOverlayTimer;
+  }, [completedOverlay?.signature]);
+
+  useEffect(() => {
     clearTimer();
     return () => {
       clearTimer();
       clearNoticeTimer();
+      clearCompletedOverlayTimer();
     };
   }, []);
 
@@ -1742,6 +1894,9 @@ export function ToolbarRPAMode({
           setNotice("消息已填入，正在等待点击发送。");
         }
       } catch (error) {
+        if (isAbortLikeError(error)) {
+          return;
+        }
         if (shouldConsumeOnce) {
           consumedActionKeysRef.current.delete(oneShotActionKey);
         }
@@ -1799,8 +1954,43 @@ export function ToolbarRPAMode({
   const actionMessages = (
     action?.message ? [action.message] : action?.messages || []
   ).filter(Boolean);
+  const completionContextSnapshot =
+    completedOverlay?.snapshot || previousSnapshotRef.current;
+  const completionTargetSource =
+    completionContextSnapshot?.action?.target || {
+      open_kfid:
+        completionContextSnapshot?.target_session?.open_kfid ||
+        completionContextSnapshot?.current_session?.open_kfid ||
+        completionContextSnapshot?.session_task?.open_kfid ||
+        "",
+      external_userid:
+        completionContextSnapshot?.target_session?.external_userid ||
+        completionContextSnapshot?.current_session?.external_userid ||
+        completionContextSnapshot?.session_task?.external_userid ||
+        "",
+      display_name:
+        completionContextSnapshot?.target_session?.contact_name ||
+        completionContextSnapshot?.current_session?.contact_name ||
+        completionContextSnapshot?.session_task?.contact_name ||
+        "",
+      channel_label:
+        completionContextSnapshot?.target_session?.channel_label ||
+        completionContextSnapshot?.current_session?.channel_label ||
+        completionContextSnapshot?.session_task?.channel_label ||
+        "",
+    };
+  const completionMessageSource = completionContextSnapshot?.message_task || null;
+  const displayActionType = completedOverlay
+    ? "completed"
+    : suppressInitialTerminalSnapshot
+      ? "idle_poll"
+      : actionType;
+  const isCompletedAction = displayActionType === "completed";
+  const uiIsPausing = !completedOverlay && isPausing;
+  const uiIsPaused = !completedOverlay && isPaused;
+  const uiIsCompleted = isCompletedAction;
   const pausedMessage =
-    isPaused && (snapshot?.message_task?.text || "").trim()
+    uiIsPaused && (snapshot?.message_task?.text || "").trim()
       ? [
           {
             message_id: snapshot?.message_task?.message_task_id || "",
@@ -1810,13 +2000,60 @@ export function ToolbarRPAMode({
           },
         ]
       : [];
+  const completedMessage =
+    isCompletedAction &&
+    actionMessages.length === 0 &&
+    (completionMessageSource?.text || "").trim()
+      ? [
+          {
+            message_id: completionMessageSource?.message_task_id || "",
+            order: completionMessageSource?.send_order || 0,
+            text: completionMessageSource?.text || "",
+            message_hash: completionMessageSource?.message_hash || "",
+          },
+        ]
+      : [];
   const messages =
-    actionMessages.length > 0 ? actionMessages : pausedMessage;
+    actionMessages.length > 0
+      ? actionMessages
+      : pausedMessage.length > 0
+        ? pausedMessage
+        : completedMessage;
+  const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
+  const pauseAutoStopRemainingMS = Math.max(
+    0,
+    Number(snapshot?.paused_auto_stop_remaining_ms || 0),
+  );
+  const pauseAutoStopSeconds = Math.max(
+    0,
+    Math.ceil(pauseAutoStopRemainingMS / 1000),
+  );
+  const isCompleted = uiIsCompleted;
   const currentTarget = action?.target || {
-    open_kfid: snapshot?.session_task?.open_kfid,
-    external_userid: snapshot?.session_task?.external_userid,
-    display_name: snapshot?.session_task?.contact_name,
-    channel_label: snapshot?.session_task?.channel_label,
+    open_kfid:
+      snapshot?.target_session?.open_kfid ||
+      snapshot?.current_session?.open_kfid ||
+      snapshot?.session_task?.open_kfid ||
+      pendingWindow?.open_kfid ||
+      (isCompleted ? completionTargetSource.open_kfid || "" : ""),
+    external_userid:
+      snapshot?.target_session?.external_userid ||
+      snapshot?.current_session?.external_userid ||
+      snapshot?.session_task?.external_userid ||
+      pendingWindow?.external_userid ||
+      (isCompleted ? completionTargetSource.external_userid || "" : ""),
+    display_name:
+      snapshot?.target_session?.contact_name ||
+      snapshot?.current_session?.contact_name ||
+      snapshot?.session_task?.contact_name ||
+      pendingWindow?.contact_name ||
+      (isCompleted ? completionTargetSource.display_name || "" : ""),
+    channel_label:
+      snapshot?.target_session?.channel_label ||
+      snapshot?.current_session?.channel_label ||
+      snapshot?.session_task?.channel_label ||
+      pendingWindow?.channel_label ||
+      (isCompleted ? completionTargetSource.channel_label || "" : ""),
   };
   const reviewSessions = useMemo(
     () =>
@@ -1866,25 +2103,12 @@ export function ToolbarRPAMode({
       skippedNavigationPipelineKey === currentPipelineKey,
   );
   const navigationSkippedInRun = navigationSkipped || rememberedNavigationSkipped;
-  const displayActionType = suppressInitialTerminalSnapshot
-    ? "idle_poll"
-    : actionType;
-  const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
-  const pauseAutoStopRemainingMS = Math.max(
-    0,
-    Number(snapshot?.paused_auto_stop_remaining_ms || 0),
-  );
-  const pauseAutoStopSeconds = Math.max(
-    0,
-    Math.ceil(pauseAutoStopRemainingMS / 1000),
-  );
-  const isCompleted = displayActionType === "completed";
   const isIdlePoll =
-    !isPausing &&
-    !isPaused &&
+    !uiIsPausing &&
+    !uiIsPaused &&
     (displayActionType === "idle_poll" ||
       (!displayActionType && !hasActiveRun && automationEnabled && !pendingWindow));
-  const showStandalonePipeline = isPaused || isIdlePoll || isCompleted;
+  const showStandalonePipeline = uiIsPaused || isIdlePoll || isCompleted;
   const presentation = buildFlowPresentation({
     actionType: displayActionType,
     snapshot,
@@ -1901,26 +2125,39 @@ export function ToolbarRPAMode({
   );
   const customerName =
     currentTarget.display_name ||
+    snapshot?.target_session?.contact_name ||
+    snapshot?.current_session?.contact_name ||
     snapshot?.session_task?.contact_name ||
+    (isCompleted ? completionTargetSource.display_name || "" : "") ||
     pendingWindow?.contact_name ||
     currentTarget.external_userid ||
+    (isCompleted ? completionTargetSource.external_userid || "" : "") ||
     pendingWindow?.external_userid ||
-    "等待新客户";
+    "";
   const customerExternalUserID =
     currentTarget.external_userid ||
+    snapshot?.target_session?.external_userid ||
+    snapshot?.current_session?.external_userid ||
     snapshot?.session_task?.external_userid ||
+    (isCompleted ? completionTargetSource.external_userid || "" : "") ||
     pendingWindow?.external_userid ||
     "";
   const agentOpenKFID =
     currentTarget.open_kfid ||
+    snapshot?.target_session?.open_kfid ||
+    snapshot?.current_session?.open_kfid ||
     snapshot?.session_task?.open_kfid ||
+    (isCompleted ? completionTargetSource.open_kfid || "" : "") ||
     pendingWindow?.open_kfid ||
     currentSessionContext?.open_kfid ||
     "";
   const mappedAgentLabel = (channelDisplayMap?.[agentOpenKFID] || "").trim();
   const agentChannelLabel = (
     currentTarget.channel_label ||
+    snapshot?.target_session?.channel_label ||
+    snapshot?.current_session?.channel_label ||
     snapshot?.session_task?.channel_label ||
+    (isCompleted ? completionTargetSource.channel_label || "" : "") ||
     ""
   ).trim();
   const agentName =
@@ -1928,7 +2165,14 @@ export function ToolbarRPAMode({
     (agentChannelLabel && agentChannelLabel !== agentOpenKFID
       ? agentChannelLabel
       : agentOpenKFID || "待确认");
-  const targetCardToneClass = isPaused
+  const hasDisplayableTargetCard = Boolean(
+    customerName ||
+      customerExternalUserID ||
+      agentOpenKFID ||
+      pendingWindow?.open_kfid ||
+      pendingWindow?.external_userid,
+  );
+  const targetCardToneClass = uiIsPaused
     ? "border-amber-500 bg-amber-50"
     : isIdlePoll
     ? "border-gray-400 bg-gray-50"
@@ -1939,7 +2183,7 @@ export function ToolbarRPAMode({
           ? "border-gray-400 bg-gray-50"
           : "border-indigo-500 bg-indigo-50 animate-pulse"
       : "border-blue-500 bg-blue-50";
-  const targetCardLabelClass = isPaused
+  const targetCardLabelClass = uiIsPaused
     ? "text-amber-600"
     : isIdlePoll
     ? "text-gray-500"
@@ -1952,9 +2196,9 @@ export function ToolbarRPAMode({
       : "text-blue-600";
   const targetCardLabel = pendingWindow && !hasActiveRun
     ? "待恢复发送会话"
-    : isPausing
+    : uiIsPausing
       ? "当前任务完成后暂停"
-    : isPaused
+    : uiIsPaused
       ? "待恢复发送任务"
     : isIdlePoll
       ? "等待新发送任务"
@@ -2143,7 +2387,7 @@ export function ToolbarRPAMode({
     "review_auto_resend",
   ];
   const actionTone =
-    isPaused
+    uiIsPaused
       ? "amber"
       : pendingWindow && !hasActiveRun
       ? "amber"
@@ -2172,15 +2416,15 @@ export function ToolbarRPAMode({
               : "border-blue-200 bg-blue-50 text-blue-800";
   const headerStatus = !automationEnabled
     ? "待启动"
-    : isPausing
+    : uiIsPausing
       ? "暂停待生效"
-    : isPaused
+    : uiIsPaused
       ? "已暂停"
       : hasActiveRun
         ? "执行中"
         : "守护中";
   const headerBg = automationEnabled
-    ? isPaused
+    ? uiIsPaused
       ? "bg-amber-600"
       : "bg-[#0052D9]"
     : "bg-slate-600";
@@ -2188,11 +2432,11 @@ export function ToolbarRPAMode({
     automationEnabled &&
     Boolean(stableRunID) &&
     !runIsTerminal &&
-    !isPausing &&
-    !isPaused &&
+    !uiIsPausing &&
+    !uiIsPaused &&
     !commandLoading;
   const canResumeNow =
-    automationEnabled && Boolean(stableRunID) && isPaused && !commandLoading;
+    automationEnabled && Boolean(stableRunID) && uiIsPaused && !commandLoading;
   const canStopNow =
     automationEnabled && !commandLoading && !isUpdatingAutomationMode;
 
@@ -2304,11 +2548,7 @@ export function ToolbarRPAMode({
           </div>
         ) : (
           <>
-            {(hasActiveRun ||
-              currentTarget.open_kfid ||
-              currentTarget.external_userid ||
-              pendingWindow ||
-              showStandalonePipeline) ? (
+            {hasDisplayableTargetCard ? (
               <div
                 className={`border-l-4 p-3 rounded-r shadow-sm transition-all duration-300 ${targetCardToneClass} ${
                   isTargetFlashing ? "toolbar-rpa-flash" : ""
@@ -2326,12 +2566,17 @@ export function ToolbarRPAMode({
                         isIdlePoll ? "text-gray-400" : "text-gray-800"
                       }`}
                     >
-                      买家: {isIdlePoll ? "等待新客户..." : customerName}
+                      买家: {isIdlePoll ? "等待新客户..." : customerName || "-"}
                     </div>
                     <div className="mt-1 truncate font-mono text-[10px] text-gray-500">
                       客户ID:{" "}
                       {isIdlePoll ? "---" : customerExternalUserID || "-"}
                     </div>
+                    {!isIdlePoll ? (
+                      <div className="mt-1 truncate font-mono text-[10px] text-gray-500">
+                        目标客服号: {agentName || "-"}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -2373,14 +2618,14 @@ export function ToolbarRPAMode({
                   </span>
                   <span
                     className={
-                      isPaused
+                      uiIsPaused
                         ? "text-amber-500"
                         : isCompleted
                           ? "text-green-500"
                           : "text-gray-400"
                     }
                   >
-                    {isPaused
+                    {uiIsPaused
                       ? "待恢复"
                       : isCompleted
                         ? "已完成"
@@ -2395,7 +2640,7 @@ export function ToolbarRPAMode({
                       className={`relative h-1.5 rounded-full ${
                         isCompleted
                           ? "bg-green-500"
-                          : isPaused
+                          : uiIsPaused
                             ? "bg-amber-200"
                             : "bg-gray-200"
                       }`}
@@ -2416,7 +2661,7 @@ export function ToolbarRPAMode({
                       : "border-gray-200"
                   }`}
                 >
-                  {isPaused ? (
+                  {uiIsPaused ? (
                     <div className="flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-600">
                         <PauseCircle className="h-3.5 w-3.5" />
@@ -2436,7 +2681,7 @@ export function ToolbarRPAMode({
                         <div className="mt-2 rounded border border-amber-200 bg-white/70 px-2 py-1.5 text-[10px] font-bold text-amber-700">
                           {pauseAutoStopSeconds > 0
                             ? `${pauseAutoStopSeconds} 秒内未恢复将自动停止自动发送`
-                            : "正在自动停止自动发送..."}
+                            : "暂停中，恢复后将继续处理当前待发任务"}
                         </div>
                       </div>
                     </div>
@@ -2812,7 +3057,7 @@ export function ToolbarRPAMode({
               <PauseCircle className="h-4 w-4" />
               等待启动
             </button>
-          ) : isPausing ? (
+          ) : uiIsPausing ? (
             <button
               type="button"
               disabled

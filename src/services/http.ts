@@ -85,6 +85,28 @@ export function normalizeErrorMessage(error: unknown): string {
   return "unknown error"
 }
 
+export function isAbortLikeError(error: unknown): boolean {
+  if (!error) return false
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return error.name === "AbortError"
+  }
+  if (error instanceof Error) {
+    const name = (error.name || "").trim()
+    const message = (error.message || "").trim().toLowerCase()
+    return (
+      name === "AbortError" ||
+      message.includes("signal is aborted") ||
+      message.includes("aborterror") ||
+      message.includes("request was aborted")
+    )
+  }
+  if (typeof error === "string") {
+    const message = error.trim().toLowerCase()
+    return message.includes("signal is aborted") || message.includes("aborterror")
+  }
+  return false
+}
+
 function redirectToLogin(): void {
   if (typeof window === "undefined" || redirectingToLogin) {
     return

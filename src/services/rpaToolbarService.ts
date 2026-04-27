@@ -120,6 +120,7 @@ export type ToolbarRPAAutomationState = {
   bound_rpa_client_id?: string;
   can_enter_auto_mode?: boolean;
   binding_required?: boolean;
+  paused?: boolean;
   updated_at?: string;
 };
 
@@ -235,6 +236,7 @@ export type RPAStateSnapshot = {
   server_time?: string;
   request_id?: string;
   paused_auto_stop_remaining_ms?: number;
+  pending_window?: ToolbarRPAAutoReplyWindow | null;
 };
 
 export type ToolbarRPAOperatorBinding = {
@@ -348,6 +350,23 @@ function normalizeRPAStateSnapshot(
     request_id: state.request_id,
     paused_auto_stop_remaining_ms:
       state.paused_auto_stop_remaining_ms || 0,
+    pending_window: state.pending_window
+      ? {
+          status: state.pending_window.status,
+          open_kfid: state.pending_window.open_kfid,
+          external_userid: state.pending_window.external_userid,
+          contact_name: state.pending_window.contact_name,
+          channel_label: state.pending_window.channel_label,
+          last_customer_message_preview:
+            state.pending_window.last_customer_message_preview,
+          last_customer_message_at:
+            state.pending_window.last_customer_message_at,
+          pending_message_count:
+            state.pending_window.pending_message_count,
+          generated_run_id: state.pending_window.generated_run_id,
+          updated_at: state.pending_window.updated_at,
+        }
+      : null,
     queue_summary: state.queue_summary || null,
     current_session: state.current_session || null,
     target_session: state.target_session || null,
