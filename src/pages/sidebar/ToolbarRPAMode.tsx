@@ -75,6 +75,7 @@ type Props = {
   runId?: string;
   initialBootstrap?: ToolbarRPABootstrap | null;
   initialAutomationEnabled?: boolean;
+  allowInactivePanel?: boolean;
   currentSessionContext?: {
     open_kfid?: string;
     external_userid?: string;
@@ -976,6 +977,7 @@ export function ToolbarRPAMode({
   runId,
   initialBootstrap,
   initialAutomationEnabled = false,
+  allowInactivePanel = false,
   currentSessionContext,
   onAutomationModeChange,
   isUpdatingAutomationMode = false,
@@ -1275,6 +1277,7 @@ export function ToolbarRPAMode({
 
   useEffect(() => {
     if (!snapshot) return;
+    if (allowInactivePanel) return;
     if (
       (snapshot.mode || "").trim() === "rpa" &&
       (snapshot.enabled || snapshot.automation?.enabled)
@@ -1285,6 +1288,7 @@ export function ToolbarRPAMode({
     void onExitRPAMode();
   }, [
     onExitRPAMode,
+    allowInactivePanel,
     snapshot,
     snapshot?.automation?.enabled,
     snapshot?.enabled,
@@ -1971,6 +1975,25 @@ export function ToolbarRPAMode({
     }
   };
 
+  const handleStartAutomation = async () => {
+    if (isUpdatingAutomationMode || commandLoading) return;
+    setErrorText("");
+    await onAutomationModeChange?.(true);
+  };
+
+  const handleReturnManualMode = async () => {
+    if (isUpdatingAutomationMode) return;
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(
+        automationEnabled
+          ? "确认返回人工处理？自动发送会立即退出，未完成的任务会留在队列中等待后续处理。"
+          : "确认返回人工处理？当前会关闭自动发送面板。",
+      );
+    if (!confirmed) return;
+    await onAutomationModeChange?.(false);
+  };
+
   const requestReviewResend = async (session: ToolbarRPASessionTask) => {
     if (!stableRunID || commandLoading) return;
     clearTimer();
@@ -2044,7 +2067,7 @@ export function ToolbarRPAMode({
               ? "border-green-200 bg-green-50 text-green-800"
               : "border-blue-200 bg-blue-50 text-blue-800";
   const headerStatus = !automationEnabled
-    ? "已关闭"
+    ? "待启动"
     : runStatus === "paused"
       ? "已暂停"
       : hasActiveRun
@@ -2106,18 +2129,18 @@ export function ToolbarRPAMode({
             </h1>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              disabled={isUpdatingAutomationMode}
-              onClick={() => void onAutomationModeChange?.(false)}
-              className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30 disabled:opacity-60"
-            >
+              <button
+                type="button"
+                disabled={isUpdatingAutomationMode}
+                onClick={() => void handleReturnManualMode()}
+                className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30 disabled:opacity-60"
+              >
               {isUpdatingAutomationMode ? (
                 <LoaderCircle className="h-3 w-3 animate-spin" />
               ) : (
                 <UserRound className="h-3 w-3" />
               )}
-              切回人工
+              返回人工
             </button>
             <span className="rounded bg-white/20 px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-white">
               {isLoading ? "同步中" : headerStatus}
@@ -2154,10 +2177,10 @@ export function ToolbarRPAMode({
           <div className="flex flex-col items-center justify-center space-y-4 py-12 text-center">
             <ShieldCheck className="h-12 w-12 text-gray-300" />
             <p className="text-sm font-medium text-gray-500">
-              自动模式已关闭
+              自动发送未启动
             </p>
             <span className="px-4 text-xs leading-5 text-gray-400">
-              开启后，工具栏会持续等待新的待发送任务。
+              点击底部“自动发送”后，工具栏会开始守护待发送任务。
             </span>
           </div>
         ) : (
@@ -2610,7 +2633,16 @@ export function ToolbarRPAMode({
 
       <div className="shrink-0 rounded-b-lg border-t border-gray-200 bg-gray-50 p-4">
         <div className="mb-3 grid grid-cols-2 gap-3">
-          {snapshot?.can_resume ? (
+          {!automationEnabled ? (
+            <button
+              type="button"
+              disabled
+              className="flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white py-2.5 text-sm font-bold text-gray-400 shadow-sm disabled:cursor-not-allowed"
+            >
+              <PauseCircle className="h-4 w-4" />
+              等待启动
+            </button>
+          ) : snapshot?.can_resume ? (
             <button
               type="button"
               disabled={!!commandLoading}
@@ -2631,15 +2663,31 @@ export function ToolbarRPAMode({
               暂停发送
             </button>
           )}
-          <button
-            type="button"
-            disabled={!snapshot?.can_stop || !!commandLoading}
-            onClick={() => void executeCommand("stop", "已停止自动发送。")}
-            className="flex items-center justify-center gap-2 rounded-md border border-red-200 bg-white py-2.5 text-sm font-bold text-red-600 shadow-sm hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Square className="h-4 w-4 fill-current" />
-            停止发送
-          </button>
+          {!automationEnabled ? (
+            <button
+              type="button"
+              disabled={isUpdatingAutomationMode || !!commandLoading}
+              onClick={() => void handleStartAutomation()}
+              className="flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-[#0052D9] py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isUpdatingAutomationMode ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <PlayCircle className="h-4 w-4" />
+              )}
+              自动发送
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={!snapshot?.can_stop || !!commandLoading}
+              onClick={() => void executeCommand("stop", "已停止自动发送。")}
+              className="flex items-center justify-center gap-2 rounded-md border border-red-200 bg-white py-2.5 text-sm font-bold text-red-600 shadow-sm hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Square className="h-4 w-4 fill-current" />
+              停止发送
+            </button>
+          )}
         </div>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -2664,8 +2712,8 @@ export function ToolbarRPAMode({
               重新发送
             </button>
           </div>
-          <div className="text-[10px] italic text-gray-400">
-            {stableRunID ? "当前任务处理中" : "等待任务中"}
+          <div className="shrink-0 rounded bg-white px-2 py-1 text-[10px] font-bold text-gray-500 shadow-sm">
+            排队任务：{queuePendingTotal}
           </div>
         </div>
       </div>

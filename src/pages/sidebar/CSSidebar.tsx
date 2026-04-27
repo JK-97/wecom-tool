@@ -960,6 +960,7 @@ export default function CSSidebar() {
   const [isSavingRPABinding, setIsSavingRPABinding] = useState(false);
   const [isUpdatingAutomationMode, setIsUpdatingAutomationMode] =
     useState(false);
+  const [isRPAPanelOpen, setIsRPAPanelOpen] = useState(false);
   const [isRPABindingModalOpen, setIsRPABindingModalOpen] = useState(false);
   const [pendingEnableAutoMode, setPendingEnableAutoMode] = useState(false);
   const [isResolvingContext, setIsResolvingContext] = useState(
@@ -2162,13 +2163,17 @@ export default function CSSidebar() {
       setIsUpdatingAutomationMode(true);
       const next = await updateKFToolbarRPAAutomationMode(enabled);
       setRPAAutomation(next);
+      if (enabled) {
+        setIsRPAPanelOpen(true);
+      }
       if (!enabled) {
+        setIsRPAPanelOpen(false);
         setRPABootstrap(null);
       }
       pushToolbarNotice(
         enabled
-          ? "已切换到自动模式，工具栏会优先进入 RPA 轻量界面。"
-          : "已切换到人工模式，当前会回到普通工具栏界面。",
+          ? "已开始自动发送，工具栏会持续守护待发送任务。"
+          : "已返回人工处理，自动发送已退出。",
       );
       await loadBootstrap({
         preserveNotice: true,
@@ -2206,12 +2211,17 @@ export default function CSSidebar() {
     );
   }
 
-  if (rpaBootstrap || automationEnabled) {
+  const handleOpenRPAPanel = () => {
+    setIsRPAPanelOpen(true);
+  };
+
+  if (rpaBootstrap || automationEnabled || isRPAPanelOpen) {
     return (
       <ToolbarRPAMode
         runId={rpaBootstrap?.run?.run_id || query.rpa_run_id || ""}
         initialBootstrap={rpaBootstrap}
         initialAutomationEnabled={automationEnabled}
+        allowInactivePanel={isRPAPanelOpen && !automationEnabled}
         currentSessionContext={{
           open_kfid:
             sessionLocator.open_kfid || bootstrap?.open_kfid || query.open_kfid,
@@ -2223,6 +2233,7 @@ export default function CSSidebar() {
         onAutomationModeChange={handleAutomationModeChange}
         isUpdatingAutomationMode={isUpdatingAutomationMode}
         onExitRPAMode={async () => {
+          if (isRPAPanelOpen && !automationEnabled) return;
           setRPABootstrap(null);
           await loadBootstrap({
             preserveNotice: true,
@@ -2273,16 +2284,11 @@ export default function CSSidebar() {
               ) : null}
               <button
                 type="button"
-                disabled={isUpdatingAutomationMode}
-                onClick={() => void handleAutomationModeChange(true)}
+                onClick={handleOpenRPAPanel}
                 className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-medium text-white transition-colors hover:bg-white/30 disabled:opacity-60"
               >
-                {isUpdatingAutomationMode ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <ShieldCheck className="h-3 w-3" />
-                )}
-                切至自动模式
+                <ShieldCheck className="h-3 w-3" />
+                自动发送面板
               </button>
             </div>
           ) : null}
@@ -2919,7 +2925,7 @@ export default function CSSidebar() {
               ) : (
                 <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
               )}
-              保存并开启
+              保存并开始
             </Button>
           </>
         }
