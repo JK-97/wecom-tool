@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
 import { normalizeErrorMessage } from "@/services/http";
 import {
   normalizeJSSDKRuntimeError,
@@ -13,6 +14,7 @@ import {
   getKFToolbarRPAState,
   markKFToolbarRPAMessageDraftFilled,
   markKFToolbarRPAMessageFailed,
+  type ToolbarRPAAction,
   type ToolbarRPABootstrap,
   type ToolbarRPASessionTask,
 } from "@/services/rpaToolbarService";
@@ -56,10 +58,23 @@ const TERMINAL_RUN_STATUSES = new Set([
   "failed",
   "canceled",
 ]);
+const ONE_SHOT_ACTION_TYPES = new Set([
+  "navigate_to_chat",
+  "fill_current_message",
+  "review_auto_resend",
+]);
+const POST_NAVIGATION_ACTION_TYPES = new Set([
+  "fill_current_message",
+  "wait_rpa_ack",
+  "wait_wecom_confirm",
+  "review_auto_resend",
+  "completed",
+]);
 
 type Props = {
   runId?: string;
   initialBootstrap?: ToolbarRPABootstrap | null;
+  initialAutomationEnabled?: boolean;
   currentSessionContext?: {
     open_kfid?: string;
     external_userid?: string;
@@ -119,25 +134,126 @@ function currentRuntimeContext(
   };
 }
 
+type RuntimeContext = {
+  openKFID: string;
+  externalUserID: string;
+  source?: string;
+};
+
+function debugConversationContext(
+  context?: {
+    openKFID?: string;
+    externalUserID?: string;
+    source?: string;
+  } | null,
+) {
+  return {
+    open_kfid: (context?.openKFID || "").trim(),
+    external_userid: (context?.externalUserID || "").trim(),
+    source: (context?.source || "").trim(),
+  };
+}
+
+function debugSessionContext(
+  context?: {
+    open_kfid?: string;
+    external_userid?: string;
+    contact_name?: string;
+    channel_label?: string;
+    session_task_id?: string;
+    status?: string;
+  } | null,
+) {
+  return {
+    session_task_id: (context?.session_task_id || "").trim(),
+    status: (context?.status || "").trim(),
+    open_kfid: (context?.open_kfid || "").trim(),
+    external_userid: (context?.external_userid || "").trim(),
+    contact_name: (context?.contact_name || "").trim(),
+    channel_label: (context?.channel_label || "").trim(),
+  };
+}
+
+function debugTargetContext(
+  target?: {
+    open_kfid?: string;
+    external_userid?: string;
+    display_name?: string;
+    channel_label?: string;
+  } | null,
+) {
+  return {
+    open_kfid: (target?.open_kfid || "").trim(),
+    external_userid: (target?.external_userid || "").trim(),
+    display_name: (target?.display_name || "").trim(),
+    channel_label: (target?.channel_label || "").trim(),
+  };
+}
+
+function rpaDebugLog(stage: string, detail?: Record<string, unknown>) {
+  if (typeof console === "undefined" || typeof console.info !== "function") {
+    return;
+  }
+  console.info(`[toolbar-rpa] ${stage}`, detail || {});
+}
+
 async function resolveRuntimeContext(
   fallback?: {
     open_kfid?: string;
     external_userid?: string;
   } | null,
-) {
+  trustedCurrent?: {
+    openKFID?: string;
+    externalUserID?: string;
+  } | null,
+  options?: {
+    allowJSSDK?: boolean;
+  },
+): Promise<RuntimeContext> {
   const currentContext = currentRuntimeContext(fallback);
+  const trustedContext = {
+    openKFID: (trustedCurrent?.openKFID || "").trim(),
+    externalUserID: (trustedCurrent?.externalUserID || "").trim(),
+  };
+  const localContext = {
+    openKFID: trustedContext.openKFID || currentContext.openKFID,
+    externalUserID:
+      trustedContext.externalUserID || currentContext.externalUserID,
+  };
+  if (!options?.allowJSSDK || hasConversationIdentity(localContext)) {
+    return {
+      ...localContext,
+      source: trustedContext.openKFID || trustedContext.externalUserID
+        ? "trusted_local"
+        : "fallback_local",
+    };
+  }
   try {
     const runtime = await resolveSidebarRuntimeContext();
+    const runtimeOpenKFID = (runtime.open_kfid || "").trim();
+    const runtimeExternalUserID = (runtime.external_userid || "").trim();
+    const hasTrustedOpenKFID = Boolean(trustedContext.openKFID);
     return {
-      openKFID: currentContext.openKFID,
-      externalUserID: (
-        runtime.external_userid ||
-        currentContext.externalUserID ||
-        ""
-      ).trim(),
+      openKFID:
+        trustedContext.openKFID ||
+        runtimeOpenKFID ||
+        currentContext.openKFID,
+      externalUserID: hasTrustedOpenKFID
+        ? trustedContext.externalUserID ||
+          runtimeExternalUserID ||
+          currentContext.externalUserID
+        : runtimeExternalUserID ||
+          trustedContext.externalUserID ||
+          currentContext.externalUserID,
+      source: "jssdk",
     };
   } catch {
-    return currentContext;
+    return {
+      openKFID: trustedContext.openKFID || currentContext.openKFID,
+      externalUserID:
+        trustedContext.externalUserID || currentContext.externalUserID,
+      source: "local_after_jssdk_failed",
+    };
   }
 }
 
@@ -180,6 +296,96 @@ function targetKey(target?: {
   const externalUserID = (target?.external_userid || "").trim();
   if (!openKFID && !externalUserID) return "";
   return `${openKFID}\u001f${externalUserID}`;
+}
+
+function actionExecutionKey(
+  runID: string,
+  actionType: string,
+  action?: ToolbarRPAAction | null,
+  version?: number,
+): string {
+  const message = action?.message || action?.messages?.[0];
+  const messageHash = (message?.message_hash || "").trim();
+  const taskID = (
+    action?.message_task_id ||
+    action?.task_id ||
+    action?.session_task_id ||
+    ""
+  ).trim();
+  return [
+    (runID || "").trim(),
+    String(Number(version || 0)),
+    (actionType || "").trim(),
+    (action?.session_task_id || "").trim(),
+    taskID,
+    targetKey(action?.target),
+    messageHash,
+  ].join("\u001f");
+}
+
+function contextFromTarget(target?: {
+  open_kfid?: string;
+  external_userid?: string;
+}): { openKFID: string; externalUserID: string } {
+  return {
+    openKFID: (target?.open_kfid || "").trim(),
+    externalUserID: (target?.external_userid || "").trim(),
+  };
+}
+
+function hasConversationIdentity(context?: {
+  openKFID?: string;
+  externalUserID?: string;
+}): boolean {
+  return Boolean(
+    (context?.openKFID || "").trim() ||
+      (context?.externalUserID || "").trim(),
+  );
+}
+
+function isKnownDifferentConversation(
+  current: { openKFID?: string; externalUserID?: string },
+  target?: { open_kfid?: string; external_userid?: string },
+): boolean {
+  const currentOpenKFID = (current.openKFID || "").trim();
+  const currentExternalUserID = (current.externalUserID || "").trim();
+  const targetOpenKFID = (target?.open_kfid || "").trim();
+  const targetExternalUserID = (target?.external_userid || "").trim();
+  if (
+    currentExternalUserID &&
+    targetExternalUserID &&
+    currentExternalUserID !== targetExternalUserID
+  ) {
+    return true;
+  }
+  if (
+    currentExternalUserID &&
+    targetExternalUserID &&
+    currentExternalUserID === targetExternalUserID &&
+    currentOpenKFID &&
+    targetOpenKFID &&
+    currentOpenKFID !== targetOpenKFID
+  ) {
+    return true;
+  }
+  return Boolean(
+    !currentExternalUserID &&
+      !targetExternalUserID &&
+      currentOpenKFID &&
+      targetOpenKFID &&
+      currentOpenKFID !== targetOpenKFID,
+  );
+}
+
+function canMatchByExternalOnly(
+  current: { openKFID?: string; externalUserID?: string },
+  target?: { open_kfid?: string; external_userid?: string },
+): boolean {
+  return Boolean(
+    !(current.openKFID || "").trim() &&
+      (current.externalUserID || "").trim() &&
+      (target?.external_userid || "").trim(),
+  );
 }
 
 function rememberAutomationNavigation(
@@ -284,6 +490,52 @@ function hasRecentAutomationNavigation(
     return matched;
   } catch {
     return false;
+  }
+}
+
+function readAutomationNavigationContext(
+  runID?: string,
+): { openKFID: string; externalUserID: string } | null {
+  if (typeof window === "undefined") return null;
+  let raw = "";
+  try {
+    raw =
+      window.sessionStorage.getItem(
+        AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY,
+      ) ||
+      window.localStorage.getItem(AUTOMATION_NAVIGATION_HANDOFF_STORAGE_KEY) ||
+      "";
+  } catch {
+    raw = "";
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      run_id?: string;
+      open_kfid?: string;
+      external_userid?: string;
+      source?: string;
+      expires_at?: number;
+    };
+    const expectedRunID = (runID || "").trim();
+    const handoffRunID = (parsed.run_id || "").trim();
+    const openKFID = (parsed.open_kfid || "").trim();
+    const externalUserID = (parsed.external_userid || "").trim();
+    if ((parsed.source || "").trim() !== "automation_dispatch") return null;
+    if (!expectedRunID && handoffRunID) return null;
+    if (expectedRunID && handoffRunID && expectedRunID !== handoffRunID) {
+      return null;
+    }
+    if (
+      Number(parsed.expires_at || 0) > 0 &&
+      Date.now() > Number(parsed.expires_at)
+    ) {
+      return null;
+    }
+    if (!openKFID || !externalUserID) return null;
+    return { openKFID, externalUserID };
+  } catch {
+    return null;
   }
 }
 
@@ -588,6 +840,21 @@ function sessionStatusLabel(value?: string): string {
   }
 }
 
+function reviewListStatusLabel(value?: string): string {
+  switch ((value || "").trim()) {
+    case "confirm_uncertain":
+      return "发送记录超时确认";
+    case "review_resend_pending":
+      return "正在复查发送结果";
+    case "need_manual":
+      return "需要人工确认";
+    case "failed":
+      return "发送异常待处理";
+    default:
+      return sessionStatusLabel(value);
+  }
+}
+
 function statusTextForAutomation(
   snapshot: ToolbarRPABootstrap | null,
   automationEnabled: boolean,
@@ -708,6 +975,7 @@ function FlowVisualGlyph({
 export function ToolbarRPAMode({
   runId,
   initialBootstrap,
+  initialAutomationEnabled = false,
   currentSessionContext,
   onAutomationModeChange,
   isUpdatingAutomationMode = false,
@@ -723,12 +991,20 @@ export function ToolbarRPAMode({
   const [isTargetFlashing, setIsTargetFlashing] = useState(false);
   const [skippedNavigationPipelineKey, setSkippedNavigationPipelineKey] =
     useState("");
+  const [knownCurrentConversation, setKnownCurrentConversation] = useState(() => {
+    const handoffContext = readAutomationNavigationContext(runId);
+    return handoffContext || currentRuntimeContext(currentSessionContext);
+  });
   const [boundRunID, setBoundRunID] = useState(
     (initialBootstrap?.run?.run_id || runId || "").trim(),
   );
   const timerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
   const inFlightRef = useRef("");
+  const knownCurrentConversationRef = useRef(knownCurrentConversation);
+  const consumedActionKeysRef = useRef<Set<string>>(new Set());
+  const debugSignatureRef = useRef<Record<string, string>>({});
+  const hasObservedActiveRunRef = useRef(false);
 
   const stableRunID = (snapshot?.run?.run_id || boundRunID || "").trim();
   const action = snapshot?.action || null;
@@ -746,8 +1022,70 @@ export function ToolbarRPAMode({
   const runIsTerminal =
     Boolean(stableRunID) && TERMINAL_RUN_STATUSES.has(runStatus);
   const hasActiveRun = Boolean(stableRunID) && !runIsTerminal;
+  if (hasActiveRun) {
+    hasObservedActiveRunRef.current = true;
+  }
+  const suppressInitialTerminalSnapshot =
+    runIsTerminal && !hasObservedActiveRunRef.current;
   const progress = progressPercent(snapshot);
-  const automationEnabled = Boolean(snapshot?.automation?.enabled);
+  const automationEnabled = snapshot
+    ? Boolean(snapshot.automation?.enabled || snapshot.enabled)
+    : Boolean(initialAutomationEnabled);
+
+  const commitKnownCurrentConversation = (context?: {
+    openKFID?: string;
+    externalUserID?: string;
+  }) => {
+    const next = {
+      openKFID: (context?.openKFID || "").trim(),
+      externalUserID: (context?.externalUserID || "").trim(),
+    };
+    if (!hasConversationIdentity(next)) return;
+    const prev = knownCurrentConversationRef.current;
+    if (
+      (prev.openKFID || "").trim() === next.openKFID &&
+      (prev.externalUserID || "").trim() === next.externalUserID
+    ) {
+      return;
+    }
+    knownCurrentConversationRef.current = next;
+    setKnownCurrentConversation(next);
+    rpaDebugLog("当前窗口状态已更新", {
+      current_window: debugConversationContext(next),
+    });
+  };
+
+  const debugWindowSnapshot = (
+    extra?: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    action_type: actionType || "",
+    run_id: stableRunID || "",
+    run_version: snapshot?.run?.version || 0,
+    current_window: debugConversationContext(knownCurrentConversationRef.current),
+    parent_context: debugSessionContext(currentSessionContext),
+    backend_current_session: debugSessionContext(snapshot?.current_session),
+    backend_target_session: debugSessionContext(snapshot?.target_session),
+    action_target: debugTargetContext(action?.target),
+    navigation: snapshot?.navigation || null,
+    ...extra,
+  });
+
+  const debugOnChange = (
+    stage: string,
+    signature: string,
+    detail?: Record<string, unknown>,
+  ) => {
+    const nextSignature = signature || "__empty__";
+    if (debugSignatureRef.current[stage] === nextSignature) return;
+    debugSignatureRef.current[stage] = nextSignature;
+    rpaDebugLog(stage, detail);
+  };
+
+  useEffect(() => {
+    const context = currentRuntimeContext(currentSessionContext);
+    if (!hasConversationIdentity(context)) return;
+    commitKnownCurrentConversation(context);
+  }, [currentSessionContext?.external_userid, currentSessionContext?.open_kfid]);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -770,27 +1108,143 @@ export function ToolbarRPAMode({
     }
     try {
       const runIDForBootstrap = runIsTerminal ? "" : stableRunID;
-      const context = await resolveRuntimeContext(currentSessionContext);
       const target = action?.target || {
         open_kfid: snapshot?.session_task?.open_kfid,
         external_userid: snapshot?.session_task?.external_userid,
       };
+      const handoffContext = readAutomationNavigationContext(runIDForBootstrap);
+      if (handoffContext) {
+        commitKnownCurrentConversation(handoffContext);
+      }
+      const context = await resolveRuntimeContext(
+        currentSessionContext,
+        handoffContext || knownCurrentConversationRef.current,
+      );
       const recentlyNavigated = hasRecentAutomationNavigation(
         runIDForBootstrap,
         target,
       );
       const useTargetContext =
         recentlyNavigated && isSameConversation(context, target, true);
-      const next = await getKFToolbarRPAState({
-        run_id: runIDForBootstrap,
-        open_kfid:
+      const requestContext = {
+        openKFID:
           context.openKFID || (useTargetContext ? target.open_kfid || "" : ""),
-        external_userid:
+        externalUserID:
           context.externalUserID ||
           (useTargetContext ? target.external_userid || "" : ""),
+        source: useTargetContext
+          ? `${context.source || "local"}+target`
+          : context.source,
+      };
+      debugOnChange(
+        "轮询状态：请求后端前",
+        [
+          runIDForBootstrap,
+          actionType,
+          snapshot?.run?.version || 0,
+          requestContext.openKFID,
+          requestContext.externalUserID,
+          targetKey(target),
+        ].join("\u001f"),
+        debugWindowSnapshot({
+          silently,
+          run_id_for_request: runIDForBootstrap,
+          handoff_context: debugConversationContext(handoffContext),
+          resolved_context: debugConversationContext(context),
+          request_context: debugConversationContext(requestContext),
+          recently_navigated: recentlyNavigated,
+          use_target_context: useTargetContext,
+        }),
+      );
+      const next = await getKFToolbarRPAState({
+        run_id: runIDForBootstrap,
+        open_kfid: requestContext.openKFID,
+        external_userid: requestContext.externalUserID,
       });
       if (!next) {
         throw new Error("自动发送状态暂时不可用");
+      }
+      const nextActionType = (next.action?.type || "").trim();
+      const nextRunID = (next.run?.run_id || "").trim();
+      const nextTarget = next.action?.target || {
+        open_kfid:
+          next.target_session?.open_kfid || next.session_task?.open_kfid || "",
+        external_userid:
+          next.target_session?.external_userid ||
+          next.session_task?.external_userid ||
+          "",
+        display_name:
+          next.target_session?.contact_name ||
+          next.session_task?.contact_name ||
+          "",
+        channel_label:
+          next.target_session?.channel_label ||
+          next.session_task?.channel_label ||
+          "",
+      };
+      const requestConversation = {
+        openKFID: requestContext.openKFID,
+        externalUserID: requestContext.externalUserID,
+      };
+      const nextRunRecentlyNavigated = hasRecentAutomationNavigation(
+        nextRunID,
+        nextTarget,
+      );
+      const inferredSkippedNavigation =
+        POST_NAVIGATION_ACTION_TYPES.has(nextActionType) &&
+        !nextRunRecentlyNavigated &&
+        hasConversationIdentity(requestConversation) &&
+        isSameConversation(
+          requestConversation,
+          nextTarget,
+          canMatchByExternalOnly(requestConversation, nextTarget),
+        );
+      debugOnChange(
+        "轮询状态：后端快照返回",
+        [
+          nextRunID,
+          next.run?.version || 0,
+          nextActionType,
+          next.status || "",
+          next.queue_summary?.total_pending || 0,
+          targetKey(nextTarget),
+        ].join("\u001f"),
+        {
+          request_context: debugConversationContext(requestContext),
+          next_action_type: nextActionType,
+          next_run_id: nextRunID,
+          next_run_version: next.run?.version || 0,
+          next_status: (next.status || "").trim(),
+          next_current_session: debugSessionContext(next.current_session),
+          next_target_session: debugSessionContext(next.target_session),
+          next_navigation: next.navigation || null,
+          queue_summary: next.queue_summary || null,
+          review_manual_total: next.review_manual?.total || 0,
+          inferred_navigation_skipped: inferredSkippedNavigation,
+          recently_navigated_to_target: nextRunRecentlyNavigated,
+        },
+      );
+      if (inferredSkippedNavigation) {
+        const nextPipelineKey = [
+          nextRunID || runIDForBootstrap || "",
+          next.action?.session_task_id ||
+            next.run?.current_session_task_id ||
+            next.session_task?.session_task_id ||
+            next.action?.task_id ||
+            "",
+        ].join(":");
+        if (nextPipelineKey) {
+          setSkippedNavigationPipelineKey(nextPipelineKey);
+        }
+        debugOnChange(
+          "后端已跳过会话切换：直接进入后续步骤",
+          nextPipelineKey,
+          {
+            request_context: debugConversationContext(requestContext),
+            target_context: debugTargetContext(nextTarget),
+            next_action_type: nextActionType,
+          },
+        );
       }
       setBoundRunID((next?.run?.run_id || "").trim());
       setSnapshot(next);
@@ -807,10 +1261,35 @@ export function ToolbarRPAMode({
   }, []);
 
   useEffect(() => {
-    if ((snapshot?.mode || "").trim() === "rpa" && snapshot?.enabled) return;
+    if (!initialBootstrap) return;
+    setSnapshot(initialBootstrap);
+    setBoundRunID((initialBootstrap.run?.run_id || runId || "").trim());
+    setIsLoading(false);
+  }, [
+    initialBootstrap?.action?.type,
+    initialBootstrap?.request_id,
+    initialBootstrap?.run?.run_id,
+    initialBootstrap?.run?.version,
+    runId,
+  ]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    if (
+      (snapshot.mode || "").trim() === "rpa" &&
+      (snapshot.enabled || snapshot.automation?.enabled)
+    ) {
+      return;
+    }
     if (!onExitRPAMode) return;
     void onExitRPAMode();
-  }, [onExitRPAMode, snapshot?.enabled, snapshot?.mode]);
+  }, [
+    onExitRPAMode,
+    snapshot,
+    snapshot?.automation?.enabled,
+    snapshot?.enabled,
+    snapshot?.mode,
+  ]);
 
   useEffect(() => {
     if (!runIsTerminal || !automationEnabled) return;
@@ -856,43 +1335,122 @@ export function ToolbarRPAMode({
       ].includes(actionType)
     )
       return;
+    const shouldConsumeOnce = ONE_SHOT_ACTION_TYPES.has(actionType);
+    const oneShotActionKey = shouldConsumeOnce
+      ? actionExecutionKey(
+          stableRunID,
+          actionType,
+          action,
+          snapshot.run?.version,
+        )
+      : "";
+    if (
+      shouldConsumeOnce &&
+      consumedActionKeysRef.current.has(oneShotActionKey)
+    ) {
+      debugOnChange(
+        "动作已执行过：等待后端进入下一步",
+        oneShotActionKey,
+        debugWindowSnapshot({
+          action_key: oneShotActionKey,
+          poll_after_ms:
+            action.poll_after_ms || snapshot.poll_after_ms || 1200,
+        }),
+      );
+      timerRef.current = window.setTimeout(() => {
+        void loadBootstrap(true);
+      }, Math.max(900, action.poll_after_ms || snapshot.poll_after_ms || 1200));
+      return;
+    }
+    if (shouldConsumeOnce) {
+      consumedActionKeysRef.current.add(oneShotActionKey);
+    }
     inFlightRef.current = key;
     let active = true;
+    const actionDebugSignature = [
+      stableRunID,
+      snapshot.run?.version || 0,
+      actionType,
+      action.session_task_id || "",
+      action.message_task_id || action.task_id || "",
+      targetKey(action.target),
+    ].join("\u001f");
+    debugOnChange(
+      "开始处理自动发送步骤",
+      actionDebugSignature,
+      debugWindowSnapshot({
+        effect_key: key,
+        action_key: oneShotActionKey,
+        consume_once: shouldConsumeOnce,
+        message_task_id: (action.message_task_id || "").trim(),
+        session_task_id: (action.session_task_id || "").trim(),
+        poll_after_ms: action.poll_after_ms || snapshot.poll_after_ms || 0,
+      }),
+    );
 
     const run = async () => {
       try {
         if (actionType === "navigate_to_chat") {
-          const context = await resolveRuntimeContext(currentSessionContext);
+          const targetContext = contextFromTarget(action.target);
+          const trustedCurrent = knownCurrentConversationRef.current;
+          const context = await resolveRuntimeContext(
+            currentSessionContext,
+            trustedCurrent,
+          );
           const navigation = snapshot.navigation || {};
+          const knownCurrentDiffers =
+            hasConversationIdentity(trustedCurrent) &&
+            isKnownDifferentConversation(trustedCurrent, action.target);
+          const allowExternalOnlyMatch =
+            hasRecentAutomationNavigation(stableRunID, action.target) ||
+            canMatchByExternalOnly(context, action.target);
+          const locallyMatched = isSameConversation(
+            context,
+            action.target,
+            allowExternalOnlyMatch,
+          );
+          const shouldSkipNavigation =
+            locallyMatched ||
+            ((navigation.already_matched || navigation.required === false) &&
+              !knownCurrentDiffers);
+          rpaDebugLog("判断是否需要进入会话", {
+            ...debugWindowSnapshot({
+              resolved_context: debugConversationContext(context),
+              trusted_current: debugConversationContext(trustedCurrent),
+              target_context: debugConversationContext(targetContext),
+              backend_navigation: navigation,
+              known_current_differs: knownCurrentDiffers,
+              allow_external_only_match: allowExternalOnlyMatch,
+              locally_matched: locallyMatched,
+              decision: shouldSkipNavigation
+                ? "跳过进入会话：已在目标会话"
+                : "准备进入目标会话",
+            }),
+          });
           if (
-            navigation.already_matched ||
-            isSameConversation(
-              context,
-              action.target,
-              hasRecentAutomationNavigation(stableRunID, action.target),
-            )
+            shouldSkipNavigation
           ) {
             setSkippedNavigationPipelineKey(currentPipelineKey);
+            commitKnownCurrentConversation(targetContext);
             setNotice("当前已在目标会话，跳过会话切换。");
-            const next = await getKFToolbarRPAState({
-              run_id: stableRunID || "",
-              open_kfid: context.openKFID || action.target?.open_kfid || "",
-              external_userid:
-                context.externalUserID || action.target?.external_userid || "",
+            rpaDebugLog("跳过进入会话：请求下一轮状态", {
+              ...debugWindowSnapshot({
+                resolved_context: debugConversationContext(context),
+                target_context: debugConversationContext(targetContext),
+                request_context: debugConversationContext({
+                  openKFID: targetContext.openKFID || context.openKFID || "",
+                  externalUserID:
+                    targetContext.externalUserID ||
+                    context.externalUserID ||
+                    "",
+                }),
+              }),
             });
-            if (!next) {
-              throw new Error("自动发送状态暂时不可用");
-            }
-            if (!active) return;
-            setSnapshot(next);
-            return;
-          }
-          if (navigation.required === false) {
             const next = await getKFToolbarRPAState({
               run_id: stableRunID || "",
-              open_kfid: context.openKFID || action.target?.open_kfid || "",
+              open_kfid: targetContext.openKFID || context.openKFID || "",
               external_userid:
-                context.externalUserID || action.target?.external_userid || "",
+                targetContext.externalUserID || context.externalUserID || "",
             });
             if (!next) {
               throw new Error("自动发送状态暂时不可用");
@@ -907,6 +1465,13 @@ export function ToolbarRPAMode({
             navigation.delay_ms || 0,
             flashCount * 360,
           );
+          rpaDebugLog("准备进入会话：开始目标信息闪烁", {
+            ...debugWindowSnapshot({
+              target_context: debugConversationContext(targetContext),
+              flash_count: flashCount,
+              flash_delay_ms: flashDelay,
+            }),
+          });
           setIsTargetFlashing(true);
           await sleep(flashDelay);
           if (!active) return;
@@ -916,21 +1481,32 @@ export function ToolbarRPAMode({
             stableRunID || runId || "",
             action.target,
           );
-          await openWecomKfConversation({
-            open_kfid: action.target?.open_kfid || "",
-            external_userid: action.target?.external_userid || "",
+          rpaDebugLog("准备进入会话：调用企业微信打开目标会话", {
+            ...debugWindowSnapshot({
+              target_context: debugConversationContext(targetContext),
+            }),
           });
+          await openWecomKfConversation({
+            open_kfid: targetContext.openKFID,
+            external_userid: targetContext.externalUserID,
+          });
+          commitKnownCurrentConversation(targetContext);
           await sleep(700);
           const nextContext = await resolveRuntimeContext(
             currentSessionContext,
+            targetContext,
           );
+          rpaDebugLog("已调用企业微信进入会话：请求下一轮状态", {
+            ...debugWindowSnapshot({
+              target_context: debugConversationContext(targetContext),
+              next_resolved_context: debugConversationContext(nextContext),
+            }),
+          });
           const next = await getKFToolbarRPAState({
             run_id: stableRunID || "",
-            open_kfid: nextContext.openKFID || action.target?.open_kfid || "",
+            open_kfid: targetContext.openKFID || nextContext.openKFID || "",
             external_userid:
-              nextContext.externalUserID ||
-              action.target?.external_userid ||
-              "",
+              targetContext.externalUserID || nextContext.externalUserID || "",
           });
           if (!next) {
             throw new Error("自动发送状态暂时不可用");
@@ -941,6 +1517,15 @@ export function ToolbarRPAMode({
           return;
         }
         if (actionType === "completed") {
+          debugOnChange(
+            "当前单次发送完成：等待拉取下一轮",
+            actionDebugSignature,
+            debugWindowSnapshot({
+              queue_summary: snapshot.queue_summary || null,
+              poll_after_ms:
+                action.poll_after_ms || snapshot.poll_after_ms || 1200,
+            }),
+          );
           timerRef.current = window.setTimeout(
             () => {
               setBoundRunID("");
@@ -962,6 +1547,13 @@ export function ToolbarRPAMode({
             1200,
             action.poll_after_ms || snapshot.poll_after_ms || 3000,
           );
+          debugOnChange(
+            "等待型步骤：按后端间隔继续轮询",
+            actionDebugSignature,
+            debugWindowSnapshot({
+              delay_ms: delay,
+            }),
+          );
           timerRef.current = window.setTimeout(() => {
             void loadBootstrap(true);
           }, delay);
@@ -975,23 +1567,54 @@ export function ToolbarRPAMode({
           ) {
             return;
           }
-          const context = await resolveRuntimeContext(currentSessionContext);
-          if (
-            !isSameConversation(
+          const targetContext = contextFromTarget(action.target);
+          const trustedCurrent = knownCurrentConversationRef.current;
+          const context = await resolveRuntimeContext(
+            currentSessionContext,
+            trustedCurrent,
+          );
+          const knownCurrentDiffers =
+            hasConversationIdentity(trustedCurrent) &&
+            isKnownDifferentConversation(trustedCurrent, action.target);
+          const reviewAlreadyMatched =
+            !knownCurrentDiffers &&
+            isSameConversation(
               context,
               action.target,
-              hasRecentAutomationNavigation(stableRunID, action.target),
-            )
+              hasRecentAutomationNavigation(stableRunID, action.target) ||
+                canMatchByExternalOnly(context, action.target),
+            );
+          rpaDebugLog("复核步骤：判断当前会话", {
+            ...debugWindowSnapshot({
+              resolved_context: debugConversationContext(context),
+              trusted_current: debugConversationContext(trustedCurrent),
+              target_context: debugConversationContext(targetContext),
+              known_current_differs: knownCurrentDiffers,
+              already_matched: reviewAlreadyMatched,
+              decision: reviewAlreadyMatched
+                ? "跳过进入会话：已在复核目标会话"
+                : "准备进入复核目标会话",
+            }),
+          });
+          if (
+            knownCurrentDiffers ||
+            !reviewAlreadyMatched
           ) {
             setNotice("正在进入人工复核会话...");
             rememberAutomationNavigation(
               stableRunID || runId || "",
               action.target,
             );
-            await openWecomKfConversation({
-              open_kfid: action.target?.open_kfid || "",
-              external_userid: action.target?.external_userid || "",
+            rpaDebugLog("复核步骤：调用企业微信打开复核会话", {
+              ...debugWindowSnapshot({
+                target_context: debugConversationContext(targetContext),
+              }),
             });
+            await openWecomKfConversation({
+              open_kfid: targetContext.openKFID,
+              external_userid: targetContext.externalUserID,
+            });
+            commitKnownCurrentConversation(targetContext);
             await sleep(700);
           }
           setNotice("已进入复核会话，等待 5 秒复查企业微信记录...");
@@ -1008,22 +1631,75 @@ export function ToolbarRPAMode({
         }
         if (actionType === "fill_current_message") {
           const message = action.message || action.messages?.[0];
+          const messageText = (message?.text || "").trim();
           if (
             !stableRunID ||
             !action.message_task_id ||
             !action.session_task_id ||
-            !(message?.text || "").trim()
+            !message ||
+            !messageText
           ) {
             return;
           }
+          const targetContext = contextFromTarget(action.target);
+          const trustedCurrent = knownCurrentConversationRef.current;
+          rpaDebugLog("填入消息步骤：检查当前会话", {
+            ...debugWindowSnapshot({
+              trusted_current: debugConversationContext(trustedCurrent),
+              target_context: debugConversationContext(targetContext),
+              message_task_id: action.message_task_id,
+              message_hash: message.message_hash || "",
+            }),
+          });
+          if (
+            hasConversationIdentity(targetContext) &&
+            hasConversationIdentity(trustedCurrent) &&
+            isKnownDifferentConversation(trustedCurrent, action.target)
+          ) {
+            setNotice("当前不在目标会话，正在重新进入后再填入消息...");
+            rpaDebugLog("填入消息步骤：当前窗口不是目标会话，先进入目标会话", {
+              ...debugWindowSnapshot({
+                trusted_current: debugConversationContext(trustedCurrent),
+                target_context: debugConversationContext(targetContext),
+              }),
+            });
+            rememberAutomationNavigation(
+              stableRunID || runId || "",
+              action.target,
+            );
+            await openWecomKfConversation({
+              open_kfid: targetContext.openKFID,
+              external_userid: targetContext.externalUserID,
+            });
+            commitKnownCurrentConversation(targetContext);
+            await sleep(700);
+          }
           setNotice("正在填入当前消息，随后会等待发送端点击发送...");
-          await sendTextToCurrentSession((message.text || "").trim(), {
+          rpaDebugLog("填入消息步骤：调用企业微信填入文本", {
+            ...debugWindowSnapshot({
+              target_context: debugConversationContext(targetContext),
+              message_task_id: action.message_task_id,
+              message_hash: message.message_hash || "",
+            }),
+          });
+          await sendTextToCurrentSession(messageText, {
             external_userid:
-              action.target?.external_userid ||
+              targetContext.externalUserID ||
               currentSessionContext?.external_userid ||
               "",
           });
-          const context = await resolveRuntimeContext(currentSessionContext);
+          const context = await resolveRuntimeContext(
+            currentSessionContext,
+            knownCurrentConversationRef.current,
+          );
+          rpaDebugLog("填入消息步骤：上报草稿已填入", {
+            ...debugWindowSnapshot({
+              resolved_context: debugConversationContext(context),
+              target_context: debugConversationContext(targetContext),
+              message_task_id: action.message_task_id,
+              message_hash: message.message_hash || "",
+            }),
+          });
           const next = await markKFToolbarRPAMessageDraftFilled(
             action.message_task_id,
             {
@@ -1031,9 +1707,9 @@ export function ToolbarRPAMode({
               session_task_id: action.session_task_id,
               idempotency_key: newKey(),
               current_open_kfid:
-                context.openKFID || action.target?.open_kfid || "",
+                targetContext.openKFID || context.openKFID || "",
               current_external_userid:
-                context.externalUserID || action.target?.external_userid || "",
+                targetContext.externalUserID || context.externalUserID || "",
               message_hash: message.message_hash || "",
             },
           );
@@ -1042,6 +1718,9 @@ export function ToolbarRPAMode({
           setNotice("消息已填入，正在等待点击发送。");
         }
       } catch (error) {
+        if (shouldConsumeOnce) {
+          consumedActionKeysRef.current.delete(oneShotActionKey);
+        }
         if (actionType === "navigate_to_chat") {
           setIsTargetFlashing(false);
         }
@@ -1052,6 +1731,12 @@ export function ToolbarRPAMode({
           actionType === "review_auto_resend"
             ? toJSSDKErrorMessage(mapped)
             : normalizeErrorMessage(error);
+        rpaDebugLog("自动发送步骤执行失败", {
+          ...debugWindowSnapshot({
+            error_message: message,
+            raw_error: normalizeErrorMessage(error),
+          }),
+        });
         setErrorText(message);
         if (
           action?.message_task_id &&
@@ -1100,7 +1785,12 @@ export function ToolbarRPAMode({
     () =>
       (snapshot?.pending_session_tasks || []).filter(
         (item) =>
-          ["confirm_uncertain", "review_resend_pending"].includes(
+          [
+            "confirm_uncertain",
+            "review_resend_pending",
+            "need_manual",
+            "failed",
+          ].includes(
             (item.status || "").trim(),
           ) && (item.current_message_task_id || "").trim(),
       ),
@@ -1108,22 +1798,48 @@ export function ToolbarRPAMode({
   );
   const reviewManualTotal = Number(snapshot?.review_manual?.total || 0);
   const navigationAlreadyMatched = snapshot?.navigation?.already_matched === true;
+  const knownCurrentDiffersFromTarget =
+    hasConversationIdentity(knownCurrentConversation) &&
+    isKnownDifferentConversation(knownCurrentConversation, currentTarget);
+  const knownCurrentMatchesTarget =
+    isSameConversation(
+      knownCurrentConversation,
+      currentTarget,
+      canMatchByExternalOnly(knownCurrentConversation, currentTarget),
+    );
+  const recentlyNavigatedToCurrentTarget = hasRecentAutomationNavigation(
+    stableRunID,
+    currentTarget,
+  );
+  const inferredNavigationSkippedInRun =
+    POST_NAVIGATION_ACTION_TYPES.has(actionType) &&
+    !recentlyNavigatedToCurrentTarget &&
+    !knownCurrentDiffersFromTarget &&
+    hasConversationIdentity(knownCurrentConversation) &&
+    knownCurrentMatchesTarget;
   const navigationSkipped =
-    navigationAlreadyMatched || snapshot?.navigation?.required === false;
+    !knownCurrentDiffersFromTarget &&
+    (navigationAlreadyMatched ||
+      snapshot?.navigation?.required === false ||
+      (actionType === "navigate_to_chat" && knownCurrentMatchesTarget) ||
+      inferredNavigationSkippedInRun);
   const rememberedNavigationSkipped = Boolean(
     stableRunID &&
       currentPipelineKey &&
       skippedNavigationPipelineKey === currentPipelineKey,
   );
   const navigationSkippedInRun = navigationSkipped || rememberedNavigationSkipped;
+  const displayActionType = suppressInitialTerminalSnapshot
+    ? "idle_poll"
+    : actionType;
   const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
-  const isCompleted = actionType === "completed";
+  const isCompleted = displayActionType === "completed";
   const isIdlePoll =
-    actionType === "idle_poll" ||
-    (!actionType && !hasActiveRun && automationEnabled && !pendingWindow);
+    displayActionType === "idle_poll" ||
+    (!displayActionType && !hasActiveRun && automationEnabled && !pendingWindow);
   const showStandalonePipeline = isIdlePoll || isCompleted;
   const presentation = buildFlowPresentation({
-    actionType,
+    actionType: displayActionType,
     snapshot,
     hasActiveRun,
     automationEnabled,
@@ -1148,40 +1864,49 @@ export function ToolbarRPAMode({
     snapshot?.session_task?.external_userid ||
     pendingWindow?.external_userid ||
     "";
-  const agentName =
+  const agentOpenKFID =
     currentTarget.open_kfid ||
     snapshot?.session_task?.open_kfid ||
     pendingWindow?.open_kfid ||
-    "待确认";
+    "";
+  const agentChannelLabel = (
+    currentTarget.channel_label ||
+    snapshot?.session_task?.channel_label ||
+    ""
+  ).trim();
+  const agentName =
+    agentChannelLabel && agentChannelLabel !== agentOpenKFID
+      ? agentChannelLabel
+      : agentOpenKFID || "待确认";
   const targetCardToneClass = isIdlePoll
     ? "border-gray-400 bg-gray-50"
     : isCompleted
       ? "border-green-500 bg-green-50"
-      : actionType === "navigate_to_chat"
+      : displayActionType === "navigate_to_chat"
         ? navigationSkippedInRun
           ? "border-gray-400 bg-gray-50"
           : "border-indigo-500 bg-indigo-50 animate-pulse"
-        : "border-blue-500 bg-blue-50";
+      : "border-blue-500 bg-blue-50";
   const targetCardLabelClass = isIdlePoll
     ? "text-gray-500"
     : isCompleted
       ? "text-green-600"
-      : actionType === "navigate_to_chat"
+      : displayActionType === "navigate_to_chat"
         ? navigationSkippedInRun
           ? "text-gray-500"
           : "text-indigo-600"
-        : "text-blue-600";
+      : "text-blue-600";
   const targetCardLabel = pendingWindow && !hasActiveRun
     ? "待恢复发送会话"
     : isIdlePoll
       ? "等待新发送任务"
-      : isCompleted
-        ? "本次发送已完成"
-        : actionType === "navigate_to_chat"
-          ? navigationSkippedInRun
-            ? "已在目标会话"
-            : "即将切换目标会话"
-          : "正在处理会话";
+    : isCompleted
+      ? "本次发送已完成"
+      : displayActionType === "navigate_to_chat"
+        ? navigationSkippedInRun
+          ? "已在目标会话"
+          : "即将切换目标会话"
+      : "正在处理会话";
   const messageOrder =
     messages[0]?.order ||
     snapshot?.message_task?.send_order ||
@@ -1273,18 +1998,16 @@ export function ToolbarRPAMode({
     wait_wecom_confirm: 4,
     review_auto_resend: 5,
   };
-  const currentStep = stepIndexByAction[actionType] || 0;
+  const currentStep = stepIndexByAction[displayActionType] || 0;
   const showPipeline = currentStep > 0;
   const pipelineStatusText =
     currentStep > 0
-      ? `第 ${currentStep}/5 步${
-          actionType === "navigate_to_chat" && navigationSkippedInRun
-            ? "（已跳过）"
-            : ""
-        }`
+      ? currentStep === 1 && navigationSkippedInRun
+        ? "第 1/5 步（已跳过）"
+        : `第 ${currentStep}/5 步`
       : "";
   const pipelineStatusClass =
-    actionType === "navigate_to_chat" && navigationSkippedInRun
+    currentStep === 1 && navigationSkippedInRun
       ? "text-gray-500"
       : "text-blue-500";
   const pipelineSteps = [
@@ -1297,15 +2020,15 @@ export function ToolbarRPAMode({
   const actionTone =
     pendingWindow && !hasActiveRun
       ? "amber"
-      : actionType === "wait_rpa_ack"
+      : displayActionType === "wait_rpa_ack"
       ? "amber"
-      : actionType === "wait_wecom_confirm"
+      : displayActionType === "wait_wecom_confirm"
         ? "sky"
-        : actionType === "review_auto_resend"
+        : displayActionType === "review_auto_resend"
           ? "orange"
-          : actionType === "need_manual"
+          : displayActionType === "need_manual"
             ? "red"
-            : actionType === "completed"
+            : displayActionType === "completed"
               ? "green"
               : "blue";
   const actionToneClasses =
@@ -1417,7 +2140,11 @@ export function ToolbarRPAMode({
             当前服务账号:
           </span>
           <span className="truncate font-mono text-[11px] font-bold text-white">
-            {agentName}
+            <WecomOpenDataName
+              userid={agentOpenKFID}
+              fallback={agentName}
+              className="truncate font-mono text-[11px] font-bold text-white"
+            />
           </span>
         </div>
       </div>
@@ -1617,7 +2344,8 @@ export function ToolbarRPAMode({
                   })}
                 </div>
                 <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3.5 transition-colors">
-                  {actionType === "navigate_to_chat" && navigationSkippedInRun ? (
+                  {displayActionType === "navigate_to_chat" &&
+                  navigationSkippedInRun ? (
                     <div className="relative flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-100 text-gray-500">
                         <SkipForward className="h-3.5 w-3.5" />
@@ -1633,7 +2361,8 @@ export function ToolbarRPAMode({
                     </div>
                   ) : null}
 
-                  {actionType === "navigate_to_chat" && !navigationSkippedInRun ? (
+                  {displayActionType === "navigate_to_chat" &&
+                  !navigationSkippedInRun ? (
                     <div className="relative flex items-start gap-3">
                       <div className="relative flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-indigo-100 text-indigo-600">
                         <ArrowRightLeft className="h-3.5 w-3.5 animate-pulse" />
@@ -1650,7 +2379,7 @@ export function ToolbarRPAMode({
                     </div>
                   ) : null}
 
-                  {actionType === "fill_current_message" ? (
+                  {displayActionType === "fill_current_message" ? (
                     <div className="flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-100 text-blue-600">
                         <FileText className="h-3.5 w-3.5 animate-pulse" />
@@ -1667,7 +2396,7 @@ export function ToolbarRPAMode({
                     </div>
                   ) : null}
 
-                  {actionType === "wait_rpa_ack" ? (
+                  {displayActionType === "wait_rpa_ack" ? (
                     <div className="flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-600">
                         <ShieldCheck className="h-3.5 w-3.5 animate-pulse" />
@@ -1689,7 +2418,7 @@ export function ToolbarRPAMode({
                     </div>
                   ) : null}
 
-                  {actionType === "wait_wecom_confirm" ? (
+                  {displayActionType === "wait_wecom_confirm" ? (
                     <div className="flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-sky-100 text-sky-600">
                         <CheckCircle2 className="h-3.5 w-3.5 animate-pulse" />
@@ -1711,7 +2440,7 @@ export function ToolbarRPAMode({
                     </div>
                   ) : null}
 
-                  {actionType === "review_auto_resend" ? (
+                  {displayActionType === "review_auto_resend" ? (
                     <div className="flex items-start gap-3">
                       <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-600">
                         <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -1766,19 +2495,17 @@ export function ToolbarRPAMode({
               </div>
             )}
 
-            {previewMessages.length > 0 || hasActiveRun ? (
+            {previewMessages.length > 0 ? (
               <div className="space-y-1.5 pt-1">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
                   消息内容预览
                 </div>
                 <div className="max-h-32 space-y-2 overflow-y-auto rounded border border-dashed border-gray-300 bg-[#F9FAFB] p-3 text-xs leading-relaxed text-gray-700">
-                  {previewMessages.length > 0
-                    ? previewMessages.map((item, idx) => (
-                        <div key={`${item.message_id || "msg"}-${idx}`}>
-                          {(item.text || "").trim()}
-                        </div>
-                      ))
-                    : "当前会话正在推进中，下一条待发送消息出现后会显示在这里。"}
+                  {previewMessages.map((item, idx) => (
+                    <div key={`${item.message_id || "msg"}-${idx}`}>
+                      {(item.text || "").trim()}
+                    </div>
+                  ))}
                 </div>
                 {extraMessagesCount > 0 ? (
                   <div className="text-[11px] text-gray-500">
@@ -1802,7 +2529,7 @@ export function ToolbarRPAMode({
             <div className="pt-1">
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                  复核队列 ({Math.max(reviewSessions.length, reviewManualTotal)})
+                  复核列表 ({Math.max(reviewSessions.length, reviewManualTotal)})
                 </div>
                 {reviewSessions.length > 0 || reviewManualTotal > 0 ? (
                   <span className="rounded border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">
@@ -1814,12 +2541,18 @@ export function ToolbarRPAMode({
                 <div className="space-y-2">
                   {reviewSessions.map((item) => {
                     const loadingKey = `review:${item.session_task_id || ""}`;
-                    const isQueued =
-                      (item.status || "").trim() === "review_resend_pending";
+                    const status = (item.status || "").trim();
+                    const isReviewPending = status === "review_resend_pending";
+                    const canRequestReview = status === "confirm_uncertain";
                     const displayName =
                       item.contact_name ||
                       item.external_userid ||
                       "待复核会话";
+                    const reviewHint = (
+                      item.message_text ||
+                      item.error_message ||
+                      ""
+                    ).trim();
                     return (
                       <div
                         key={item.session_task_id || item.current_message_task_id}
@@ -1834,21 +2567,28 @@ export function ToolbarRPAMode({
                               {displayName}
                             </div>
                             <div className="mt-0.5 text-[10px] text-gray-500">
-                              {sessionStatusLabel(item.status)}
+                              {reviewListStatusLabel(item.status)}
                             </div>
+                            {reviewHint ? (
+                              <div className="mt-0.5 truncate text-[10px] text-gray-400">
+                                {reviewHint}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                         <button
                           type="button"
-                          disabled={!!commandLoading || isQueued}
+                          disabled={!!commandLoading || !canRequestReview}
                           onClick={() => void requestReviewResend(item)}
                           className="shrink-0 rounded border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-600 shadow-sm transition-colors hover:bg-red-100 disabled:opacity-60"
                         >
                           {commandLoading === loadingKey
                             ? "处理中"
-                            : isQueued
-                              ? "已排队"
-                              : "去处理"}
+                            : isReviewPending
+                              ? "复查中"
+                              : canRequestReview
+                                ? "处理"
+                                : "需人工"}
                         </button>
                       </div>
                     );
@@ -1856,7 +2596,7 @@ export function ToolbarRPAMode({
                 </div>
               ) : reviewManualTotal > 0 ? (
                 <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                  后端复核/人工队列中还有 {reviewManualTotal} 个任务；当前自动流程完成后会继续按队列推进。
+                  复核列表正在刷新，请稍后重试。
                 </div>
               ) : (
                 <div className="rounded border border-dashed border-gray-200 bg-gray-50 py-3 text-center text-[11px] italic text-gray-400">

@@ -61,6 +61,20 @@ export type ToolbarRPAMessageTask = {
   error_message?: string;
 };
 
+export type ToolbarRPAReviewManualItem = {
+  kind?: "review" | "manual" | string;
+  session_task_id?: string;
+  message_task_id?: string;
+  status?: string;
+  open_kfid?: string;
+  external_userid?: string;
+  contact_name?: string;
+  channel_label?: string;
+  message_preview?: string;
+  message_hash?: string;
+  reason?: string;
+};
+
 export type ToolbarRPADraftMessage = {
   message_id?: string;
   order?: number;
@@ -209,6 +223,7 @@ export type RPAStateSnapshot = {
     manual_session_tasks?: number;
     manual_message_tasks?: number;
     total?: number;
+    items?: ToolbarRPAReviewManualItem[];
   } | null;
   automation?: ToolbarRPAAutomationState | null;
   can_pause?: boolean;
@@ -278,6 +293,7 @@ function normalizeRPAStateSnapshot(
     };
     action.messages = [action.message];
   }
+  const reviewManualItems = state.review_manual?.items || [];
   return {
     mode: state.mode,
     enabled: state.enabled,
@@ -305,7 +321,18 @@ function normalizeRPAStateSnapshot(
           message_hash: messageTask.message_hash,
         }
       : undefined,
-    pending_session_tasks: [],
+    pending_session_tasks: reviewManualItems.map((item) => ({
+      session_task_id: item.session_task_id,
+      status: item.status,
+      open_kfid: item.open_kfid,
+      external_userid: item.external_userid,
+      contact_name: item.contact_name,
+      channel_label: item.channel_label,
+      message_text: item.message_preview,
+      message_hash: item.message_hash,
+      error_message: item.reason,
+      current_message_task_id: item.message_task_id,
+    })),
     completed_session_tasks: [],
     action,
     phase: state.action?.type || state.status || "",

@@ -2211,6 +2211,7 @@ export default function CSSidebar() {
       <ToolbarRPAMode
         runId={rpaBootstrap?.run?.run_id || query.rpa_run_id || ""}
         initialBootstrap={rpaBootstrap}
+        initialAutomationEnabled={automationEnabled}
         currentSessionContext={{
           open_kfid:
             sessionLocator.open_kfid || bootstrap?.open_kfid || query.open_kfid,
