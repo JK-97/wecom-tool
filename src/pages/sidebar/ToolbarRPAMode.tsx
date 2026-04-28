@@ -11,12 +11,15 @@ import {
 } from "@/services/jssdkService";
 import {
   executeKFToolbarRPARunCommand,
-  getKFToolbarRPAState,
+  getKFToolbarRPABootstrap,
   markKFToolbarRPAMessageDraftFilled,
   markKFToolbarRPAMessageFailed,
+  normalizeToolbarRPAOperatorStreamEvent,
+  openToolbarRPAOperatorViewStream,
   updateKFToolbarRPAAutomationMode,
   type ToolbarRPAAction,
   type ToolbarRPABootstrap,
+  type ToolbarRPAOperatorTaskView,
   type ToolbarRPASessionTask,
 } from "@/services/rpaToolbarService";
 import {
@@ -75,7 +78,29 @@ const COMPLETION_SOURCE_ACTION_TYPES = new Set([
   "wait_wecom_confirm",
   "review_auto_resend",
 ]);
-const COMPLETED_TRANSITION_MS = 2200;
+const WAIT_RPA_ACK_STATUSES = new Set(["waiting_rpa_ack"]);
+const WAIT_WECOM_CONFIRM_STATUSES = new Set([
+  "waiting_wecom_confirm",
+  "rpa_clicked_send",
+]);
+const REVIEW_AUTO_RESEND_STATUSES = new Set(["review_resend_pending"]);
+const NEED_MANUAL_STATUSES = new Set([
+  "need_manual",
+  "failed",
+  "confirm_uncertain",
+]);
+const FILLABLE_STATUSES = new Set([
+  "pending",
+  "draft_filling",
+  "draft_filled",
+  "dispatching",
+]);
+
+function snapshotRealtimeVersion(
+  snapshot?: ToolbarRPABootstrap | null,
+): number {
+  return Number(snapshot?.version || 0);
+}
 
 function isTerminalLikeStatus(value?: string | null): boolean {
   const next = (value || "").trim().toLowerCase();
@@ -95,6 +120,14 @@ function shouldAdoptIncomingBootstrap(
   if (!incoming) return false;
   if (!current) return true;
 
+  const currentRealtimeVersion = snapshotRealtimeVersion(current);
+  const incomingRealtimeVersion = snapshotRealtimeVersion(incoming);
+  if (currentRealtimeVersion > 0 || incomingRealtimeVersion > 0) {
+    if (incomingRealtimeVersion !== currentRealtimeVersion) {
+      return incomingRealtimeVersion >= currentRealtimeVersion;
+    }
+  }
+
   const currentRunID = (current.run?.run_id || "").trim();
   const incomingRunID = (incoming.run?.run_id || "").trim();
   const currentVersion = Number(current.run?.version || 0);
@@ -113,8 +146,8 @@ function shouldAdoptIncomingBootstrap(
   ).trim();
   const currentPaused = Boolean(
     current.automation?.paused ||
-      currentStatus === "paused" ||
-      currentStatus === "pausing",
+    currentStatus === "paused" ||
+    currentStatus === "pausing",
   );
 
   if (currentRunID && incomingRunID && currentRunID === incomingRunID) {
@@ -125,7 +158,10 @@ function shouldAdoptIncomingBootstrap(
     if (!incomingRunID && currentRunID) {
       return false;
     }
-    if (incomingRunID !== currentRunID && isTerminalLikeStatus(incomingStatus)) {
+    if (
+      incomingRunID !== currentRunID &&
+      isTerminalLikeStatus(incomingStatus)
+    ) {
       return false;
     }
   }
@@ -142,6 +178,7 @@ function shouldShowCompletedTransition(
   next: ToolbarRPABootstrap | null,
 ): boolean {
   if (!previous || !next) return false;
+  if (next.operator_view?.display?.state) return false;
   const previousRunID = (previous.run?.run_id || "").trim();
   const nextRunID = (next.run?.run_id || "").trim();
   const previousActionType = (previous.action?.type || "").trim();
@@ -156,6 +193,130 @@ function shouldShowCompletedTransition(
   if (nextRunID !== "" && nextRunID === previousRunID) return false;
 
   return nextRunID === "" || nextRunID !== previousRunID;
+}
+
+function deriveContextAwareAction(
+  next: ToolbarRPABootstrap,
+  current: { openKFID?: string; externalUserID?: string },
+): ToolbarRPAAction | null {
+  const action = next.action || null;
+  if (!action) return null;
+  const runStatus = (next.run?.status || next.status || "")
+    .trim()
+    .toLowerCase();
+  if (
+    runStatus === "completed" ||
+    runStatus === "stopped" ||
+    runStatus === "failed" ||
+    runStatus === "paused" ||
+    runStatus === "pausing"
+  ) {
+    return action;
+  }
+  const messageTask = next.message_task || null;
+  const target = action.target || {
+    open_kfid:
+      next.target_session?.open_kfid || next.current_session?.open_kfid || "",
+    external_userid:
+      next.target_session?.external_userid ||
+      next.current_session?.external_userid ||
+      "",
+    display_name:
+      next.target_session?.contact_name ||
+      next.current_session?.contact_name ||
+      "",
+    channel_label:
+      next.target_session?.channel_label ||
+      next.current_session?.channel_label ||
+      "",
+  };
+  const messageStatus = (messageTask?.status || "").trim().toLowerCase();
+  const allowExternalOnlyMatch = canMatchByExternalOnly(current, target);
+  const matchedCurrentTarget =
+    hasConversationIdentity(current) &&
+    !isKnownDifferentConversation(current, target) &&
+    isSameConversation(current, target, allowExternalOnlyMatch);
+
+  const withTarget = {
+    ...action,
+    target,
+  };
+  if (WAIT_RPA_ACK_STATUSES.has(messageStatus)) {
+    return {
+      ...withTarget,
+      type: "wait_rpa_ack",
+      reason: action.reason || "waiting_rpa_ack",
+      poll_after_ms: action.poll_after_ms || next.poll_after_ms || 1200,
+    };
+  }
+  if (WAIT_WECOM_CONFIRM_STATUSES.has(messageStatus)) {
+    return {
+      ...withTarget,
+      type: "wait_wecom_confirm",
+      reason: action.reason || "waiting_wecom_confirm",
+      poll_after_ms: action.poll_after_ms || next.poll_after_ms || 1600,
+    };
+  }
+  if (REVIEW_AUTO_RESEND_STATUSES.has(messageStatus)) {
+    return {
+      ...withTarget,
+      type: "review_auto_resend",
+      reason: action.reason || "review_auto_resend",
+      poll_after_ms: action.poll_after_ms || next.poll_after_ms || 1000,
+    };
+  }
+  if (NEED_MANUAL_STATUSES.has(messageStatus)) {
+    return {
+      ...withTarget,
+      type: "need_manual",
+      reason: action.reason || "message_failed",
+      poll_after_ms: action.poll_after_ms || next.poll_after_ms || 3000,
+    };
+  }
+  if (!FILLABLE_STATUSES.has(messageStatus)) {
+    return withTarget;
+  }
+  if (!matchedCurrentTarget) {
+    return {
+      ...withTarget,
+      type: "navigate_to_chat",
+      reason: action.reason || "next_session",
+      poll_after_ms: action.poll_after_ms || next.poll_after_ms || 1200,
+    };
+  }
+  const text = (
+    messageTask?.text ||
+    messageTask?.message_preview ||
+    action.message?.text ||
+    action.messages?.[0]?.text ||
+    ""
+  ).trim();
+  const message = {
+    message_id:
+      messageTask?.message_task_id ||
+      action.message?.message_id ||
+      action.message_task_id ||
+      "",
+    order:
+      messageTask?.send_order ||
+      action.message?.order ||
+      action.messages?.[0]?.order ||
+      0,
+    text,
+    message_hash:
+      messageTask?.message_hash ||
+      action.message?.message_hash ||
+      action.messages?.[0]?.message_hash ||
+      "",
+  };
+  return {
+    ...withTarget,
+    type: "fill_current_message",
+    reason: "current_message_ready",
+    poll_after_ms: action.poll_after_ms || next.poll_after_ms || 1200,
+    message,
+    messages: text ? [message] : [],
+  };
 }
 
 type Props = {
@@ -312,9 +473,10 @@ async function resolveRuntimeContext(
   if (!options?.allowJSSDK || hasConversationIdentity(localContext)) {
     return {
       ...localContext,
-      source: trustedContext.openKFID || trustedContext.externalUserID
-        ? "trusted_local"
-        : "fallback_local",
+      source:
+        trustedContext.openKFID || trustedContext.externalUserID
+          ? "trusted_local"
+          : "fallback_local",
     };
   }
   try {
@@ -324,9 +486,7 @@ async function resolveRuntimeContext(
     const hasTrustedOpenKFID = Boolean(trustedContext.openKFID);
     return {
       openKFID:
-        trustedContext.openKFID ||
-        runtimeOpenKFID ||
-        currentContext.openKFID,
+        trustedContext.openKFID || runtimeOpenKFID || currentContext.openKFID,
       externalUserID: hasTrustedOpenKFID
         ? trustedContext.externalUserID ||
           runtimeExternalUserID ||
@@ -425,8 +585,7 @@ function hasConversationIdentity(context?: {
   externalUserID?: string;
 }): boolean {
   return Boolean(
-    (context?.openKFID || "").trim() ||
-      (context?.externalUserID || "").trim(),
+    (context?.openKFID || "").trim() || (context?.externalUserID || "").trim(),
   );
 }
 
@@ -457,10 +616,10 @@ function isKnownDifferentConversation(
   }
   return Boolean(
     !currentExternalUserID &&
-      !targetExternalUserID &&
-      currentOpenKFID &&
-      targetOpenKFID &&
-      currentOpenKFID !== targetOpenKFID,
+    !targetExternalUserID &&
+    currentOpenKFID &&
+    targetOpenKFID &&
+    currentOpenKFID !== targetOpenKFID,
   );
 }
 
@@ -470,8 +629,8 @@ function canMatchByExternalOnly(
 ): boolean {
   return Boolean(
     !(current.openKFID || "").trim() &&
-      (current.externalUserID || "").trim() &&
-      (target?.external_userid || "").trim(),
+    (current.externalUserID || "").trim() &&
+    (target?.external_userid || "").trim(),
   );
 }
 
@@ -956,6 +1115,38 @@ function statusTextForAutomation(
   return "守护中";
 }
 
+function stopCopyForReason(reason?: string): {
+  title: string;
+  detail: string;
+} {
+  switch ((reason || "").trim()) {
+    case "pause_timeout":
+      return {
+        title: "自动发送已自动停止",
+        detail: "暂停超过 60 秒未恢复，系统已自动停止自动发送。",
+      };
+    case "manual":
+      return {
+        title: "自动发送已停止",
+        detail: "你已手动停止自动发送，点击底部“自动发送”可重新开启。",
+      };
+    default:
+      return {
+        title: "自动发送未启动",
+        detail: "点击底部“自动发送”后，工具栏会开始守护待发送任务。",
+      };
+  }
+}
+
+function completedOverlayDurationMS(snapshot?: ToolbarRPABootstrap | null): number {
+  const totalPending = Number(snapshot?.queue_summary?.total_pending || 0);
+  if (totalPending > 0) return 1000;
+  if (snapshot?.operator_view?.next_queued_task || snapshot?.operator_view?.pending_window) {
+    return 1000;
+  }
+  return 2200;
+}
+
 function liveDots(colorClass: string) {
   return (
     <div className="flex items-center gap-1.5">
@@ -1086,16 +1277,26 @@ export function ToolbarRPAMode({
     useState(false);
   const [skippedNavigationPipelineKey, setSkippedNavigationPipelineKey] =
     useState("");
-  const [knownCurrentConversation, setKnownCurrentConversation] = useState(() => {
-    const handoffContext = readAutomationNavigationContext(runId);
-    return handoffContext || currentRuntimeContext(currentSessionContext);
-  });
+  const [knownCurrentConversation, setKnownCurrentConversation] = useState(
+    () => {
+      const handoffContext = readAutomationNavigationContext(runId);
+      return handoffContext || currentRuntimeContext(currentSessionContext);
+    },
+  );
   const [completedOverlay, setCompletedOverlay] = useState<{
     snapshot: ToolbarRPABootstrap;
     signature: string;
   } | null>(null);
+  const [streamState, setStreamState] = useState<
+    "idle" | "connecting" | "open" | "error"
+  >("idle");
+  const [viewClock, setViewClock] = useState(() => Date.now());
   const [boundRunID, setBoundRunID] = useState(
-    (initialBootstrap?.run?.run_id || runId || "").trim(),
+    (
+      initialBootstrap?.run?.run_id ||
+      (!allowInactivePanel || initialAutomationEnabled ? runId : "") ||
+      ""
+    ).trim(),
   );
   const timerRef = useRef<number | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
@@ -1112,8 +1313,86 @@ export function ToolbarRPAMode({
     initialBootstrap || null,
   );
   const completedOverlaySignatureRef = useRef("");
+  const streamVersionRef = useRef(snapshotRealtimeVersion(initialBootstrap));
 
-  const stableRunID = (snapshot?.run?.run_id || boundRunID || "").trim();
+  const rawOperatorView = snapshot?.operator_view || null;
+  const rawOperatorDisplayState = (
+    rawOperatorView?.display?.state || ""
+  ).trim();
+  const rawOperatorDisplayNextState = (
+    rawOperatorView?.display?.next_state_after_hold || ""
+  ).trim();
+  const rawOperatorDisplayHoldUntil = (
+    rawOperatorView?.display?.hold_until || ""
+  ).trim();
+  const rawOperatorAutomationStatus = (
+    rawOperatorView?.automation?.status || ""
+  ).trim();
+  const rawOperatorDisplayHoldUntilMS = rawOperatorDisplayHoldUntil
+    ? Date.parse(rawOperatorDisplayHoldUntil)
+    : 0;
+  const operatorDisplayHoldExpired =
+    (rawOperatorDisplayState === "completed" ||
+      rawOperatorDisplayState === "stopped") &&
+    rawOperatorDisplayNextState !== "" &&
+    Number.isFinite(rawOperatorDisplayHoldUntilMS) &&
+    rawOperatorDisplayHoldUntilMS > 0 &&
+    rawOperatorDisplayHoldUntilMS <= viewClock;
+  const operatorView =
+    operatorDisplayHoldExpired && rawOperatorView?.after_hold_view
+      ? rawOperatorView.after_hold_view
+      : rawOperatorView;
+  const effectiveSnapshot = operatorView?.rpa_state || snapshot || null;
+  const stableRunID = (
+    operatorView?.run?.run_id ||
+    effectiveSnapshot?.run?.run_id ||
+    boundRunID ||
+    ""
+  ).trim();
+  const operatorDisplayState = (operatorView?.display?.state || "").trim();
+  const effectiveOperatorDisplayState = operatorDisplayState;
+  const operatorAutomationStatus = (
+    operatorView?.automation?.status || ""
+  ).trim();
+  const operatorStopReason = (
+    operatorView?.automation?.stop_reason || rawOperatorView?.automation?.stop_reason || ""
+  ).trim();
+  const effectiveOperatorAutomationStatus =
+    operatorDisplayHoldExpired &&
+    rawOperatorDisplayNextState === "paused" &&
+    rawOperatorAutomationStatus === "pausing" &&
+    !operatorView?.automation?.status
+      ? "paused"
+      : operatorAutomationStatus;
+  const operatorPauseDeadlineAt = (
+    operatorView?.automation?.pause_deadline_at || ""
+  ).trim();
+  const operatorPauseDeadlineMS = operatorPauseDeadlineAt
+    ? Date.parse(operatorPauseDeadlineAt)
+    : 0;
+  const streamRequestContext = useMemo(() => {
+    const current = currentRuntimeContext(currentSessionContext);
+    if (hasConversationIdentity(current)) {
+      return current;
+    }
+    if (hasConversationIdentity(knownCurrentConversation)) {
+      return knownCurrentConversation;
+    }
+    return {
+      openKFID: current.openKFID || knownCurrentConversation.openKFID || "",
+      externalUserID:
+        current.externalUserID || knownCurrentConversation.externalUserID || "",
+    };
+  }, [
+    currentSessionContext?.open_kfid,
+    currentSessionContext?.external_userid,
+    knownCurrentConversation.openKFID,
+    knownCurrentConversation.externalUserID,
+  ]);
+  const isRealtimePrimary = Boolean(
+    snapshot?.stream_ready || snapshotRealtimeVersion(snapshot) > 0,
+  );
+  const isRealtimeDriven = isRealtimePrimary && streamState !== "error";
   const action = snapshot?.action || null;
   const actionType = (action?.type || "").trim();
   const currentPipelineKey = [
@@ -1124,8 +1403,15 @@ export function ToolbarRPAMode({
       action?.task_id ||
       "",
   ].join(":");
-  const pendingWindow = snapshot?.pending_window || null;
-  const runStatus = (snapshot?.run?.status || "").trim().toLowerCase();
+  const pendingWindow =
+    effectiveSnapshot?.pending_window || snapshot?.pending_window || null;
+  const runStatus = (
+    effectiveSnapshot?.run?.status ||
+    snapshot?.run?.status ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
   const runIsTerminal =
     Boolean(stableRunID) && TERMINAL_RUN_STATUSES.has(runStatus);
   const hasActiveRun = Boolean(stableRunID) && !runIsTerminal;
@@ -1134,22 +1420,37 @@ export function ToolbarRPAMode({
   }
   const suppressInitialTerminalSnapshot =
     runIsTerminal && !hasObservedActiveRunRef.current;
-  const progress = progressPercent(snapshot);
+  const progress = progressPercent(
+    (effectiveSnapshot as ToolbarRPABootstrap | null) || snapshot,
+  );
   const automationEnabled = snapshot
-    ? Boolean(snapshot.automation?.enabled || snapshot.enabled)
+    ? Boolean(
+        operatorView?.automation?.enabled ??
+        effectiveSnapshot?.automation?.enabled ??
+        snapshot.automation?.enabled ??
+        snapshot.enabled,
+      )
     : Boolean(initialAutomationEnabled);
-  const automationPaused = Boolean(snapshot?.automation?.paused);
+  const automationPaused = Boolean(
+    effectiveSnapshot?.automation?.paused ||
+    snapshot?.automation?.paused ||
+    effectiveOperatorAutomationStatus === "paused",
+  );
   const isPausing =
-    runStatus === "pausing" || (snapshot?.status || "").trim() === "pausing";
+    effectiveOperatorAutomationStatus === "pausing" ||
+    runStatus === "pausing" ||
+    (effectiveSnapshot?.status || snapshot?.status || "").trim() === "pausing";
   const isPaused =
     !isPausing &&
-    (automationPaused ||
+    (effectiveOperatorAutomationStatus === "paused" ||
+      automationPaused ||
       runStatus === "paused" ||
-      (snapshot?.status || "").trim() === "paused");
+      (effectiveSnapshot?.status || snapshot?.status || "").trim() ===
+        "paused");
   const isStopped =
+    effectiveOperatorAutomationStatus === "stopped" ||
     runStatus === "stopped" ||
-    (snapshot?.status || "").trim() === "closed" ||
-    (!automationEnabled && Boolean(stableRunID));
+    operatorStopReason !== "";
 
   const commitKnownCurrentConversation = (context?: {
     openKFID?: string;
@@ -1180,7 +1481,9 @@ export function ToolbarRPAMode({
     action_type: actionType || "",
     run_id: stableRunID || "",
     run_version: snapshot?.run?.version || 0,
-    current_window: debugConversationContext(knownCurrentConversationRef.current),
+    current_window: debugConversationContext(
+      knownCurrentConversationRef.current,
+    ),
     parent_context: debugSessionContext(currentSessionContext),
     backend_current_session: debugSessionContext(snapshot?.current_session),
     backend_target_session: debugSessionContext(snapshot?.target_session),
@@ -1204,7 +1507,10 @@ export function ToolbarRPAMode({
     const context = currentRuntimeContext(currentSessionContext);
     if (!hasConversationIdentity(context)) return;
     commitKnownCurrentConversation(context);
-  }, [currentSessionContext?.external_userid, currentSessionContext?.open_kfid]);
+  }, [
+    currentSessionContext?.external_userid,
+    currentSessionContext?.open_kfid,
+  ]);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -1227,13 +1533,128 @@ export function ToolbarRPAMode({
     }
   };
 
+  const contextualizeSnapshot = (
+    next?: ToolbarRPABootstrap | null,
+  ): ToolbarRPABootstrap | null => {
+    if (!next) return null;
+    if (next.operator_view && next.source !== "fallback_rpa_state") {
+      return next;
+    }
+    const current =
+      knownCurrentConversationRef.current?.openKFID ||
+      knownCurrentConversationRef.current?.externalUserID
+        ? knownCurrentConversationRef.current
+        : currentRuntimeContext(currentSessionContext);
+    const derivedAction = deriveContextAwareAction(next, current);
+    if (!derivedAction) return next;
+    const nextType = (next.action?.type || "").trim();
+    const derivedType = (derivedAction.type || "").trim();
+    const navigation =
+      derivedType === "navigate_to_chat"
+        ? {
+            required: true,
+            already_matched: false,
+            delay_ms: next.navigation?.delay_ms || 900,
+            flash_count: next.navigation?.flash_count || 4,
+          }
+        : derivedType === "fill_current_message"
+          ? {
+              required: false,
+              already_matched: true,
+              delay_ms: 0,
+              flash_count: 0,
+            }
+          : next.navigation || null;
+    if (
+      derivedType === nextType &&
+      (navigation?.required ?? false) ===
+        (next.navigation?.required ?? false) &&
+      (navigation?.already_matched ?? false) ===
+        (next.navigation?.already_matched ?? false)
+    ) {
+      return next;
+    }
+    rpaDebugLog("基于当前窗口上下文重算步骤", {
+      current_window: debugConversationContext(current),
+      original_action_type: nextType,
+      derived_action_type: derivedType,
+      target_context: debugTargetContext(derivedAction.target),
+      message_status: (next.message_task?.status || "").trim(),
+    });
+    const displayState =
+      derivedType === "fill_current_message"
+        ? "fill_current_message"
+        : derivedType === "navigate_to_chat"
+          ? "navigate_to_chat"
+          : derivedType;
+    const operatorView = next.operator_view
+      ? {
+          ...next.operator_view,
+          display: next.operator_view.display
+            ? {
+                ...next.operator_view.display,
+                state: displayState,
+                reason:
+                  next.operator_view.display.reason ||
+                  derivedAction.reason ||
+                  "",
+              }
+            : {
+                state: displayState,
+                reason: derivedAction.reason || "",
+                hold_until: "",
+                next_state_after_hold: "",
+              },
+          rpa_state: next.operator_view.rpa_state
+            ? {
+                ...next.operator_view.rpa_state,
+                action: {
+                  ...(next.operator_view.rpa_state.action || {}),
+                  ...derivedAction,
+                },
+                navigation,
+              }
+            : next.operator_view.rpa_state,
+        }
+      : next.operator_view;
+    return {
+      ...next,
+      action: {
+        ...derivedAction,
+      },
+      navigation,
+      operator_view: operatorView,
+    };
+  };
+
+  const applyNextSnapshot = (next?: ToolbarRPABootstrap | null) => {
+    const contextualized = contextualizeSnapshot(next);
+    if (!contextualized) return false;
+    setBoundRunID((contextualized.run?.run_id || "").trim());
+    streamVersionRef.current = Math.max(
+      streamVersionRef.current,
+      snapshotRealtimeVersion(contextualized),
+    );
+    setSnapshot((current) =>
+      shouldAdoptIncomingBootstrap(current, contextualized)
+        ? contextualized
+        : current,
+    );
+    return true;
+  };
+
   const loadBootstrap = async (silently = false) => {
     if (!silently) {
       setIsLoading(true);
       setErrorText("");
     }
     try {
-      const runIDForBootstrap = runIsTerminal ? "" : stableRunID;
+      const runIDForBootstrap =
+        !automationEnabled && allowInactivePanel
+          ? ""
+          : runIsTerminal
+            ? ""
+            : stableRunID;
       const target = action?.target || {
         open_kfid: snapshot?.session_task?.open_kfid,
         external_userid: snapshot?.session_task?.external_userid,
@@ -1282,7 +1703,7 @@ export function ToolbarRPAMode({
           use_target_context: useTargetContext,
         }),
       );
-      const next = await getKFToolbarRPAState({
+      const next = await getKFToolbarRPABootstrap({
         run_id: runIDForBootstrap,
         open_kfid: requestContext.openKFID,
         external_userid: requestContext.externalUserID,
@@ -1362,18 +1783,13 @@ export function ToolbarRPAMode({
         if (nextPipelineKey) {
           setSkippedNavigationPipelineKey(nextPipelineKey);
         }
-        debugOnChange(
-          "后端已跳过会话切换：直接进入后续步骤",
-          nextPipelineKey,
-          {
-            request_context: debugConversationContext(requestContext),
-            target_context: debugTargetContext(nextTarget),
-            next_action_type: nextActionType,
-          },
-        );
+        debugOnChange("后端已跳过会话切换：直接进入后续步骤", nextPipelineKey, {
+          request_context: debugConversationContext(requestContext),
+          target_context: debugTargetContext(nextTarget),
+          next_action_type: nextActionType,
+        });
       }
-      setBoundRunID((next?.run?.run_id || "").trim());
-      setSnapshot(next);
+      applyNextSnapshot(next);
     } catch (error) {
       if (isAbortLikeError(error)) {
         return;
@@ -1394,7 +1810,7 @@ export function ToolbarRPAMode({
     if (!shouldAdoptIncomingBootstrap(snapshot, initialBootstrap)) {
       return;
     }
-    setSnapshot(initialBootstrap);
+    applyNextSnapshot(initialBootstrap);
     setBoundRunID((initialBootstrap.run?.run_id || runId || "").trim());
     setIsLoading(false);
   }, [
@@ -1409,14 +1825,142 @@ export function ToolbarRPAMode({
   ]);
 
   useEffect(() => {
+    streamVersionRef.current = Math.max(
+      streamVersionRef.current,
+      snapshotRealtimeVersion(snapshot),
+    );
+  }, [snapshot?.version, snapshot?.run?.run_id, snapshot?.run?.version]);
+
+  useEffect(() => {
+    let timer: number | null = null;
+    const now = Date.now();
+    if (
+      (rawOperatorDisplayState === "completed" ||
+        rawOperatorDisplayState === "stopped") &&
+      rawOperatorDisplayNextState &&
+      Number.isFinite(rawOperatorDisplayHoldUntilMS) &&
+      rawOperatorDisplayHoldUntilMS > now
+    ) {
+      timer = window.setTimeout(
+        () => {
+          setViewClock(Date.now());
+        },
+        Math.max(0, rawOperatorDisplayHoldUntilMS - now),
+      );
+      return () => {
+        if (timer !== null) window.clearTimeout(timer);
+      };
+    }
+    if (
+      Number.isFinite(operatorPauseDeadlineMS) &&
+      operatorPauseDeadlineMS > now &&
+      (effectiveOperatorAutomationStatus === "paused" || isPaused)
+    ) {
+      timer = window.setTimeout(() => {
+        setViewClock(Date.now());
+      }, 1000);
+      return () => {
+        if (timer !== null) window.clearTimeout(timer);
+      };
+    }
+  }, [
+    effectiveOperatorAutomationStatus,
+    isPaused,
+    rawOperatorDisplayHoldUntilMS,
+    rawOperatorDisplayNextState,
+    rawOperatorDisplayState,
+    operatorPauseDeadlineMS,
+    viewClock,
+  ]);
+
+  useEffect(() => {
+    let closed = false;
+    let allowCurrentVersionReplay = true;
+    setStreamState("connecting");
+    const stream = openToolbarRPAOperatorViewStream({
+      since_version: streamVersionRef.current,
+      open_kfid: streamRequestContext.openKFID || "",
+      external_userid: streamRequestContext.externalUserID || "",
+      onOpen: () => {
+        if (closed) return;
+        setStreamState("open");
+      },
+      onError: () => {
+        if (closed) return;
+        // Native EventSource already reconnects using the server-provided retry interval.
+        // Keep the page in realtime mode while the browser retries, instead of layering
+        // our own reconnect loop on top and creating a request storm.
+        setStreamState("connecting");
+      },
+      onMessage: (payload) => {
+        if (closed) return;
+        const events = payload.events || [];
+        let nextSnapshot: ToolbarRPABootstrap | null = null;
+        for (const event of events) {
+          const normalized = normalizeToolbarRPAOperatorStreamEvent(event);
+          if (!normalized) continue;
+          const nextVersion = snapshotRealtimeVersion(normalized);
+          const eventType = (event.event_type || "").trim();
+          const isBootstrapRefresh =
+            eventType === "toolbar_rpa_operator_view.bootstrap";
+          if (
+            nextVersion > 0 &&
+            ((allowCurrentVersionReplay &&
+              !isBootstrapRefresh &&
+              nextVersion < streamVersionRef.current) ||
+              (!allowCurrentVersionReplay &&
+                nextVersion <= streamVersionRef.current))
+          ) {
+            continue;
+          }
+          streamVersionRef.current = Math.max(
+            streamVersionRef.current,
+            nextVersion,
+          );
+          nextSnapshot = normalized;
+        }
+        if (events.length > 0) {
+          allowCurrentVersionReplay = false;
+        }
+        if (!nextSnapshot) return;
+        setStreamState("open");
+        applyNextSnapshot(nextSnapshot);
+      },
+    });
+    return () => {
+      closed = true;
+      if (stream && stream.readyState !== EventSource.CLOSED) {
+        stream.close();
+      }
+    };
+  }, [streamRequestContext.externalUserID, streamRequestContext.openKFID]);
+
+  useEffect(() => {
     if (!snapshot) return;
     if (allowInactivePanel) return;
+    if (isStopped) return;
+    const hasRealtimeOperatorView = Boolean(
+      snapshot.stream_ready || snapshot.operator_view,
+    );
+    const realtimeAutomationEnabled = Boolean(
+      snapshot.operator_view?.automation?.enabled ??
+      snapshot.automation?.enabled ??
+      snapshot.enabled,
+    );
+    const realtimeDisplayState = (
+      snapshot.operator_view?.display?.state || ""
+    ).trim();
     if (
       (snapshot.run?.status || "").trim() === "stopped" ||
       ((snapshot.status || "").trim() === "closed" &&
         Boolean(snapshot.run?.run_id))
     ) {
       return;
+    }
+    if (hasRealtimeOperatorView) {
+      if (realtimeAutomationEnabled) return;
+      if (realtimeDisplayState) return;
+      if (effectiveOperatorAutomationStatus === "stopped") return;
     }
     if (
       (snapshot.mode || "").trim() === "rpa" &&
@@ -1429,6 +1973,8 @@ export function ToolbarRPAMode({
   }, [
     onExitRPAMode,
     allowInactivePanel,
+    effectiveOperatorAutomationStatus,
+    isStopped,
     snapshot,
     snapshot?.automation?.enabled,
     snapshot?.enabled,
@@ -1439,18 +1985,23 @@ export function ToolbarRPAMode({
   ]);
 
   useEffect(() => {
+    if (isRealtimeDriven) return;
     if (!runIsTerminal || !automationEnabled) return;
     clearTimer();
     timerRef.current = window.setTimeout(() => {
       setBoundRunID("");
       void loadBootstrap(true);
     }, 900);
-  }, [automationEnabled, runIsTerminal, stableRunID]);
+  }, [automationEnabled, isRealtimeDriven, runIsTerminal, stableRunID]);
 
   useEffect(() => {
     const previous = lastActualSnapshotRef.current;
     previousSnapshotRef.current = previous;
-    if (shouldShowCompletedTransition(previous, snapshot) && previous) {
+    if (
+      !snapshot?.operator_view?.display?.state &&
+      shouldShowCompletedTransition(previous, snapshot) &&
+      previous
+    ) {
       const signature = [
         previous.run?.run_id || "",
         previous.run?.version || 0,
@@ -1473,10 +2024,11 @@ export function ToolbarRPAMode({
   useEffect(() => {
     if (!completedOverlay) return;
     clearCompletedOverlayTimer();
+    const durationMS = completedOverlayDurationMS(completedOverlay.snapshot);
     completedOverlayTimerRef.current = window.setTimeout(() => {
       setCompletedOverlay(null);
       completedOverlayTimerRef.current = null;
-    }, COMPLETED_TRANSITION_MS);
+    }, durationMS);
     return clearCompletedOverlayTimer;
   }, [completedOverlay?.signature]);
 
@@ -1529,13 +2081,18 @@ export function ToolbarRPAMode({
         oneShotActionKey,
         debugWindowSnapshot({
           action_key: oneShotActionKey,
-          poll_after_ms:
-            action.poll_after_ms || snapshot.poll_after_ms || 1200,
+          poll_after_ms: action.poll_after_ms || snapshot.poll_after_ms || 1200,
         }),
       );
-      timerRef.current = window.setTimeout(() => {
-        void loadBootstrap(true);
-      }, Math.max(900, action.poll_after_ms || snapshot.poll_after_ms || 1200));
+      if (isRealtimeDriven) {
+        return;
+      }
+      timerRef.current = window.setTimeout(
+        () => {
+          void loadBootstrap(true);
+        },
+        Math.max(900, action.poll_after_ms || snapshot.poll_after_ms || 1200),
+      );
       return;
     }
     if (shouldConsumeOnce) {
@@ -1603,9 +2160,7 @@ export function ToolbarRPAMode({
                 : "准备进入目标会话",
             }),
           });
-          if (
-            shouldSkipNavigation
-          ) {
+          if (shouldSkipNavigation) {
             setSkippedNavigationPipelineKey(currentPipelineKey);
             commitKnownCurrentConversation(targetContext);
             setNotice("当前已在目标会话，跳过会话切换。");
@@ -1622,7 +2177,7 @@ export function ToolbarRPAMode({
                 }),
               }),
             });
-            const next = await getKFToolbarRPAState({
+            const next = await getKFToolbarRPABootstrap({
               run_id: stableRunID || "",
               open_kfid: targetContext.openKFID || context.openKFID || "",
               external_userid:
@@ -1632,7 +2187,7 @@ export function ToolbarRPAMode({
               throw new Error("自动发送状态暂时不可用");
             }
             if (!active) return;
-            setSnapshot(next);
+            applyNextSnapshot(next);
             return;
           }
           setNotice("即将切换目标会话...");
@@ -1678,7 +2233,7 @@ export function ToolbarRPAMode({
               next_resolved_context: debugConversationContext(nextContext),
             }),
           });
-          const next = await getKFToolbarRPAState({
+          const next = await getKFToolbarRPABootstrap({
             run_id: stableRunID || "",
             open_kfid: targetContext.openKFID || nextContext.openKFID || "",
             external_userid:
@@ -1688,7 +2243,7 @@ export function ToolbarRPAMode({
             throw new Error("自动发送状态暂时不可用");
           }
           if (!active) return;
-          setSnapshot(next);
+          applyNextSnapshot(next);
           setNotice("已进入目标会话，准备填入消息。");
           return;
         }
@@ -1702,6 +2257,9 @@ export function ToolbarRPAMode({
                 action.poll_after_ms || snapshot.poll_after_ms || 1200,
             }),
           );
+          if (isRealtimeDriven) {
+            return;
+          }
           timerRef.current = window.setTimeout(
             () => {
               setBoundRunID("");
@@ -1719,6 +2277,17 @@ export function ToolbarRPAMode({
           actionType === "wait_rpa_ack" ||
           actionType === "wait_wecom_confirm"
         ) {
+          if (isRealtimeDriven) {
+            debugOnChange(
+              "等待型步骤：由实时流驱动",
+              actionDebugSignature,
+              debugWindowSnapshot({
+                stream_state: streamState,
+                display_state: effectiveOperatorDisplayState || actionType,
+              }),
+            );
+            return;
+          }
           const delay = Math.max(
             1200,
             action.poll_after_ms || snapshot.poll_after_ms || 3000,
@@ -1772,10 +2341,7 @@ export function ToolbarRPAMode({
                 : "准备进入复核目标会话",
             }),
           });
-          if (
-            knownCurrentDiffers ||
-            !reviewAlreadyMatched
-          ) {
+          if (knownCurrentDiffers || !reviewAlreadyMatched) {
             setNotice("正在进入人工复核会话...");
             rememberAutomationNavigation(
               stableRunID || runId || "",
@@ -1801,7 +2367,7 @@ export function ToolbarRPAMode({
             message_task_id: action.message_task_id,
           });
           if (!active) return;
-          setSnapshot(next);
+          applyNextSnapshot(next);
           setNotice("复核完成，正在继续自动发送。");
           return;
         }
@@ -1890,7 +2456,7 @@ export function ToolbarRPAMode({
             },
           );
           if (!active) return;
-          setSnapshot(next);
+          applyNextSnapshot(next);
           setNotice("消息已填入，正在等待点击发送。");
         }
       } catch (error) {
@@ -1934,7 +2500,8 @@ export function ToolbarRPAMode({
                 error_message: message,
               },
             );
-            if (active) setSnapshot(next);
+            if (!active) return;
+            applyNextSnapshot(next);
           } catch {
             // Keep the original UI error. The next bootstrap can recover from server state.
           }
@@ -1949,67 +2516,166 @@ export function ToolbarRPAMode({
       active = false;
       clearTimer();
     };
-  }, [snapshot, actionType, stableRunID]);
+  }, [
+    actionType,
+    stableRunID,
+    isRealtimeDriven,
+    effectiveOperatorDisplayState,
+    streamState,
+    snapshot?.run?.version,
+    snapshot?.action?.task_id,
+    snapshot?.action?.message_task_id,
+    snapshot?.action?.session_task_id,
+    snapshot?.action?.poll_after_ms,
+    snapshot?.action?.reason,
+    snapshot?.action?.target?.open_kfid,
+    snapshot?.action?.target?.external_userid,
+    snapshot?.message_task?.message_hash,
+    snapshot?.message_task?.status,
+    snapshot?.message_task?.text,
+    snapshot?.message_task?.message_preview,
+    snapshot?.navigation?.required,
+    snapshot?.navigation?.already_matched,
+    snapshot?.navigation?.delay_ms,
+    snapshot?.navigation?.flash_count,
+    currentSessionContext?.open_kfid,
+    currentSessionContext?.external_userid,
+    knownCurrentConversation.openKFID,
+    knownCurrentConversation.externalUserID,
+  ]);
 
   const actionMessages = (
     action?.message ? [action.message] : action?.messages || []
   ).filter(Boolean);
+  const currentTaskView = operatorView?.current_task || null;
+  const nextQueuedTaskView = operatorView?.next_queued_task || null;
+  const pausedTaskView =
+    nextQueuedTaskView ||
+    currentTaskView ||
+    (pendingWindow
+      ? ({
+          session: {
+            session_task_id: "",
+            status: pendingWindow.status || "",
+            open_kfid: pendingWindow.open_kfid || "",
+            external_userid: pendingWindow.external_userid || "",
+            contact_name: pendingWindow.contact_name || "",
+            channel_label: pendingWindow.channel_label || "",
+          },
+          message: {
+            message_task_id: "",
+            status: pendingWindow.status || "",
+            send_order: 0,
+            text: pendingWindow.last_customer_message_preview || "",
+            message_preview: pendingWindow.last_customer_message_preview || "",
+            message_hash: "",
+          },
+          target: {
+            open_kfid: pendingWindow.open_kfid || "",
+            external_userid: pendingWindow.external_userid || "",
+            display_name: pendingWindow.contact_name || "",
+            channel_label: pendingWindow.channel_label || "",
+          },
+        } satisfies ToolbarRPAOperatorTaskView)
+      : null);
   const completionContextSnapshot =
     completedOverlay?.snapshot || previousSnapshotRef.current;
-  const completionTargetSource =
-    completionContextSnapshot?.action?.target || {
-      open_kfid:
-        completionContextSnapshot?.target_session?.open_kfid ||
-        completionContextSnapshot?.current_session?.open_kfid ||
-        completionContextSnapshot?.session_task?.open_kfid ||
-        "",
-      external_userid:
-        completionContextSnapshot?.target_session?.external_userid ||
-        completionContextSnapshot?.current_session?.external_userid ||
-        completionContextSnapshot?.session_task?.external_userid ||
-        "",
-      display_name:
-        completionContextSnapshot?.target_session?.contact_name ||
-        completionContextSnapshot?.current_session?.contact_name ||
-        completionContextSnapshot?.session_task?.contact_name ||
-        "",
-      channel_label:
-        completionContextSnapshot?.target_session?.channel_label ||
-        completionContextSnapshot?.current_session?.channel_label ||
-        completionContextSnapshot?.session_task?.channel_label ||
-        "",
-    };
-  const completionMessageSource = completionContextSnapshot?.message_task || null;
+  const completionTargetSource = completionContextSnapshot?.action?.target || {
+    open_kfid:
+      completionContextSnapshot?.target_session?.open_kfid ||
+      completionContextSnapshot?.current_session?.open_kfid ||
+      completionContextSnapshot?.session_task?.open_kfid ||
+      "",
+    external_userid:
+      completionContextSnapshot?.target_session?.external_userid ||
+      completionContextSnapshot?.current_session?.external_userid ||
+      completionContextSnapshot?.session_task?.external_userid ||
+      "",
+    display_name:
+      completionContextSnapshot?.target_session?.contact_name ||
+      completionContextSnapshot?.current_session?.contact_name ||
+      completionContextSnapshot?.session_task?.contact_name ||
+      "",
+    channel_label:
+      completionContextSnapshot?.target_session?.channel_label ||
+      completionContextSnapshot?.current_session?.channel_label ||
+      completionContextSnapshot?.session_task?.channel_label ||
+      "",
+  };
+  const completionMessageSource =
+    completionContextSnapshot?.message_task || null;
   const displayActionType = completedOverlay
     ? "completed"
-    : suppressInitialTerminalSnapshot
-      ? "idle_poll"
-      : actionType;
+    : effectiveOperatorDisplayState
+      ? effectiveOperatorDisplayState
+      : suppressInitialTerminalSnapshot
+        ? "idle_poll"
+        : actionType;
   const isCompletedAction = displayActionType === "completed";
   const uiIsPausing = !completedOverlay && isPausing;
   const uiIsPaused = !completedOverlay && isPaused;
   const uiIsCompleted = isCompletedAction;
+  const displayTaskView = uiIsPaused
+    ? pausedTaskView
+    : currentTaskView || nextQueuedTaskView || null;
   const pausedMessage =
-    uiIsPaused && (snapshot?.message_task?.text || "").trim()
+    uiIsPaused &&
+    (
+      displayTaskView?.message?.text ||
+      displayTaskView?.message?.message_preview ||
+      snapshot?.message_task?.text ||
+      ""
+    ).trim()
       ? [
           {
-            message_id: snapshot?.message_task?.message_task_id || "",
-            order: snapshot?.message_task?.send_order || 0,
-            text: snapshot?.message_task?.text || "",
-            message_hash: snapshot?.message_task?.message_hash || "",
+            message_id:
+              displayTaskView?.message?.message_task_id ||
+              snapshot?.message_task?.message_task_id ||
+              "",
+            order:
+              displayTaskView?.message?.send_order ||
+              snapshot?.message_task?.send_order ||
+              0,
+            text:
+              displayTaskView?.message?.text ||
+              displayTaskView?.message?.message_preview ||
+              snapshot?.message_task?.text ||
+              "",
+            message_hash:
+              displayTaskView?.message?.message_hash ||
+              snapshot?.message_task?.message_hash ||
+              "",
           },
         ]
       : [];
   const completedMessage =
     isCompletedAction &&
     actionMessages.length === 0 &&
-    (completionMessageSource?.text || "").trim()
+    (
+      currentTaskView?.message?.text ||
+      currentTaskView?.message?.message_preview ||
+      completionMessageSource?.text ||
+      ""
+    ).trim()
       ? [
           {
-            message_id: completionMessageSource?.message_task_id || "",
-            order: completionMessageSource?.send_order || 0,
-            text: completionMessageSource?.text || "",
-            message_hash: completionMessageSource?.message_hash || "",
+            message_id:
+              currentTaskView?.message?.message_task_id ||
+              completionMessageSource?.message_task_id ||
+              "",
+            order:
+              currentTaskView?.message?.send_order ||
+              completionMessageSource?.send_order ||
+              0,
+            text:
+              currentTaskView?.message?.text ||
+              currentTaskView?.message?.message_preview ||
+              completionMessageSource?.text ||
+              "",
+            message_hash:
+              currentTaskView?.message?.message_hash ||
+              completionMessageSource?.message_hash ||
+              "",
           },
         ]
       : [];
@@ -2022,7 +2688,12 @@ export function ToolbarRPAMode({
   const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
   const pauseAutoStopRemainingMS = Math.max(
     0,
-    Number(snapshot?.paused_auto_stop_remaining_ms || 0),
+    Number(snapshot?.paused_auto_stop_remaining_ms || 0) ||
+      (uiIsPaused &&
+      Number.isFinite(operatorPauseDeadlineMS) &&
+      operatorPauseDeadlineMS > 0
+        ? operatorPauseDeadlineMS - viewClock
+        : 0),
   );
   const pauseAutoStopSeconds = Math.max(
     0,
@@ -2030,6 +2701,24 @@ export function ToolbarRPAMode({
   );
   const isCompleted = uiIsCompleted;
   const currentTarget = action?.target || {
+    open_kfid:
+      displayTaskView?.target?.open_kfid ||
+      displayTaskView?.session?.open_kfid ||
+      "",
+    external_userid:
+      displayTaskView?.target?.external_userid ||
+      displayTaskView?.session?.external_userid ||
+      "",
+    display_name:
+      displayTaskView?.target?.display_name ||
+      displayTaskView?.session?.contact_name ||
+      "",
+    channel_label:
+      displayTaskView?.target?.channel_label ||
+      displayTaskView?.session?.channel_label ||
+      "",
+  };
+  const fallbackTarget = {
     open_kfid:
       snapshot?.target_session?.open_kfid ||
       snapshot?.current_session?.open_kfid ||
@@ -2055,6 +2744,15 @@ export function ToolbarRPAMode({
       pendingWindow?.channel_label ||
       (isCompleted ? completionTargetSource.channel_label || "" : ""),
   };
+  const resolvedTarget = {
+    open_kfid: currentTarget.open_kfid || fallbackTarget.open_kfid || "",
+    external_userid:
+      currentTarget.external_userid || fallbackTarget.external_userid || "",
+    display_name:
+      currentTarget.display_name || fallbackTarget.display_name || "",
+    channel_label:
+      currentTarget.channel_label || fallbackTarget.channel_label || "",
+  };
   const reviewSessions = useMemo(
     () =>
       (snapshot?.pending_session_tasks || []).filter(
@@ -2064,26 +2762,25 @@ export function ToolbarRPAMode({
             "review_resend_pending",
             "need_manual",
             "failed",
-          ].includes(
-            (item.status || "").trim(),
-          ) && (item.current_message_task_id || "").trim(),
+          ].includes((item.status || "").trim()) &&
+          (item.current_message_task_id || "").trim(),
       ),
     [snapshot?.pending_session_tasks],
   );
   const reviewManualTotal = Number(snapshot?.review_manual?.total || 0);
-  const navigationAlreadyMatched = snapshot?.navigation?.already_matched === true;
+  const navigationAlreadyMatched =
+    snapshot?.navigation?.already_matched === true;
   const knownCurrentDiffersFromTarget =
     hasConversationIdentity(knownCurrentConversation) &&
-    isKnownDifferentConversation(knownCurrentConversation, currentTarget);
-  const knownCurrentMatchesTarget =
-    isSameConversation(
-      knownCurrentConversation,
-      currentTarget,
-      canMatchByExternalOnly(knownCurrentConversation, currentTarget),
-    );
+    isKnownDifferentConversation(knownCurrentConversation, resolvedTarget);
+  const knownCurrentMatchesTarget = isSameConversation(
+    knownCurrentConversation,
+    resolvedTarget,
+    canMatchByExternalOnly(knownCurrentConversation, resolvedTarget),
+  );
   const recentlyNavigatedToCurrentTarget = hasRecentAutomationNavigation(
     stableRunID,
-    currentTarget,
+    resolvedTarget,
   );
   const inferredNavigationSkippedInRun =
     POST_NAVIGATION_ACTION_TYPES.has(actionType) &&
@@ -2099,15 +2796,19 @@ export function ToolbarRPAMode({
       inferredNavigationSkippedInRun);
   const rememberedNavigationSkipped = Boolean(
     stableRunID &&
-      currentPipelineKey &&
-      skippedNavigationPipelineKey === currentPipelineKey,
+    currentPipelineKey &&
+    skippedNavigationPipelineKey === currentPipelineKey,
   );
-  const navigationSkippedInRun = navigationSkipped || rememberedNavigationSkipped;
+  const navigationSkippedInRun =
+    navigationSkipped || rememberedNavigationSkipped;
   const isIdlePoll =
     !uiIsPausing &&
     !uiIsPaused &&
     (displayActionType === "idle_poll" ||
-      (!displayActionType && !hasActiveRun && automationEnabled && !pendingWindow));
+      (!displayActionType &&
+        !hasActiveRun &&
+        automationEnabled &&
+        !pendingWindow));
   const showStandalonePipeline = uiIsPaused || isIdlePoll || isCompleted;
   const presentation = buildFlowPresentation({
     actionType: displayActionType,
@@ -2124,18 +2825,18 @@ export function ToolbarRPAMode({
     hasActiveRun,
   );
   const customerName =
-    currentTarget.display_name ||
+    resolvedTarget.display_name ||
     snapshot?.target_session?.contact_name ||
     snapshot?.current_session?.contact_name ||
     snapshot?.session_task?.contact_name ||
     (isCompleted ? completionTargetSource.display_name || "" : "") ||
     pendingWindow?.contact_name ||
-    currentTarget.external_userid ||
+    resolvedTarget.external_userid ||
     (isCompleted ? completionTargetSource.external_userid || "" : "") ||
     pendingWindow?.external_userid ||
     "";
   const customerExternalUserID =
-    currentTarget.external_userid ||
+    resolvedTarget.external_userid ||
     snapshot?.target_session?.external_userid ||
     snapshot?.current_session?.external_userid ||
     snapshot?.session_task?.external_userid ||
@@ -2143,7 +2844,7 @@ export function ToolbarRPAMode({
     pendingWindow?.external_userid ||
     "";
   const agentOpenKFID =
-    currentTarget.open_kfid ||
+    resolvedTarget.open_kfid ||
     snapshot?.target_session?.open_kfid ||
     snapshot?.current_session?.open_kfid ||
     snapshot?.session_task?.open_kfid ||
@@ -2153,7 +2854,7 @@ export function ToolbarRPAMode({
     "";
   const mappedAgentLabel = (channelDisplayMap?.[agentOpenKFID] || "").trim();
   const agentChannelLabel = (
-    currentTarget.channel_label ||
+    resolvedTarget.channel_label ||
     snapshot?.target_session?.channel_label ||
     snapshot?.current_session?.channel_label ||
     snapshot?.session_task?.channel_label ||
@@ -2165,50 +2866,53 @@ export function ToolbarRPAMode({
     (agentChannelLabel && agentChannelLabel !== agentOpenKFID
       ? agentChannelLabel
       : agentOpenKFID || "待确认");
-  const hasDisplayableTargetCard = Boolean(
-    customerName ||
-      customerExternalUserID ||
-      agentOpenKFID ||
-      pendingWindow?.open_kfid ||
-      pendingWindow?.external_userid,
-  );
+  const hasDisplayableTargetCard =
+    isIdlePoll ||
+    Boolean(
+      customerName ||
+        customerExternalUserID ||
+        agentOpenKFID ||
+        pendingWindow?.open_kfid ||
+        pendingWindow?.external_userid,
+    );
   const targetCardToneClass = uiIsPaused
     ? "border-amber-500 bg-amber-50"
     : isIdlePoll
-    ? "border-gray-400 bg-gray-50"
-    : isCompleted
-      ? "border-green-500 bg-green-50"
-      : displayActionType === "navigate_to_chat"
-        ? navigationSkippedInRun
-          ? "border-gray-400 bg-gray-50"
-          : "border-indigo-500 bg-indigo-50 animate-pulse"
-      : "border-blue-500 bg-blue-50";
+      ? "border-gray-400 bg-gray-50"
+      : isCompleted
+        ? "border-green-500 bg-green-50"
+        : displayActionType === "navigate_to_chat"
+          ? navigationSkippedInRun
+            ? "border-gray-400 bg-gray-50"
+            : "border-indigo-500 bg-indigo-50 animate-pulse"
+          : "border-blue-500 bg-blue-50";
   const targetCardLabelClass = uiIsPaused
     ? "text-amber-600"
     : isIdlePoll
-    ? "text-gray-500"
-    : isCompleted
-      ? "text-green-600"
-      : displayActionType === "navigate_to_chat"
-        ? navigationSkippedInRun
-          ? "text-gray-500"
-          : "text-indigo-600"
-      : "text-blue-600";
-  const targetCardLabel = pendingWindow && !hasActiveRun
-    ? "待恢复发送会话"
-    : uiIsPausing
-      ? "当前任务完成后暂停"
-    : uiIsPaused
-      ? "待恢复发送任务"
-    : isIdlePoll
-      ? "等待新发送任务"
-    : isCompleted
-      ? "本次发送已完成"
-      : displayActionType === "navigate_to_chat"
-        ? navigationSkippedInRun
-          ? "已在目标会话"
-          : "即将切换目标会话"
-      : "正在处理会话";
+      ? "text-gray-500"
+      : isCompleted
+        ? "text-green-600"
+        : displayActionType === "navigate_to_chat"
+          ? navigationSkippedInRun
+            ? "text-gray-500"
+            : "text-indigo-600"
+          : "text-blue-600";
+  const targetCardLabel =
+    pendingWindow && !hasActiveRun
+      ? "待恢复发送会话"
+      : uiIsPausing
+        ? "当前任务完成后暂停"
+        : uiIsPaused
+          ? "待恢复发送任务"
+          : isIdlePoll
+            ? "等待新发送任务"
+            : isCompleted
+              ? "本次发送已完成"
+              : displayActionType === "navigate_to_chat"
+                ? navigationSkippedInRun
+                  ? "已在目标会话"
+                  : "即将切换目标会话"
+                : "正在处理会话";
   const messageOrder =
     messages[0]?.order ||
     snapshot?.message_task?.send_order ||
@@ -2227,7 +2931,11 @@ export function ToolbarRPAMode({
   );
 
   useEffect(() => {
-    if (!stableRunID || actionType === "idle_poll" || actionType === "completed") {
+    if (
+      !stableRunID ||
+      actionType === "idle_poll" ||
+      actionType === "completed"
+    ) {
       if (skippedNavigationPipelineKey) setSkippedNavigationPipelineKey("");
       return;
     }
@@ -2263,7 +2971,9 @@ export function ToolbarRPAMode({
           snapshot?.message_task?.message_task_id ||
           "",
       });
-      setSnapshot(next);
+      if (!applyNextSnapshot(next)) {
+        void loadBootstrap(true);
+      }
       setNotice(successText);
     } catch (error) {
       setErrorText(normalizeErrorMessage(error));
@@ -2290,10 +3000,10 @@ export function ToolbarRPAMode({
             snapshot?.message_task?.message_task_id ||
             "",
         });
-        setSnapshot(next);
+        applyNextSnapshot(next);
       } else {
         const automation = await updateKFToolbarRPAAutomationMode(false);
-        const next = await getKFToolbarRPAState({
+        const next = await getKFToolbarRPABootstrap({
           open_kfid: currentSessionContext?.open_kfid || "",
           external_userid: currentSessionContext?.external_userid || "",
         });
@@ -2312,6 +3022,30 @@ export function ToolbarRPAMode({
         );
       }
       setNotice("已停止发送，未完成任务已丢弃。");
+    } catch (error) {
+      setErrorText(normalizeErrorMessage(error));
+    } finally {
+      setCommandLoading("");
+    }
+  };
+
+  const handleResumeAutomation = async () => {
+    if (commandLoading || isUpdatingAutomationMode || !canResumeNow) return;
+    if (stableRunID) {
+      await executeCommand("resume", "已继续自动发送。");
+      return;
+    }
+    clearTimer();
+    setCommandLoading("resume");
+    setErrorText("");
+    try {
+      await updateKFToolbarRPAAutomationMode(true);
+      const next = await getKFToolbarRPABootstrap({
+        open_kfid: currentSessionContext?.open_kfid || "",
+        external_userid: currentSessionContext?.external_userid || "",
+      });
+      applyNextSnapshot(next);
+      setNotice("已继续自动发送。");
     } catch (error) {
       setErrorText(normalizeErrorMessage(error));
     } finally {
@@ -2351,7 +3085,7 @@ export function ToolbarRPAMode({
         session_task_id: session.session_task_id || "",
         message_task_id: session.current_message_task_id || "",
       });
-      setSnapshot(next);
+      applyNextSnapshot(next);
       setNotice("已加入复核队列；当前会话完成后会进入该会话并自动复查重发。");
     } catch (error) {
       setErrorText(normalizeErrorMessage(error));
@@ -2386,22 +3120,21 @@ export function ToolbarRPAMode({
     "wait_wecom_confirm",
     "review_auto_resend",
   ];
-  const actionTone =
-    uiIsPaused
-      ? "amber"
-      : pendingWindow && !hasActiveRun
+  const actionTone = uiIsPaused
+    ? "amber"
+    : pendingWindow && !hasActiveRun
       ? "amber"
       : displayActionType === "wait_rpa_ack"
-      ? "amber"
-      : displayActionType === "wait_wecom_confirm"
-        ? "sky"
-        : displayActionType === "review_auto_resend"
-          ? "orange"
-          : displayActionType === "need_manual"
-            ? "red"
-            : displayActionType === "completed"
-              ? "green"
-              : "blue";
+        ? "amber"
+        : displayActionType === "wait_wecom_confirm"
+          ? "sky"
+          : displayActionType === "review_auto_resend"
+            ? "orange"
+            : displayActionType === "need_manual"
+              ? "red"
+              : displayActionType === "completed"
+                ? "green"
+                : "blue";
   const actionToneClasses =
     actionTone === "amber"
       ? "border-amber-200 bg-amber-50 text-amber-800"
@@ -2415,14 +3148,16 @@ export function ToolbarRPAMode({
               ? "border-green-200 bg-green-50 text-green-800"
               : "border-blue-200 bg-blue-50 text-blue-800";
   const headerStatus = !automationEnabled
-    ? "待启动"
+    ? isStopped
+      ? "已停止"
+      : "待启动"
     : uiIsPausing
       ? "暂停待生效"
-    : uiIsPaused
-      ? "已暂停"
-      : hasActiveRun
-        ? "执行中"
-        : "守护中";
+      : uiIsPaused
+        ? "已暂停"
+        : hasActiveRun
+          ? "执行中"
+          : "守护中";
   const headerBg = automationEnabled
     ? uiIsPaused
       ? "bg-amber-600"
@@ -2435,10 +3170,14 @@ export function ToolbarRPAMode({
     !uiIsPausing &&
     !uiIsPaused &&
     !commandLoading;
+  const canResumeFromState = Boolean(
+    effectiveSnapshot?.can_resume ?? snapshot?.can_resume,
+  );
   const canResumeNow =
-    automationEnabled && Boolean(stableRunID) && uiIsPaused && !commandLoading;
+    automationEnabled && uiIsPaused && canResumeFromState && !commandLoading;
   const canStopNow =
     automationEnabled && !commandLoading && !isUpdatingAutomationMode;
+  const stopCopy = stopCopyForReason(operatorStopReason);
 
   return (
     <div
@@ -2538,11 +3277,11 @@ export function ToolbarRPAMode({
           <div className="flex flex-col items-center justify-center space-y-4 py-12 text-center">
             <ShieldCheck className="h-12 w-12 text-gray-300" />
             <p className="text-sm font-medium text-gray-500">
-              {isStopped ? "自动发送已停止" : "自动发送未启动"}
+              {isStopped ? stopCopy.title : "自动发送未启动"}
             </p>
             <span className="px-4 text-xs leading-5 text-gray-400">
               {isStopped
-                ? "暂停超过 60 秒未恢复，系统已自动停止自动发送。"
+                ? stopCopy.detail
                 : "点击底部“自动发送”后，工具栏会开始守护待发送任务。"}
             </span>
           </div>
@@ -2602,7 +3341,9 @@ export function ToolbarRPAMode({
                     <div className="mt-1 text-[11px] leading-snug text-gray-600">
                       {presentation.subtitle}
                     </div>
-                    {(pendingWindow.last_customer_message_preview || "").trim() ? (
+                    {(
+                      pendingWindow.last_customer_message_preview || ""
+                    ).trim() ? (
                       <div className="mt-2 rounded border border-amber-200/80 bg-white/70 px-2 py-1.5 text-[11px] leading-5 text-amber-900">
                         {pendingWindow.last_customer_message_preview}
                       </div>
@@ -2613,9 +3354,7 @@ export function ToolbarRPAMode({
             ) : showStandalonePipeline ? (
               <div className="space-y-2.5">
                 <div className="flex justify-between text-[11px] font-bold uppercase text-gray-500">
-                  <span>
-                    发送进度
-                  </span>
+                  <span>发送进度</span>
                   <span
                     className={
                       uiIsPaused
@@ -2625,11 +3364,7 @@ export function ToolbarRPAMode({
                           : "text-gray-400"
                     }
                   >
-                    {uiIsPaused
-                      ? "待恢复"
-                      : isCompleted
-                        ? "已完成"
-                        : "待命中"}
+                    {uiIsPaused ? "待恢复" : isCompleted ? "已完成" : "待命中"}
                   </span>
                 </div>
 
@@ -2656,9 +3391,7 @@ export function ToolbarRPAMode({
 
                 <div
                   className={`space-y-3 rounded-lg border bg-gray-50 p-3.5 transition-colors ${
-                    isCompleted
-                      ? "border-green-200"
-                      : "border-gray-200"
+                    isCompleted ? "border-green-200" : "border-gray-200"
                   }`}
                 >
                   {uiIsPaused ? (
@@ -2764,16 +3497,14 @@ export function ToolbarRPAMode({
                               ? "bg-orange-500"
                               : skippedNavigation
                                 ? "bg-slate-300"
-                              : "bg-[#0052D9]"
+                                : "bg-[#0052D9]"
                             : "bg-gray-200"
                         }`}
                       >
                         {current && stepNumber >= 3 ? (
                           <div
                             className={`absolute -right-1 -top-1 h-3.5 w-3.5 rounded-full border-2 border-white ${
-                              review
-                                ? "bg-orange-500"
-                                : "bg-[#0052D9]"
+                              review ? "bg-orange-500" : "bg-[#0052D9]"
                             }`}
                           />
                         ) : null}
@@ -2953,11 +3684,6 @@ export function ToolbarRPAMode({
               </div>
             ) : null}
 
-            {notice ? (
-              <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
-                {notice}
-              </div>
-            ) : null}
             {errorText ? (
               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">
                 {errorText}
@@ -2967,7 +3693,8 @@ export function ToolbarRPAMode({
             <div className="pt-1">
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                  复核列表 ({Math.max(reviewSessions.length, reviewManualTotal)})
+                  复核列表 ({Math.max(reviewSessions.length, reviewManualTotal)}
+                  )
                 </div>
                 {reviewSessions.length > 0 || reviewManualTotal > 0 ? (
                   <span className="rounded border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">
@@ -2983,9 +3710,7 @@ export function ToolbarRPAMode({
                     const isReviewPending = status === "review_resend_pending";
                     const canRequestReview = status === "confirm_uncertain";
                     const displayName =
-                      item.contact_name ||
-                      item.external_userid ||
-                      "待复核会话";
+                      item.contact_name || item.external_userid || "待复核会话";
                     const reviewHint = (
                       item.message_text ||
                       item.error_message ||
@@ -2993,7 +3718,9 @@ export function ToolbarRPAMode({
                     ).trim();
                     return (
                       <div
-                        key={item.session_task_id || item.current_message_task_id}
+                        key={
+                          item.session_task_id || item.current_message_task_id
+                        }
                         className="flex items-center justify-between gap-3 rounded-lg border border-red-100 bg-red-50 p-2.5 shadow-sm"
                       >
                         <div className="flex min-w-0 items-center gap-2.5">
@@ -3070,7 +3797,7 @@ export function ToolbarRPAMode({
             <button
               type="button"
               disabled={!!commandLoading}
-              onClick={() => void executeCommand("resume", "已继续自动发送。")}
+              onClick={() => void handleResumeAutomation()}
               className="flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white py-2.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <PlayCircle className="h-4 w-4" />

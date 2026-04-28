@@ -34,6 +34,7 @@ import {
 } from "./sidebarChrome";
 import { ToolbarDebugView } from "./ToolbarDebugView";
 import {
+  getKFToolbarRPABootstrap,
   getKFToolbarRPAOperatorBinding,
   saveKFToolbarRPAOperatorBinding,
   updateKFToolbarRPAAutomationMode,
@@ -1007,6 +1008,12 @@ export default function CSSidebar() {
   const suggestionRequestSeqRef = useRef(0);
   const conversationScrollRef = useRef<HTMLDivElement | null>(null);
   const [sessionLocator, setSessionLocator] = useState(query);
+  const automationEnabled = Boolean(
+    rpaBootstrap?.automation?.enabled || rpaAutomation?.enabled,
+  );
+  const isRPARealtimePanelActive = Boolean(
+    rpaBootstrap || automationEnabled || isRPAPanelOpen,
+  );
 
   const clearSuggestionNotice = () => {
     if (suggestionNoticeTimerRef.current !== null) {
@@ -1363,7 +1370,15 @@ export default function CSSidebar() {
     silent?: boolean;
     preserveConversation?: boolean;
     light?: boolean;
+    forceDuringRPA?: boolean;
   }): Promise<boolean> => {
+    if (
+      options?.light === true &&
+      isRPARealtimePanelActive &&
+      !options.forceDuringRPA
+    ) {
+      return false;
+    }
     const entry = (
       sessionLocator.entry ||
       query.entry ||
@@ -1406,7 +1421,12 @@ export default function CSSidebar() {
         setRPAAutomation(nextRPA.automation || null);
       }
       if ((nextRPA?.mode || "").trim() === "rpa" && nextRPA?.enabled) {
-        setRPABootstrap(nextRPA);
+        const realtimeRPA = await getKFToolbarRPABootstrap({
+          run_id: nextRPA?.run?.run_id || "",
+          open_kfid: openKFID,
+          external_userid: externalUserID,
+        }).catch(() => null);
+        setRPABootstrap(realtimeRPA || nextRPA);
         setBootstrap(null);
         setNotice("");
         return true;
@@ -1518,6 +1538,13 @@ export default function CSSidebar() {
   }, [realtimeSessionKey]);
 
   useEffect(() => {
+    if (isRPARealtimePanelActive) {
+      if (bootstrapProbeTimerRef.current !== null) {
+        window.clearTimeout(bootstrapProbeTimerRef.current);
+        bootstrapProbeTimerRef.current = null;
+      }
+      return;
+    }
     const suggestionStatus = normalizeToolbarSuggestionStatus(
       bootstrap?.suggestions?.status,
     );
@@ -1563,11 +1590,19 @@ export default function CSSidebar() {
     bootstrap?.capabilities?.auto_refresh_suggestions,
     bootstrap?.summary?.status,
     bootstrap?.suggestions?.status,
+    isRPARealtimePanelActive,
     selectionState?.required,
   ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (isRPARealtimePanelActive) {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      return;
+    }
     if (bootstrap?.selection?.required) return;
     const openKFID = (
       bootstrap?.open_kfid ||
@@ -1730,6 +1765,7 @@ export default function CSSidebar() {
     bootstrap?.external_userid,
     bootstrap?.open_kfid,
     bootstrap?.selection?.required,
+    isRPARealtimePanelActive,
     query.external_userid,
     query.open_kfid,
     sessionLocator.external_userid,
@@ -1866,9 +1902,6 @@ export default function CSSidebar() {
   ).trim();
   const hasBoundRPAClient = Boolean(
     (rpaOperatorBinding?.bound || rpaAutomation?.bound) && boundRPAClientID,
-  );
-  const automationEnabled = Boolean(
-    rpaBootstrap?.automation?.enabled || rpaAutomation?.enabled,
   );
   const automationCanEnter = Boolean(
     rpaBootstrap?.automation?.can_enter_auto_mode ||
@@ -2162,12 +2195,36 @@ export default function CSSidebar() {
       setIsRPABindingModalOpen(true);
       return;
     }
+    const previousAutomation = rpaAutomation;
+    const requestOpenKFID =
+      sessionLocator.open_kfid || bootstrap?.open_kfid || query.open_kfid || "";
+    const requestExternalUserID =
+      sessionLocator.external_userid ||
+      bootstrap?.external_userid ||
+      query.external_userid ||
+      "";
     try {
       setIsUpdatingAutomationMode(true);
+      if (enabled) {
+        setIsRPAPanelOpen(true);
+        setRPAAutomation((prev) => ({
+          ...(prev || previousAutomation || {}),
+          enabled: true,
+          status: "active",
+          stop_reason: "",
+        }));
+      }
       const next = await updateKFToolbarRPAAutomationMode(enabled);
       setRPAAutomation(next);
       if (enabled) {
-        setIsRPAPanelOpen(true);
+        const realtimeRPA = await getKFToolbarRPABootstrap({
+          open_kfid: requestOpenKFID,
+          external_userid: requestExternalUserID,
+        }).catch(() => null);
+        if (realtimeRPA) {
+          setRPABootstrap(realtimeRPA);
+          setBootstrap(null);
+        }
       }
       if (!enabled) {
         setIsRPAPanelOpen(false);
@@ -2178,13 +2235,19 @@ export default function CSSidebar() {
           ? "已开始自动发送，工具栏会持续守护待发送任务。"
           : "已返回人工处理，自动发送已退出。",
       );
-      await loadBootstrap({
-        preserveNotice: true,
-        silent: true,
-        preserveConversation: true,
-        light: true,
-      });
+      if (!enabled) {
+        await loadBootstrap({
+          preserveNotice: true,
+          silent: true,
+          preserveConversation: true,
+          light: true,
+          forceDuringRPA: true,
+        });
+      }
     } catch (error) {
+      if (enabled) {
+        setRPAAutomation(previousAutomation || null);
+      }
       setNotice(
         sanitizeToolbarNotice(error) ||
           (enabled ? "切换自动模式失败" : "切换人工模式失败"),
@@ -2215,13 +2278,19 @@ export default function CSSidebar() {
   }
 
   const handleOpenRPAPanel = () => {
+    if (!automationEnabled) {
+      setRPABootstrap(null);
+    }
     setIsRPAPanelOpen(true);
   };
 
   if (rpaBootstrap || automationEnabled || isRPAPanelOpen) {
     return (
       <ToolbarRPAMode
-        runId={rpaBootstrap?.run?.run_id || query.rpa_run_id || ""}
+        runId={
+          rpaBootstrap?.run?.run_id ||
+          (automationEnabled ? query.rpa_run_id || "" : "")
+        }
         initialBootstrap={rpaBootstrap}
         initialAutomationEnabled={automationEnabled}
         allowInactivePanel={isRPAPanelOpen && !automationEnabled}
@@ -2244,6 +2313,7 @@ export default function CSSidebar() {
             silent: true,
             preserveConversation: true,
             light: true,
+            forceDuringRPA: true,
           });
         }}
       />
