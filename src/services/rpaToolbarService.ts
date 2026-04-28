@@ -971,22 +971,6 @@ function normalizeToolbarRPAOperatorBootstrap(
   };
 }
 
-export async function getKFToolbarRPAState(params: {
-  run_id?: string;
-  open_kfid?: string;
-  external_userid?: string;
-}): Promise<ToolbarRPABootstrap | null> {
-  const search = new URLSearchParams();
-  if (params.run_id) search.set("run_id", params.run_id);
-  if (params.open_kfid) search.set("open_kfid", params.open_kfid);
-  if (params.external_userid)
-    search.set("external_userid", params.external_userid);
-  const payload = await requestJSON<APIReply<RPAStateSnapshot>>(
-    `/api/v1/kf/toolbar/rpa/state?${search.toString()}`,
-  );
-  return normalizeRPAStateSnapshot(payload?.data || null);
-}
-
 export async function getKFToolbarRPABootstrap(params?: {
   run_id?: string;
   open_kfid?: string;
