@@ -2682,7 +2682,7 @@ export function ToolbarRPAMode({
             },
           );
           if (!active) return;
-          applyNextSnapshot(next, { force: true });
+          applyNextSnapshot(next, { force: !isRealtimeDriven });
           setNotice("消息已填入，正在等待点击发送。");
         }
       } catch (error) {
