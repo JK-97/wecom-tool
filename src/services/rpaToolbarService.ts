@@ -991,6 +991,7 @@ export async function getKFToolbarRPABootstrap(params?: {
   run_id?: string;
   open_kfid?: string;
   external_userid?: string;
+  force_fresh?: boolean;
 }): Promise<ToolbarRPABootstrap | null> {
   const search = new URLSearchParams();
   if (params?.run_id) search.set("run_id", params.run_id);
@@ -998,6 +999,7 @@ export async function getKFToolbarRPABootstrap(params?: {
   if (params?.external_userid) {
     search.set("external_userid", params.external_userid);
   }
+  if (params?.force_fresh) search.set("force_fresh", "true");
   const query = search.toString();
   const payload = await requestJSON<APIReply<ToolbarRPAOperatorBootstrapData>>(
     `/api/v1/kf/toolbar/rpa/bootstrap${query ? `?${query}` : ""}`,

@@ -2220,6 +2220,7 @@ export default function CSSidebar() {
         const realtimeRPA = await getKFToolbarRPABootstrap({
           open_kfid: requestOpenKFID,
           external_userid: requestExternalUserID,
+          force_fresh: true,
         }).catch(() => null);
         if (realtimeRPA) {
           setRPABootstrap(realtimeRPA);
