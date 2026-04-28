@@ -83,6 +83,8 @@ const WAIT_WECOM_CONFIRM_STATUSES = new Set([
   "waiting_wecom_confirm",
   "rpa_clicked_send",
 ]);
+const STREAM_STALE_FALLBACK_MS = 45_000;
+const STREAM_CONNECTING_FALLBACK_MS = 12_000;
 const REVIEW_AUTO_RESEND_STATUSES = new Set(["review_resend_pending"]);
 const NEED_MANUAL_STATUSES = new Set([
   "need_manual",
@@ -1323,6 +1325,8 @@ export function ToolbarRPAMode({
   const [streamState, setStreamState] = useState<
     "idle" | "connecting" | "open" | "error"
   >("idle");
+  const [streamLastActivityAt, setStreamLastActivityAt] = useState(0);
+  const [streamConnectingSince, setStreamConnectingSince] = useState(0);
   const [viewClock, setViewClock] = useState(() => Date.now());
   const [localPauseDeadlineMS, setLocalPauseDeadlineMS] = useState(0);
   const [localStopReason, setLocalStopReason] = useState("");
@@ -1423,7 +1427,29 @@ export function ToolbarRPAMode({
   const isRealtimePrimary = Boolean(
     snapshot?.stream_ready || snapshotRealtimeVersion(snapshot) > 0,
   );
-  const isRealtimeDriven = isRealtimePrimary && streamState !== "error";
+  const streamLastActivityAgeMS =
+    streamLastActivityAt > 0 ? Math.max(0, viewClock - streamLastActivityAt) : 0;
+  const streamConnectingAgeMS =
+    streamConnectingSince > 0
+      ? Math.max(0, viewClock - streamConnectingSince)
+      : 0;
+  const streamIsFresh =
+    streamState === "open" &&
+    streamLastActivityAt > 0 &&
+    streamLastActivityAgeMS <= STREAM_STALE_FALLBACK_MS;
+  const streamIsWithinReconnectGrace =
+    streamState === "connecting" &&
+    streamConnectingSince > 0 &&
+    streamConnectingAgeMS <= STREAM_CONNECTING_FALLBACK_MS;
+  const isRealtimeDriven =
+    isRealtimePrimary && (streamIsFresh || streamIsWithinReconnectGrace);
+  const streamFallbackReason = !isRealtimePrimary
+    ? "projection_unavailable"
+    : streamState === "open"
+      ? "stream_stale"
+      : streamState === "connecting"
+        ? "stream_reconnect_timeout"
+        : streamState || "stream_unavailable";
   const action = snapshot?.action || null;
   const actionType = (action?.type || "").trim();
   const currentPipelineKey = [
@@ -1991,6 +2017,7 @@ export function ToolbarRPAMode({
 
   useEffect(() => {
     if (!isPaused) return;
+    if (isRealtimeDriven) return;
     if (
       !Number.isFinite(effectivePauseDeadlineMS) ||
       effectivePauseDeadlineMS <= 0 ||
@@ -2025,6 +2052,7 @@ export function ToolbarRPAMode({
   }, [
     effectivePauseDeadlineMS,
     isPaused,
+    isRealtimeDriven,
     snapshot?.request_id,
     stableRunID,
     viewClock,
@@ -2033,23 +2061,35 @@ export function ToolbarRPAMode({
   useEffect(() => {
     let closed = false;
     let allowCurrentVersionReplay = true;
+    const startedAt = Date.now();
     setStreamState("connecting");
+    setStreamConnectingSince(startedAt);
     const stream = openToolbarRPAOperatorViewStream({
       since_version: streamVersionRef.current,
       onOpen: () => {
         if (closed) return;
+        const now = Date.now();
         setStreamState("open");
+        setStreamLastActivityAt(now);
+        setStreamConnectingSince(0);
       },
       onError: () => {
         if (closed) return;
         // Native EventSource already reconnects using the server-provided retry interval.
-        // Keep the page in realtime mode while the browser retries, instead of layering
-        // our own reconnect loop on top and creating a request storm.
+        // Keep the page in realtime mode during a short reconnect grace window. If it
+        // stays stale, waiting actions fall back to the low-frequency bootstrap path.
         setStreamState("connecting");
+        setStreamConnectingSince((current) => current || Date.now());
       },
       onMessage: (payload) => {
         if (closed) return;
+        const now = Date.now();
+        setStreamState("open");
+        setStreamConnectingSince(0);
         const events = payload.events || [];
+        if (events.length > 0) {
+          setStreamLastActivityAt(now);
+        }
         let nextSnapshot: ToolbarRPABootstrap | null = null;
         for (const event of events) {
           const normalized = normalizeToolbarRPAOperatorStreamEvent(event);
@@ -2078,7 +2118,6 @@ export function ToolbarRPAMode({
           allowCurrentVersionReplay = false;
         }
         if (!nextSnapshot) return;
-        setStreamState("open");
         applyNextSnapshot(nextSnapshot);
       },
     });
@@ -2089,6 +2128,33 @@ export function ToolbarRPAMode({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!isRealtimePrimary) return;
+    const now = Date.now();
+    let delay = 0;
+    if (streamState === "open") {
+      const age = streamLastActivityAt > 0 ? now - streamLastActivityAt : 0;
+      delay = Math.max(1000, STREAM_STALE_FALLBACK_MS - age + 50);
+    } else if (streamState === "connecting") {
+      const age =
+        streamConnectingSince > 0 ? now - streamConnectingSince : 0;
+      delay = Math.max(1000, STREAM_CONNECTING_FALLBACK_MS - age + 50);
+    }
+    if (delay <= 0) return;
+    const timer = window.setTimeout(() => {
+      setViewClock(Date.now());
+    }, delay);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    isRealtimePrimary,
+    streamConnectingSince,
+    streamLastActivityAt,
+    streamState,
+    viewClock,
+  ]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -2438,6 +2504,7 @@ export function ToolbarRPAMode({
               actionDebugSignature,
               debugWindowSnapshot({
                 stream_state: streamState,
+                stream_last_activity_age_ms: streamLastActivityAgeMS,
                 display_state: effectiveOperatorDisplayState || actionType,
               }),
             );
@@ -2452,6 +2519,10 @@ export function ToolbarRPAMode({
             actionDebugSignature,
             debugWindowSnapshot({
               delay_ms: delay,
+              stream_state: streamState,
+              stream_fallback_reason: streamFallbackReason,
+              stream_last_activity_age_ms: streamLastActivityAgeMS,
+              stream_connecting_age_ms: streamConnectingAgeMS,
             }),
           );
           timerRef.current = window.setTimeout(() => {
@@ -2677,6 +2748,9 @@ export function ToolbarRPAMode({
     isRealtimeDriven,
     effectiveOperatorDisplayState,
     streamState,
+    streamFallbackReason,
+    streamConnectingAgeMS,
+    streamLastActivityAgeMS,
     snapshot?.run?.version,
     snapshot?.action?.task_id,
     snapshot?.action?.message_task_id,
