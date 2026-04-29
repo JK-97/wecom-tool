@@ -37,6 +37,7 @@ import {
   Bot,
   CheckCircle2,
   FileText,
+  KeyRound,
   LoaderCircle,
   MessageSquareText,
   PauseCircle,
@@ -366,6 +367,10 @@ type Props = {
   channelDisplayMap?: Record<string, string>;
   onAutomationModeChange?: (enabled: boolean) => Promise<void> | void;
   isUpdatingAutomationMode?: boolean;
+  rpaClientBound?: boolean;
+  rpaClientID?: string;
+  isLoadingRPAClientBinding?: boolean;
+  onOpenRPAClientBinding?: () => Promise<void> | void;
   onExitRPAMode?: () => Promise<void> | void;
 };
 
@@ -1298,6 +1303,10 @@ export function ToolbarRPAMode({
   channelDisplayMap,
   onAutomationModeChange,
   isUpdatingAutomationMode = false,
+  rpaClientBound = false,
+  rpaClientID = "",
+  isLoadingRPAClientBinding = false,
+  onOpenRPAClientBinding,
   onExitRPAMode,
 }: Props) {
   const [snapshot, setSnapshot] = useState<ToolbarRPABootstrap | null>(
@@ -3465,17 +3474,6 @@ export function ToolbarRPAMode({
             : actionTone === "green"
               ? "border-green-200 bg-green-50 text-green-800"
               : "border-blue-200 bg-blue-50 text-blue-800";
-  const headerStatus = !automationEnabled
-    ? isStopped
-      ? "已停止"
-      : "待启动"
-    : uiIsPausing
-      ? "暂停待生效"
-      : uiIsPaused
-        ? "已暂停"
-        : hasActiveRun
-          ? "执行中"
-          : "守护中";
   const headerBg = automationEnabled
     ? uiIsPaused
       ? "bg-amber-600"
@@ -3561,9 +3559,28 @@ export function ToolbarRPAMode({
               )}
               返回人工
             </button>
-            <span className="rounded bg-white/20 px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-white">
-              {isLoading ? "同步中" : headerStatus}
-            </span>
+            <button
+              type="button"
+              disabled={isLoadingRPAClientBinding}
+              onClick={() => void onOpenRPAClientBinding?.()}
+              className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-bold text-white transition-colors hover:bg-white/30 disabled:opacity-60"
+              title={
+                rpaClientBound && rpaClientID
+                  ? "查看或编辑 MuYuAI 客户端ID"
+                  : "绑定 MuYuAI 客户端ID"
+              }
+            >
+              {isLoadingRPAClientBinding ? (
+                <LoaderCircle className="h-3 w-3 animate-spin" />
+              ) : (
+                <KeyRound className="h-3 w-3" />
+              )}
+              {isLoadingRPAClientBinding
+                ? "读取中"
+                : rpaClientBound
+                  ? "客户端ID"
+                  : "绑定ID"}
+            </button>
             <button
               type="button"
               disabled={isLoading}

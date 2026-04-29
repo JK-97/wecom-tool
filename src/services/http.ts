@@ -85,6 +85,24 @@ export function normalizeErrorMessage(error: unknown): string {
   return "unknown error"
 }
 
+export function getAPIErrorReason(error: unknown): string {
+  if (!(error instanceof APIRequestError)) return ""
+  const payload = error.payload
+  if (!payload || typeof payload !== "object") return ""
+  const reason = (payload as Record<string, unknown>).reason
+  return typeof reason === "string" ? reason.trim() : ""
+}
+
+export function hasAPIErrorReason(
+  error: unknown,
+  expected: string | string[],
+): boolean {
+  const reason = getAPIErrorReason(error)
+  if (!reason) return false
+  const expectedList = Array.isArray(expected) ? expected : [expected]
+  return expectedList.some((item) => item === reason)
+}
+
 export function isAbortLikeError(error: unknown): boolean {
   if (!error) return false
   if (typeof DOMException !== "undefined" && error instanceof DOMException) {
