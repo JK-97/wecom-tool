@@ -8,13 +8,12 @@ import {
   ExternalLink,
   QrCode,
   Link as LinkIcon,
-  MoreHorizontal,
   Info,
   CheckCircle2,
   AlertCircle,
   Loader2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   createReceptionChannel,
@@ -22,7 +21,6 @@ import {
   getReceptionChannelsView,
   getReceptionChannelDetail,
   listKFServicerAssignments,
-  retryReceptionChannelSync,
   triggerReceptionChannelSync,
   uploadReceptionChannelAvatar,
   upsertKFServicerAssignments,
@@ -379,6 +377,7 @@ export default function ReceptionChannels() {
   >([]);
   const [isSavingFallbackRoute, setIsSavingFallbackRoute] = useState(false);
   const [isFallbackEditorOpen, setIsFallbackEditorOpen] = useState(false);
+  const detailOpenKFIDRef = useRef("");
 
   const loadChannels = async (
     query?: string,
@@ -395,8 +394,10 @@ export default function ReceptionChannels() {
       });
       setOverview(view?.overview || null);
       setChannels(view?.channels || []);
+      return true;
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
+      return false;
     } finally {
       if (showLoading) {
         setIsLoading(false);
@@ -407,6 +408,12 @@ export default function ReceptionChannels() {
   useEffect(() => {
     void loadChannels();
   }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const loadOrganizationOptions = async () => {
     if (isOrgOptionsLoading) return;
@@ -433,27 +440,64 @@ export default function ReceptionChannels() {
     void loadOrganizationOptions();
   }, [isCreateOpen, isDetailOpen, organizationView]);
 
-  const handleSync = async () => {
-    setIsSyncing(true);
-    const target = selectedChannel?.open_kfid || channels[0]?.open_kfid;
-    if (!target) {
-      setNotice("当前没有可刷新的接待渠道");
+  const getDetailOpenKFID = (): string =>
+    (
+      selectedChannelDetail?.channel?.open_kfid ||
+      selectedChannel?.open_kfid ||
+      ""
+    ).trim();
+
+  useEffect(() => {
+    detailOpenKFIDRef.current = isDetailOpen ? getDetailOpenKFID() : "";
+  }, [isDetailOpen, selectedChannel, selectedChannelDetail]);
+
+  const handleRefreshList = async () => {
+    try {
+      setIsSyncing(true);
+      setNotice("");
+      const refreshed = await loadChannels(keyword, { showLoading: false });
+      if (refreshed) {
+        setNotice("接待渠道列表已刷新。");
+      }
+    } finally {
       setIsSyncing(false);
-      return;
     }
+  };
+
+  const refreshOpenChannelDetail = async (openKFID: string) => {
+    if (detailOpenKFIDRef.current !== openKFID) return;
+    const detail = await getReceptionChannelDetail(openKFID);
+    if (detailOpenKFIDRef.current !== openKFID) return;
+    const assignments = assignmentsFromDetail(detail);
+    setSelectedChannelDetail(detail);
+    setSelectedChannel(detail?.channel || selectedChannel);
+    setServicerAssignments(assignments);
+    setSelectedServicerTargets(selectionItemsFromAssignments(assignments));
+    syncFallbackDraftFromDetail(detail, assignments);
+  };
+
+  const handleSyncChannel = async (
+    channel: ReceptionChannel,
+    options?: { source?: "list" | "detail" },
+  ) => {
+    const target = (channel.open_kfid || "").trim();
+    if (!target || syncingChannelIDs.has(target)) return;
+    const writeNotice = options?.source === "detail" ? setDetailNotice : setNotice;
+    const displayName = getDisplayName(channel);
     setSyncingChannelIDs((prev) => new Set(prev).add(target));
     setChannels((prev) =>
-      prev.map((channel) =>
-        (channel.open_kfid || "").trim() === target
+      prev.map((item) =>
+        (item.open_kfid || "").trim() === target
           ? {
-              ...channel,
+              ...item,
               sync_status: "syncing",
-              pending_tasks: Math.max(1, Number(channel.pending_tasks || 0)),
+              pending_tasks: Math.max(1, Number(item.pending_tasks || 0)),
             }
-          : channel,
+          : item,
       ),
     );
     try {
+      writeNotice("");
       const [result] = await Promise.all([
         triggerReceptionChannelSync(target),
         wait(420),
@@ -462,42 +506,41 @@ export default function ReceptionChannels() {
       const syncReason = (result?.sync_reason || "manual_sync_done").trim();
       const syncedAt = (result?.synced_at || new Date().toISOString()).trim();
       setChannels((prev) =>
-        prev.map((channel) =>
-          (channel.open_kfid || "").trim() === target
+        prev.map((item) =>
+          (item.open_kfid || "").trim() === target
             ? {
-                ...channel,
+                ...item,
                 sync_status: syncStatus,
                 sync_reason: syncReason,
                 last_sync: syncedAt,
                 pending_tasks: 0,
-                failed_tasks: syncStatus === "success" ? 0 : channel.failed_tasks,
+                failed_tasks: syncStatus === "success" ? 0 : item.failed_tasks,
               }
-            : channel,
+            : item,
         ),
       );
-      setNotice("接待渠道已刷新，成员和部门树请在组织与设置中单独同步。");
+      setSelectedChannel((current) =>
+        (current?.open_kfid || "").trim() === target
+          ? {
+              ...current,
+              sync_status: syncStatus,
+              sync_reason: syncReason,
+              last_sync: syncedAt,
+              pending_tasks: 0,
+            }
+          : current,
+      );
+      writeNotice(`${displayName} 已刷新，成员和部门树请在组织与设置中单独同步。`);
       await loadChannels(keyword, { showLoading: false });
-      if (
-        isDetailOpen &&
-        (selectedChannelDetail?.channel?.open_kfid || selectedChannel?.open_kfid || "").trim() ===
-          target
-      ) {
-        const detail = await getReceptionChannelDetail(target);
-        const assignments = assignmentsFromDetail(detail);
-        setSelectedChannelDetail(detail);
-        setServicerAssignments(assignments);
-        setSelectedServicerTargets(selectionItemsFromAssignments(assignments));
-        syncFallbackDraftFromDetail(detail, assignments);
-      }
+      await refreshOpenChannelDetail(target);
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      writeNotice(normalizeErrorMessage(error));
     } finally {
       setSyncingChannelIDs((prev) => {
         const next = new Set(prev);
         next.delete(target);
         return next;
       });
-      setIsSyncing(false);
     }
   };
 
@@ -532,17 +575,6 @@ export default function ReceptionChannels() {
       setSelectedServicerTargets([]);
     } finally {
       setIsDetailLoading(false);
-    }
-  };
-
-  const retrySync = async (openKFID: string) => {
-    if (!openKFID) return;
-    try {
-      await retryReceptionChannelSync(openKFID);
-      setNotice("已提交重试请求，接待账号状态会从本地视图刷新");
-      await loadChannels(keyword);
-    } catch (error) {
-      setNotice(normalizeErrorMessage(error));
     }
   };
 
@@ -583,11 +615,14 @@ export default function ReceptionChannels() {
       ),
     );
     const fallbackTarget = detail?.fallback_route?.target;
-    setFallbackUseFullPoolInput(
-      detail?.fallback_route?.use_full_pool ?? fallbackTarget?.useFullPool ?? false,
-    );
-    setSelectedFallbackTargets(
-      normalizeSelectionItems([
+    const useFullPool =
+      actionMode === "ai_only"
+        ? true
+        : dispatchStrategyRequiresSpecificUser(dispatchStrategy)
+          ? false
+          : Boolean(detail?.fallback_route?.use_full_pool ?? fallbackTarget?.useFullPool ?? true);
+    setFallbackUseFullPoolInput(useFullPool);
+    const nextTargets = normalizeSelectionItems([
         ...(fallbackTarget?.userIds || []).map((userID) => ({
           type: "user" as const,
           id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
@@ -596,8 +631,73 @@ export default function ReceptionChannels() {
           type: "department" as const,
           id: String(departmentID),
         })),
-      ]),
+      ]);
+    if (actionMode === "ai_only" || useFullPool) {
+      setSelectedFallbackTargets([]);
+      return;
+    }
+    setSelectedFallbackTargets(
+      dispatchStrategyRequiresSpecificUser(dispatchStrategy)
+        ? nextTargets.filter((item) => item.type === "user").slice(0, 1)
+        : nextTargets,
     );
+  };
+
+  const applyFallbackActionMode = (nextMode: RoutingActionMode) => {
+    const nextStrategy = defaultDispatchStrategyForActionMode(nextMode);
+    setFallbackActionModeInput(nextMode);
+    setFallbackDispatchStrategyInput(nextStrategy);
+    setFallbackDispatchCapacityThresholdInput(
+      nextStrategy === "direct_if_available_else_queue"
+        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+        : 0,
+    );
+    setFallbackEditorNotice("");
+    if (nextMode === "ai_only") {
+      setFallbackUseFullPoolInput(true);
+      setSelectedFallbackTargets([]);
+      return;
+    }
+    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+      setFallbackUseFullPoolInput(false);
+      setSelectedFallbackTargets((current) =>
+        normalizeSelectionItems(current)
+          .filter((item) => item.type === "user")
+          .slice(0, 1),
+      );
+      return;
+    }
+    setFallbackUseFullPoolInput(true);
+    setSelectedFallbackTargets([]);
+  };
+
+  const applyFallbackDispatchStrategy = (nextStrategy: RoutingDispatchStrategy) => {
+    setFallbackDispatchStrategyInput(nextStrategy);
+    setFallbackDispatchCapacityThresholdInput(
+      nextStrategy === "direct_if_available_else_queue"
+        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+        : 0,
+    );
+    setFallbackEditorNotice("");
+    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+      setFallbackUseFullPoolInput(false);
+      setSelectedFallbackTargets((current) =>
+        normalizeSelectionItems(current)
+          .filter((item) => item.type === "user")
+          .slice(0, 1),
+      );
+      return;
+    }
+    setFallbackUseFullPoolInput(true);
+    setSelectedFallbackTargets([]);
+  };
+
+  const applyFallbackUseFullPool = (useFullPool: boolean) => {
+    setFallbackUseFullPoolInput(useFullPool);
+    setFallbackEditorNotice("");
+    if (useFullPool) {
+      setSelectedFallbackTargets([]);
+    }
   };
 
   const handleCreateChannel = async () => {
@@ -660,6 +760,23 @@ export default function ReceptionChannels() {
     setCreateAvatarFile(null);
     setCreateInitialPoolTargets([]);
     setCreateNotice("");
+  };
+
+  const closeDetailDialog = () => {
+    detailOpenKFIDRef.current = "";
+    setIsDetailOpen(false);
+    setIsPoolEditorOpen(false);
+    setIsFallbackEditorOpen(false);
+    setSelectedChannel(null);
+    setSelectedChannelDetail(null);
+    setServicerAssignments([]);
+    setSelectedServicerTargets([]);
+    setSelectedFallbackTargets([]);
+    setSelectedSceneValue("");
+    setServicerUpsertResult(null);
+    setDetailNotice("");
+    setPoolEditorNotice("");
+    setFallbackEditorNotice("");
   };
 
   const primaryScene = useMemo(() => {
@@ -759,6 +876,14 @@ export default function ReceptionChannels() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [createInitialPoolTargetsDeduped],
   );
+  const canCreateChannel =
+    createName.trim().length > 0 &&
+    (createInitialUserIDs.length > 0 || createInitialDepartmentIDs.length > 0);
+  const createDisabledReason = !createName.trim()
+    ? "请输入客服账号名称"
+    : createInitialUserIDs.length === 0 && createInitialDepartmentIDs.length === 0
+      ? "请选择至少一个初始接待对象"
+      : "";
   const selectedServicerUsersDeduped = useMemo(
     () =>
       selectedServicerTargetsDeduped
@@ -864,8 +989,7 @@ export default function ReceptionChannels() {
   const promotionURL = (selectedScene?.url || "").trim();
 
   const ensurePromotionURL = async (): Promise<string> => {
-    const openKFID =
-      (selectedChannelDetail?.channel?.open_kfid || selectedChannel?.open_kfid || "").trim();
+    const openKFID = getDetailOpenKFID();
     const sceneValue = (selectedScene?.scene_value || "").trim();
     const currentURL = (selectedScene?.url || "").trim();
     if (currentURL) {
@@ -933,7 +1057,7 @@ export default function ReceptionChannels() {
       const downloadURL = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = downloadURL;
-      anchor.download = `${(selectedChannel?.open_kfid || "reception_channel").trim()}-${(selectedScene?.scene_value || primaryScene?.scene_value || "无场景").trim() || "无场景"}.png`;
+      anchor.download = `${getDetailOpenKFID() || "reception_channel"}-${(selectedScene?.scene_value || primaryScene?.scene_value || "无场景").trim() || "无场景"}.png`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1017,7 +1141,11 @@ export default function ReceptionChannels() {
   };
 
   const getAvatarURL = (channel?: ReceptionChannel | null): string => {
-    return (channel?.avatar_url || "").trim();
+    const avatarURL = (channel?.avatar_url || "").trim();
+    if (avatarURL.startsWith("http://")) {
+      return `https://${avatarURL.slice("http://".length)}`;
+    }
+    return avatarURL;
   };
 
   const isValidChannelDisplayName = (value: string, openKFID: string) => {
@@ -1054,11 +1182,7 @@ export default function ReceptionChannels() {
   };
 
   const handleServicerPoolSave = async () => {
-    const openKFID = (
-      selectedChannelDetail?.channel?.open_kfid ||
-      selectedChannel?.open_kfid ||
-      ""
-    ).trim();
+    const openKFID = getDetailOpenKFID();
     if (!openKFID) {
       setPoolEditorNotice("当前渠道缺少 Open KFID");
       return;
@@ -1159,11 +1283,7 @@ export default function ReceptionChannels() {
   };
 
   const handleFallbackRouteSave = async () => {
-    const openKFID = (
-      selectedChannelDetail?.channel?.open_kfid ||
-      selectedChannel?.open_kfid ||
-      ""
-    ).trim();
+    const openKFID = getDetailOpenKFID();
     if (!openKFID) {
       setFallbackEditorNotice("当前渠道缺少 Open KFID");
       return;
@@ -1256,11 +1376,7 @@ export default function ReceptionChannels() {
   };
 
   const openPoolEditor = async () => {
-    const openKFID = (
-      selectedChannelDetail?.channel?.open_kfid ||
-      selectedChannel?.open_kfid ||
-      ""
-    ).trim();
+    const openKFID = getDetailOpenKFID();
     setServicerUpsertResult(null);
     setPoolEditorNotice("");
     if (!openKFID) {
@@ -1501,6 +1617,9 @@ export default function ReceptionChannels() {
             <div className="relative w-64">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
+                id="reception-channel-search"
+                name="reception_channel_search"
+                aria-label="搜索接待渠道"
                 type="text"
                 placeholder="搜索渠道名称或 ID..."
                 value={keyword}
@@ -1511,15 +1630,16 @@ export default function ReceptionChannels() {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleSync}
+              onClick={() => void handleRefreshList()}
               disabled={isSyncing}
+              aria-label="刷新接待渠道列表"
             >
               {isSyncing ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
                 <RefreshCw className="h-4 w-4 mr-2" />
               )}
-              刷新接待渠道
+              刷新列表
             </Button>
           </div>
           <div className="flex items-center gap-2">
@@ -1534,6 +1654,7 @@ export default function ReceptionChannels() {
               onClick={() => {
                 setCreateInitialPoolTargets([]);
                 setCreateNotice("");
+                setNotice("");
                 setIsCreateOpen(true);
               }}
             >
@@ -1675,14 +1796,23 @@ export default function ReceptionChannels() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-8 w-8 p-0 text-gray-400"
+                            className="text-gray-600 hover:bg-gray-100 h-8"
+                            disabled={
+                              !(channel.open_kfid || "").trim() ||
+                              syncingChannelIDs.has((channel.open_kfid || "").trim())
+                            }
+                            aria-label={`刷新${getDisplayName(channel)}`}
+                            title="刷新此渠道"
                             onClick={() => {
-                              const openKFID = (channel.open_kfid || "").trim();
-                              if (!openKFID) return;
-                              void retrySync(openKFID);
+                              void handleSyncChannel(channel, { source: "list" });
                             }}
                           >
-                            <MoreHorizontal className="h-4 w-4" />
+                            {syncingChannelIDs.has((channel.open_kfid || "").trim()) ? (
+                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4 mr-1" />
+                            )}
+                            刷新
                           </Button>
                         </div>
                       </td>
@@ -1707,20 +1837,13 @@ export default function ReceptionChannels() {
       {/* Detail Drawer (Dialog) */}
       <Dialog
         isOpen={isDetailOpen}
-        onClose={() => {
-          setIsDetailOpen(false);
-          setIsPoolEditorOpen(false);
-          setIsFallbackEditorOpen(false);
-          setDetailNotice("");
-          setPoolEditorNotice("");
-          setFallbackEditorNotice("");
-        }}
+        onClose={closeDetailDialog}
         title="渠道详情与推广"
         className="max-w-[840px]"
         footer={
           <Button
             className="w-full bg-blue-600"
-            onClick={() => setIsDetailOpen(false)}
+            onClick={closeDetailDialog}
           >
             关闭
           </Button>
@@ -1770,6 +1893,9 @@ export default function ReceptionChannels() {
                 <span className="text-xs text-gray-500">场景选择</span>
                 {(selectedChannelDetail?.scenes || []).length > 0 ? (
                   <select
+                    id="reception-scene-select"
+                    name="reception_scene"
+                    aria-label="选择接待渠道场景"
                     className="w-56 h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={selectedSceneValue}
                     onChange={(event) =>
@@ -2173,17 +2299,18 @@ export default function ReceptionChannels() {
                 variant="link"
                 size="sm"
                 className="text-blue-600 p-0 h-auto text-xs"
+                disabled={
+                  !getDetailOpenKFID() ||
+                  syncingChannelIDs.has(getDetailOpenKFID())
+                }
+                aria-label="刷新当前接待渠道"
                 onClick={() => {
-                  const openKFID = (
-                    selectedChannelDetail?.channel?.open_kfid ||
-                    selectedChannel?.open_kfid ||
-                    ""
-                  ).trim();
-                  if (!openKFID) return;
-                  void retrySync(openKFID);
+                  const channel = selectedChannelDetail?.channel || selectedChannel;
+                  if (!channel) return;
+                  void handleSyncChannel(channel, { source: "detail" });
                 }}
               >
-                刷新接待渠道
+                {syncingChannelIDs.has(getDetailOpenKFID()) ? "刷新中..." : "刷新此渠道"}
               </Button>
             </div>
           </div>
@@ -2297,30 +2424,13 @@ export default function ReceptionChannels() {
             </div>
           </div>
           <div className="space-y-1.5">
-            <label className="text-[11px] font-medium text-gray-700">系统动作</label>
+            <label htmlFor="fallback-action-mode" className="text-[11px] font-medium text-gray-700">系统动作</label>
             <select
+              id="fallback-action-mode"
+              name="fallback_action_mode"
               value={fallbackActionModeInput}
               onChange={(event) => {
-                const nextMode = event.target.value as RoutingActionMode;
-                const nextStrategy = defaultDispatchStrategyForActionMode(nextMode);
-                setFallbackActionModeInput(nextMode);
-                setFallbackDispatchStrategyInput(nextStrategy);
-                setFallbackDispatchCapacityThresholdInput(
-                  nextStrategy === "direct_if_available_else_queue"
-                    ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
-                    : 0,
-                );
-                if (
-                  nextMode === "ai_only" ||
-                  dispatchStrategyRequiresSpecificUser(nextStrategy)
-                ) {
-                  setFallbackUseFullPoolInput(nextMode === "ai_only");
-                }
-                if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                  setSelectedFallbackTargets((current) =>
-                    current.filter((item) => item.type === "user"),
-                  );
-                }
+                applyFallbackActionMode(event.target.value as RoutingActionMode);
               }}
               className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
@@ -2338,23 +2448,15 @@ export default function ReceptionChannels() {
           {actionModeRequiresHuman(fallbackActionModeInput) ? (
             <>
               <div className="space-y-1.5">
-                <label className="text-[11px] font-medium text-gray-700">分配策略</label>
+                <label htmlFor="fallback-dispatch-strategy" className="text-[11px] font-medium text-gray-700">分配策略</label>
                 <select
+                  id="fallback-dispatch-strategy"
+                  name="fallback_dispatch_strategy"
                   value={fallbackDispatchStrategyInput}
                   onChange={(event) => {
-                    const nextStrategy = event.target.value as RoutingDispatchStrategy;
-                    setFallbackDispatchStrategyInput(nextStrategy);
-                    setFallbackDispatchCapacityThresholdInput(
-                      nextStrategy === "direct_if_available_else_queue"
-                        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
-                        : 0,
+                    applyFallbackDispatchStrategy(
+                      event.target.value as RoutingDispatchStrategy,
                     );
-                    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                      setFallbackUseFullPoolInput(false);
-                      setSelectedFallbackTargets((current) =>
-                        current.filter((item) => item.type === "user"),
-                      );
-                    }
                   }}
                   className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
@@ -2372,10 +2474,12 @@ export default function ReceptionChannels() {
               </div>
               {fallbackDispatchStrategyInput === "direct_if_available_else_queue" ? (
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-medium text-gray-700">
+                  <label htmlFor="fallback-dispatch-threshold" className="text-[11px] font-medium text-gray-700">
                     直分容量阈值
                   </label>
                   <input
+                    id="fallback-dispatch-threshold"
+                    name="fallback_dispatch_threshold"
                     type="number"
                     min={1}
                     value={fallbackDispatchCapacityThresholdInput}
@@ -2407,8 +2511,9 @@ export default function ReceptionChannels() {
                 <label className="flex items-start gap-2 text-xs text-gray-700">
                   <input
                     type="radio"
+                    name="fallback_human_scope"
                     checked={fallbackUseFullPoolInput && !fallbackRequiresSpecificUser}
-                    onChange={() => setFallbackUseFullPoolInput(true)}
+                    onChange={() => applyFallbackUseFullPool(true)}
                     disabled={fallbackRequiresSpecificUser}
                     className="mt-0.5"
                   />
@@ -2417,8 +2522,9 @@ export default function ReceptionChannels() {
                 <label className="flex items-start gap-2 text-xs text-gray-700">
                   <input
                     type="radio"
+                    name="fallback_human_scope"
                     checked={!fallbackUseFullPoolInput || fallbackRequiresSpecificUser}
-                    onChange={() => setFallbackUseFullPoolInput(false)}
+                    onChange={() => applyFallbackUseFullPool(false)}
                     className="mt-0.5"
                     disabled={isPoolEmpty || fallbackRequiresSpecificUser}
                   />
@@ -2442,7 +2548,14 @@ export default function ReceptionChannels() {
                   memberMap={orgMemberMap}
                   departmentMap={orgDepartmentMap}
                   selectedItems={selectedFallbackTargetsDeduped}
-                  onChange={setSelectedFallbackTargets}
+                  onChange={(items) => {
+                    const nextItems = normalizeSelectionItems(items);
+                    setSelectedFallbackTargets(
+                      fallbackRequiresSpecificUser
+                        ? nextItems.filter((item) => item.type === "user").slice(-1)
+                        : nextItems,
+                    );
+                  }}
                   emptyText="当前接待池中还没有可选对象，请先配置接待池"
                   disabled={isOrgOptionsLoading || isPoolEmpty}
                   allowedUserIDs={currentPoolAllowedUserIDs}
@@ -2467,7 +2580,8 @@ export default function ReceptionChannels() {
             </Button>
             <Button
               className="bg-blue-600"
-              disabled={isCreating}
+              disabled={isCreating || !canCreateChannel}
+              title={createDisabledReason}
               onClick={() => void handleCreateChannel()}
             >
               {isCreating ? "创建中..." : "创建客服账号"}
@@ -2482,26 +2596,34 @@ export default function ReceptionChannels() {
             </div>
           ) : null}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-700">
+            <label htmlFor="create-channel-name" className="text-xs font-medium text-gray-700">
               客服账号名称
             </label>
             <input
+              id="create-channel-name"
+              name="create_channel_name"
               value={createName}
-              onChange={(event) => setCreateName(event.target.value)}
+              onChange={(event) => {
+                setCreateName(event.target.value);
+                setCreateNotice("");
+              }}
               className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="如：官网在线咨询"
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-gray-700">
+            <label htmlFor="create-channel-avatar" className="text-xs font-medium text-gray-700">
               客服头像（可选）
             </label>
             <input
+              id="create-channel-avatar"
+              name="create_channel_avatar"
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              onChange={(event) =>
-                setCreateAvatarFile(event.target.files?.[0] || null)
-              }
+              onChange={(event) => {
+                setCreateAvatarFile(event.target.files?.[0] || null);
+                setCreateNotice("");
+              }}
               className="block w-full text-sm text-gray-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100"
             />
             <p className="text-[11px] text-gray-500">
@@ -2523,7 +2645,10 @@ export default function ReceptionChannels() {
             memberMap={orgMemberMap}
             departmentMap={orgDepartmentMap}
             selectedItems={createInitialPoolTargetsDeduped}
-            onChange={setCreateInitialPoolTargets}
+            onChange={(items) => {
+              setCreateInitialPoolTargets(items);
+              setCreateNotice("");
+            }}
             emptyText="当前没有可选成员或部门"
             disabled={isOrgOptionsLoading}
           />

@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/Badge"
 import { Check, ChevronDown, ChevronRight, Folder, Search, User } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useId, useMemo, useState } from "react"
 import type { OrganizationSettingsView } from "@/services/organizationSettingsService"
 import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment"
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
@@ -305,6 +305,12 @@ export function OrganizationDirectorySelect({
   allowedUserIDs,
   allowedDepartmentIDs,
 }: OrganizationDirectorySelectProps) {
+  const generatedID = useId()
+  const fieldID = useMemo(
+    () => `organization-directory-${generatedID.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+    [generatedID],
+  )
+  const searchInputID = `${fieldID}-search`
   const [query, setQuery] = useState("")
   const [expandedDepartments, setExpandedDepartments] = useState<Set<number>>(
     () => new Set(collectDepartmentIDs(treeRoots)),
@@ -624,7 +630,12 @@ export function OrganizationDirectorySelect({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <label className="text-[11px] font-medium text-gray-700">{label}</label>
+        <label
+          htmlFor={searchInputID}
+          className="text-[11px] font-medium text-gray-700"
+        >
+          {label}
+        </label>
         <div className="flex items-center gap-2 text-[11px] text-gray-500">
           <span>{selectedItems.length > 0 ? `已选 ${selectedItems.length} 项` : placeholder}</span>
           {selectedItems.length > 0 ? (
@@ -644,6 +655,9 @@ export function OrganizationDirectorySelect({
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
             <input
+              id={searchInputID}
+              name={`${fieldID}_search`}
+              aria-label={label}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={searchPlaceholder}
