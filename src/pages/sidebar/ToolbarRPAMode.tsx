@@ -368,7 +368,7 @@ type Props = {
   onAutomationModeChange?: (enabled: boolean) => Promise<void> | void;
   isUpdatingAutomationMode?: boolean;
   rpaClientBound?: boolean;
-  rpaClientID?: string;
+  rpaClientDisplayID?: string;
   isLoadingRPAClientBinding?: boolean;
   onOpenRPAClientBinding?: () => Promise<void> | void;
   onExitRPAMode?: () => Promise<void> | void;
@@ -1304,7 +1304,7 @@ export function ToolbarRPAMode({
   onAutomationModeChange,
   isUpdatingAutomationMode = false,
   rpaClientBound = false,
-  rpaClientID = "",
+  rpaClientDisplayID = "",
   isLoadingRPAClientBinding = false,
   onOpenRPAClientBinding,
   onExitRPAMode,
@@ -3561,25 +3561,32 @@ export function ToolbarRPAMode({
             </button>
             <button
               type="button"
-              disabled={isLoadingRPAClientBinding}
+              disabled={isLoadingRPAClientBinding || !onOpenRPAClientBinding}
               onClick={() => void onOpenRPAClientBinding?.()}
-              className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-bold text-white transition-colors hover:bg-white/30 disabled:opacity-60"
-              title={
-                rpaClientBound && rpaClientID
+              className="inline-flex min-w-0 items-center gap-1 rounded bg-white/20 px-2 py-1.5 text-[10px] font-bold text-white transition-colors hover:bg-white/30 disabled:opacity-60"
+              aria-label={
+                rpaClientBound
                   ? "查看或编辑 MuYuAI 客户端ID"
+                  : "绑定 MuYuAI 客户端ID"
+              }
+              title={
+                rpaClientBound && rpaClientDisplayID
+                  ? `查看或编辑 MuYuAI 客户端ID（${rpaClientDisplayID}）`
                   : "绑定 MuYuAI 客户端ID"
               }
             >
               {isLoadingRPAClientBinding ? (
                 <LoaderCircle className="h-3 w-3 animate-spin" />
               ) : (
-                <KeyRound className="h-3 w-3" />
+                <KeyRound className="h-3 w-3 shrink-0" />
               )}
-              {isLoadingRPAClientBinding
-                ? "读取中"
-                : rpaClientBound
-                  ? "客户端ID"
-                  : "绑定ID"}
+              <span className="max-w-[92px] truncate">
+                {isLoadingRPAClientBinding
+                  ? "读取中"
+                  : rpaClientBound
+                    ? rpaClientDisplayID || "已绑定"
+                    : "绑定ID"}
+              </span>
             </button>
             <button
               type="button"

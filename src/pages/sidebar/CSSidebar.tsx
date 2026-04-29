@@ -505,6 +505,14 @@ function readBoundMuYuAIClientID(
   ).trim();
 }
 
+function maskMuYuAIClientID(value: string): string {
+  const raw = value.trim();
+  if (!raw) return "";
+  if (raw.length <= 4) return `${raw.slice(0, 1)}***`;
+  if (raw.length <= 8) return `${raw.slice(0, 2)}***${raw.slice(-2)}`;
+  return `${raw.slice(0, 4)}****${raw.slice(-4)}`;
+}
+
 function hasBoundMuYuAIClient(
   snapshot?: ToolbarRPAOperatorBindingSnapshot | null,
   automation?: ToolbarRPAAutomationState | null,
@@ -1167,8 +1175,10 @@ export default function CSSidebar() {
   const loadRPAOperatorBinding = async (options?: {
     silent?: boolean;
     resetDraft?: boolean;
+    showLoading?: boolean;
   }) => {
-    if (!options?.silent) {
+    const shouldShowLoading = !options?.silent || options?.showLoading;
+    if (shouldShowLoading) {
       setIsLoadingRPABinding(true);
     }
     try {
@@ -1176,8 +1186,8 @@ export default function CSSidebar() {
       setRPAOperatorBinding(snapshot);
       setRPAAutomation(snapshot?.automation || null);
       setRPAClientIDDraft((prev) => {
-        if (!options?.resetDraft && (prev || "").trim()) return prev;
-        return (snapshot?.binding?.rpa_client_id || "").trim();
+        if (options?.resetDraft) return "";
+        return prev;
       });
       return snapshot;
     } catch (error) {
@@ -1191,7 +1201,7 @@ export default function CSSidebar() {
       }
       return null;
     } finally {
-      if (!options?.silent) {
+      if (shouldShowLoading) {
         setIsLoadingRPABinding(false);
       }
     }
@@ -1939,6 +1949,7 @@ export default function CSSidebar() {
     rpaOperatorBinding,
     rpaAutomation,
   );
+  const maskedBoundRPAClientID = maskMuYuAIClientID(boundRPAClientID);
   const hasBoundRPAClient = hasBoundMuYuAIClient(
     rpaOperatorBinding,
     rpaAutomation,
@@ -2191,23 +2202,31 @@ export default function CSSidebar() {
     }
   };
 
+  const closeRPAClientBindingDialog = () => {
+    setIsRPABindingModalOpen(false);
+    setPendingEnableAutoMode(false);
+    setRPABindingNotice("");
+    setRPAClientIDDraft("");
+  };
+
   const openRPAClientBindingDialog = async (options?: {
     pendingEnable?: boolean;
     notice?: string;
+    snapshot?: ToolbarRPAOperatorBindingSnapshot | null;
   }) => {
     const pendingEnable = Boolean(options?.pendingEnable);
     setPendingEnableAutoMode(pendingEnable);
     setRPABindingNotice(options?.notice || "");
     setIsRPABindingModalOpen(true);
-    const snapshot = await loadRPAOperatorBinding({
-      silent: true,
-      resetDraft: true,
-    });
-    const clientID = readBoundMuYuAIClientID(
-      snapshot,
-      snapshot?.automation || rpaAutomation,
-    );
-    setRPAClientIDDraft(clientID);
+    let snapshot = options?.snapshot;
+    if (snapshot === undefined) {
+      snapshot = await loadRPAOperatorBinding({
+        silent: true,
+        resetDraft: true,
+        showLoading: true,
+      });
+    }
+    setRPAClientIDDraft("");
     if (
       pendingEnable &&
       !hasBoundMuYuAIClient(snapshot, snapshot?.automation || rpaAutomation)
@@ -2215,6 +2234,8 @@ export default function CSSidebar() {
       setRPABindingNotice(
         options?.notice || "开启自动发送前，请先绑定 MuYuAI 客户端ID。",
       );
+    } else if (!options?.notice && snapshot === null) {
+      setRPABindingNotice("读取 MuYuAI 客户端ID失败，请稍后再试");
     }
   };
 
@@ -2227,15 +2248,19 @@ export default function CSSidebar() {
     try {
       setIsSavingRPABinding(true);
       setRPABindingNotice("");
+      const shouldEnableAfterSave = pendingEnableAutoMode;
+      const hadBoundClientBeforeSave = hasBoundRPAClient;
       const snapshot = await saveKFToolbarRPAOperatorBinding(nextClientID);
       setRPAOperatorBinding(snapshot);
       setRPAAutomation(snapshot?.automation || null);
-      setRPAClientIDDraft(
-        (snapshot?.binding?.rpa_client_id || nextClientID).trim(),
+      setRPAClientIDDraft("");
+      closeRPAClientBindingDialog();
+      pushToolbarNotice(
+        hadBoundClientBeforeSave
+          ? "已更新 MuYuAI 客户端ID，后续自动发送会直接复用。"
+          : "已保存 MuYuAI 客户端ID，后续自动发送会直接复用。",
       );
-      setRPABindingNotice("已保存 MuYuAI 客户端ID，后续自动发送会直接复用");
-      if (pendingEnableAutoMode) {
-        setIsRPABindingModalOpen(false);
+      if (shouldEnableAfterSave) {
         await handleAutomationModeChange(true, { skipBindingCheck: true });
       }
     } catch (error) {
@@ -2254,11 +2279,23 @@ export default function CSSidebar() {
     enabled: boolean,
     options?: { skipBindingCheck?: boolean },
   ) => {
+    let keepBindingDialogPending = false;
     if (enabled && !options?.skipBindingCheck) {
       const latestBinding = await loadRPAOperatorBinding({
         silent: true,
         resetDraft: true,
+        showLoading: true,
       });
+      if (!latestBinding) {
+        setIsRPAPanelOpen(true);
+        keepBindingDialogPending = true;
+        void openRPAClientBindingDialog({
+          pendingEnable: true,
+          notice: "读取 MuYuAI 客户端ID失败，请稍后再试。",
+          snapshot: latestBinding,
+        });
+        return;
+      }
       if (
         !hasBoundMuYuAIClient(
           latestBinding,
@@ -2266,9 +2303,11 @@ export default function CSSidebar() {
         )
       ) {
         setIsRPAPanelOpen(true);
+        keepBindingDialogPending = true;
         void openRPAClientBindingDialog({
           pendingEnable: true,
           notice: "请先绑定 MuYuAI 客户端ID，再开启自动发送。",
+          snapshot: latestBinding,
         });
         return;
       }
@@ -2329,6 +2368,7 @@ export default function CSSidebar() {
       }
       if (enabled && isMuYuAIClientBindingError(error)) {
         setIsRPAPanelOpen(true);
+        keepBindingDialogPending = true;
         void openRPAClientBindingDialog({
           pendingEnable: true,
           notice: "请先绑定 MuYuAI 客户端ID，再开启自动发送。",
@@ -2341,7 +2381,9 @@ export default function CSSidebar() {
       }
     } finally {
       setIsUpdatingAutomationMode(false);
-      setPendingEnableAutoMode(false);
+      if (!keepBindingDialogPending) {
+        setPendingEnableAutoMode(false);
+      }
     }
   };
 
@@ -2372,7 +2414,16 @@ export default function CSSidebar() {
     const latestBinding = await loadRPAOperatorBinding({
       silent: true,
       resetDraft: true,
+      showLoading: true,
     });
+    if (!latestBinding) {
+      void openRPAClientBindingDialog({
+        pendingEnable: false,
+        notice: "读取 MuYuAI 客户端ID失败，请稍后再试。",
+        snapshot: latestBinding,
+      });
+      return;
+    }
     if (
       !hasBoundMuYuAIClient(
         latestBinding,
@@ -2382,6 +2433,7 @@ export default function CSSidebar() {
       void openRPAClientBindingDialog({
         pendingEnable: false,
         notice: "当前成员还没有绑定 MuYuAI 客户端ID，绑定后才能开启自动发送。",
+        snapshot: latestBinding,
       });
     }
   };
@@ -2389,26 +2441,25 @@ export default function CSSidebar() {
   const rpaClientBindingDialog = (
     <Dialog
       isOpen={isRPABindingModalOpen}
-      onClose={() => {
-        setIsRPABindingModalOpen(false);
-        setPendingEnableAutoMode(false);
-      }}
-      title="绑定 MuYuAI 客户端ID"
+      onClose={closeRPAClientBindingDialog}
+      title={hasBoundRPAClient ? "编辑 MuYuAI 客户端ID" : "绑定 MuYuAI 客户端ID"}
       className="max-w-[360px]"
       footer={
         <>
           <Button
             variant="outline"
-            onClick={() => {
-              setIsRPABindingModalOpen(false);
-              setPendingEnableAutoMode(false);
-            }}
+            disabled={isSavingRPABinding}
+            onClick={closeRPAClientBindingDialog}
           >
             取消
           </Button>
           <Button
             className="bg-slate-900 text-white hover:bg-slate-800"
-            disabled={isSavingRPABinding || !(rpaClientIDDraft || "").trim()}
+            disabled={
+              isLoadingRPABinding ||
+              isSavingRPABinding ||
+              !(rpaClientIDDraft || "").trim()
+            }
             onClick={() => void handleSaveRPAClientBinding()}
           >
             {isSavingRPABinding ? (
@@ -2416,24 +2467,47 @@ export default function CSSidebar() {
             ) : (
               <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
             )}
-            {pendingEnableAutoMode ? "保存并开启自动发送" : "保存"}
+            {pendingEnableAutoMode
+              ? "保存并开启自动发送"
+              : hasBoundRPAClient
+                ? "保存变更"
+                : "保存"}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-700">
-          开启自动发送前，需要先为当前工具栏成员绑定一个固定的 MuYuAI
-          客户端ID。登录 MuYuAI 客户端后，可在客户端信息中复制该 ID。
-        </div>
+        {hasBoundRPAClient && maskedBoundRPAClientID ? (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-[12px] leading-5 text-emerald-700">
+            <div className="flex items-center justify-between gap-3">
+              <span>当前绑定</span>
+              <span className="max-w-[180px] truncate font-mono font-semibold">
+                {maskedBoundRPAClientID}
+              </span>
+            </div>
+            <div className="mt-1 text-emerald-600">
+              如需更换，请输入新的 MuYuAI 客户端ID。
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-700">
+            开启自动发送前，需要先为当前工具栏成员绑定一个固定的 MuYuAI
+            客户端ID。登录 MuYuAI 客户端后，可在客户端信息中复制该 ID。
+          </div>
+        )}
         <div className="space-y-2">
           <label className="text-[12px] font-medium text-slate-700">
-            MuYuAI 客户端ID
+            {hasBoundRPAClient ? "新的 MuYuAI 客户端ID" : "MuYuAI 客户端ID"}
           </label>
           <Input
+            disabled={isLoadingRPABinding || isSavingRPABinding}
             value={rpaClientIDDraft}
             onChange={(event) => setRPAClientIDDraft(event.target.value)}
-            placeholder="请输入 MuYuAI 客户端中显示的客户端ID"
+            placeholder={
+              hasBoundRPAClient
+                ? "输入新的客户端ID以替换当前绑定"
+                : "请输入 MuYuAI 客户端中显示的客户端ID"
+            }
             className="h-10 rounded-2xl border-slate-200 bg-white text-sm"
           />
         </div>
@@ -2471,10 +2545,15 @@ export default function CSSidebar() {
           onAutomationModeChange={handleAutomationModeChange}
           isUpdatingAutomationMode={isUpdatingAutomationMode}
           rpaClientBound={hasBoundRPAClient}
-          rpaClientID={boundRPAClientID}
+          rpaClientDisplayID={maskedBoundRPAClientID}
           isLoadingRPAClientBinding={isLoadingRPABinding}
           onOpenRPAClientBinding={() =>
-            void openRPAClientBindingDialog({ pendingEnable: false })
+            void openRPAClientBindingDialog({
+              pendingEnable: false,
+              notice: hasBoundRPAClient
+                ? ""
+                : "绑定后才能开启自动发送。",
+            })
           }
           onExitRPAMode={async () => {
             if (isRPAPanelOpen && !automationEnabled) return;
