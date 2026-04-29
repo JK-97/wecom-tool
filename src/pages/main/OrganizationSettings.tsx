@@ -8,6 +8,7 @@ import {
   Settings, Users, Shield, CheckCircle2, RefreshCw,
   Plus, Globe, MessageSquare, User, ShieldAlert,
   AlertTriangle, Zap, Info, ExternalLink, ChevronRight, Loader2,
+  Search, Trash2,
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
 import { useEffect, useState } from "react"
@@ -33,6 +34,58 @@ const ROLE_OPTIONS = [
   { key: "admin", label: "销售主管" },
   { key: "staff", label: "一线销售" },
 ]
+
+const SETTINGS_TABS = ["wecom", "org", "roles", "toolbar", "connectors", "debug"] as const
+type SettingsTab = (typeof SETTINGS_TABS)[number]
+type NoticeKind = "info" | "success" | "warning" | "error"
+type NoticeScope = SettingsTab | "global"
+type NoticeState = { scope: NoticeScope; kind: NoticeKind; message: string } | null
+
+function resolveInitialSettingsTab(): SettingsTab {
+  if (typeof window === "undefined") return "wecom"
+  const params = new URLSearchParams(window.location.search)
+  const tab = params.get("tab")
+  if (SETTINGS_TABS.includes(tab as SettingsTab)) return tab as SettingsTab
+  if (params.get("muyuai_connected") === "1") return "connectors"
+  return "wecom"
+}
+
+function noticeClassName(kind: NoticeKind): string {
+  switch (kind) {
+    case "success":
+      return "border-green-100 bg-green-50 text-green-700"
+    case "warning":
+      return "border-orange-100 bg-orange-50 text-orange-700"
+    case "error":
+      return "border-red-100 bg-red-50 text-red-700"
+    default:
+      return "border-blue-100 bg-blue-50 text-blue-700"
+  }
+}
+
+const INTERNAL_PERMISSION_META: Record<string, { label: string; group: string }> = {
+  "org.manage": { label: "组织与设置管理", group: "组织与平台设置" },
+  "rbac.manage": { label: "角色与权限管理", group: "组织与平台设置" },
+  "integration.view": { label: "查看企业微信集成", group: "企业微信集成" },
+  "integration.check": { label: "执行集成检查", group: "企业微信集成" },
+  "debug.manage": { label: "调试开关管理", group: "调试与运维" },
+  "routing.manage": { label: "路由规则管理", group: "业务配置" },
+  "reception.manage": { label: "接待渠道管理", group: "业务配置" },
+  "task.manage": { label: "跟进任务管理", group: "业务操作" },
+  "customer.manage": { label: "客户资料管理", group: "客户经营" },
+  "customer.read": { label: "查看客户资料", group: "客户经营" },
+  "sidebar.use": { label: "使用侧边栏工具", group: "工具栏" },
+}
+
+function renderInternalPermissionLabel(permission: string): string {
+  const key = (permission || "").trim()
+  return INTERNAL_PERMISSION_META[key]?.label || key
+}
+
+function resolveInternalPermissionGroup(permission: string): string {
+  const key = (permission || "").trim()
+  return INTERNAL_PERMISSION_META[key]?.group || "其它权限"
+}
 
 const CONNECTOR_CATALOG = [
   {
@@ -175,11 +228,13 @@ function isObjectPassed(status: string): boolean {
 
 export default function OrganizationSettings() {
   const [view, setView] = useState<OrganizationSettingsView | null>(null)
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveInitialSettingsTab())
   const [isLoading, setIsLoading] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [isRunningCheck, setIsRunningCheck] = useState(false)
-  const [notice, setNotice] = useState("")
+  const [notice, setNotice] = useState<NoticeState>(null)
   const [memberRoleDraft, setMemberRoleDraft] = useState<Record<string, string>>({})
+  const [savingMemberUserID, setSavingMemberUserID] = useState("")
   const [connectorStatuses, setConnectorStatuses] = useState<Record<string, MuYuAIConnectorStatus | null>>({})
   const [isLoadingConnectors, setIsLoadingConnectors] = useState(false)
   const [connectorNotice, setConnectorNotice] = useState("")
@@ -189,8 +244,31 @@ export default function OrganizationSettings() {
 
   const [isRoleEditorOpen, setIsRoleEditorOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<NonNullable<OrganizationSettingsView["roles"]>[number] | null>(null)
+  const [editingRoleName, setEditingRoleName] = useState("")
+  const [editingRoleDescription, setEditingRoleDescription] = useState("")
   const [editingPermissions, setEditingPermissions] = useState<string[]>([])
+  const [permissionSearch, setPermissionSearch] = useState("")
+  const [roleEditorError, setRoleEditorError] = useState("")
   const [isSavingRole, setIsSavingRole] = useState(false)
+  const [isDeletingRole, setIsDeletingRole] = useState(false)
+  const [isCreateRoleOpen, setIsCreateRoleOpen] = useState(false)
+  const [createRoleName, setCreateRoleName] = useState("")
+  const [createRoleDescription, setCreateRoleDescription] = useState("")
+  const [createRoleTemplate, setCreateRoleTemplate] = useState("blank")
+  const [createRoleError, setCreateRoleError] = useState("")
+  const [isCreatingRole, setIsCreatingRole] = useState(false)
+  const [isSyncingOrg, setIsSyncingOrg] = useState(false)
+  const [updatingDebugKey, setUpdatingDebugKey] = useState("")
+  const [isResettingDebug, setIsResettingDebug] = useState(false)
+
+  const showNotice = (scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
+    const text = (message || "").trim()
+    if (!text) {
+      setNotice(null)
+      return
+    }
+    setNotice({ scope, kind, message: text })
+  }
 
   const formatDateTime = (value?: string): string => {
     const text = (value || "").trim()
@@ -206,24 +284,51 @@ export default function OrganizationSettings() {
     return new Date(millis).toLocaleString("zh-CN", { hour12: false })
   }
 
-  const loadView = async () => {
+  const buildMemberRoleDraft = (data: OrganizationSettingsView | null | undefined): Record<string, string> => {
+    const nextDraft: Record<string, string> = {}
+    ;(data?.members || []).forEach((member) => {
+      const userID = (member.userid || "").trim()
+      if (!userID) return
+      if (member.is_app_admin) {
+        nextDraft[userID] = "super_admin"
+        return
+      }
+      nextDraft[userID] = ((member.role || "staff").trim() || "staff")
+    })
+    return nextDraft
+  }
+
+  const hasDirtyMemberRoleDraft = () => {
+    return (view?.members || []).some((member) => {
+      const userID = (member.userid || "").trim()
+      if (!userID || member.is_app_admin) return false
+      const persistedRole = ((member.role || "staff").trim() || "staff")
+      const draftRole = (memberRoleDraft[userID] || persistedRole).trim() || "staff"
+      return draftRole !== persistedRole
+    })
+  }
+
+  const loadView = async (options: { preserveMemberDraft?: boolean; savedUserID?: string } = {}) => {
     try {
       setIsLoading(true)
       const data = await getOrganizationSettingsView()
       setView(data || null)
-      const nextDraft: Record<string, string> = {}
-      ;(data?.members || []).forEach((member) => {
-        const userID = (member.userid || "").trim()
-        if (!userID) return
-        if (member.is_app_admin) {
-          nextDraft[userID] = "super_admin"
-          return
-        }
-        nextDraft[userID] = ((member.role || "staff").trim() || "staff")
-      })
-      setMemberRoleDraft(nextDraft)
+      const nextDraft = buildMemberRoleDraft(data)
+      if (options.preserveMemberDraft) {
+        setMemberRoleDraft((prev) => {
+          const merged = { ...nextDraft }
+          Object.keys(prev).forEach((userID) => {
+            if (userID !== options.savedUserID && Object.prototype.hasOwnProperty.call(merged, userID)) {
+              merged[userID] = prev[userID]
+            }
+          })
+          return merged
+        })
+      } else {
+        setMemberRoleDraft(nextDraft)
+      }
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice("global", normalizeErrorMessage(error), "error")
     } finally {
       setIsLoading(false)
       setHasLoaded(true)
@@ -257,6 +362,14 @@ export default function OrganizationSettings() {
     void loadConnectors()
   }, [])
 
+  useEffect(() => {
+    if (notice?.kind !== "success") return
+    const timer = window.setTimeout(() => {
+      setNotice((current) => (current === notice ? null : current))
+    }, 3500)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
   const runIntegrationCheck = async () => {
     try {
       setIsRunningCheck(true)
@@ -265,10 +378,10 @@ export default function OrganizationSettings() {
         jssdk_runtime: jssdkRuntime,
       })
       const message = await executeOrganizationSettingsCommand("run_integration_check", payload)
-      setNotice(message || "已重新执行集成检查")
+      showNotice("wecom", message || "已重新执行集成检查", "success")
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice("wecom", normalizeErrorMessage(error), "error")
     } finally {
       setIsRunningCheck(false)
     }
@@ -281,41 +394,51 @@ export default function OrganizationSettings() {
         sync_scope: syncScope,
       })
       const message = await executeOrganizationSettingsCommand("update_org_sync", payload)
-      setNotice(message || "组织同步配置已更新")
+      showNotice("org", message || "组织同步配置已更新", "success")
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice("org", normalizeErrorMessage(error), "error")
     }
   }
 
   const syncOrgDirectory = async () => {
     try {
+      setIsSyncingOrg(true)
       const message = await executeOrganizationSettingsCommand("sync_org_directory")
-      setNotice(message || "组织目录同步已开始")
+      showNotice("org", message || "组织目录同步已完成", "success")
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice("org", normalizeErrorMessage(error), "error")
+    } finally {
+      setIsSyncingOrg(false)
     }
   }
 
   const updateDebugSwitch = async (key: string, enabled: boolean) => {
     try {
+      setUpdatingDebugKey(key)
       const payload = JSON.stringify({ key, enabled })
       const message = await executeOrganizationSettingsCommand("update_debug_switch", payload)
-      setNotice(message || "调试开关已更新")
+      showNotice(key === "enable_toolbar_debug_entry" ? "toolbar" : "debug", message || "调试开关已更新", "success")
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice(key === "enable_toolbar_debug_entry" ? "toolbar" : "debug", normalizeErrorMessage(error), "error")
+    } finally {
+      setUpdatingDebugKey("")
     }
   }
 
   const resetDebugSwitches = async () => {
+    if (!window.confirm("确定要重置所有调试项吗？该操作会写入后端并立即生效。")) return
     try {
+      setIsResettingDebug(true)
       const message = await executeOrganizationSettingsCommand("reset_debug_switches")
-      setNotice(message || "调试开关已重置")
+      showNotice("debug", message || "调试开关已重置", "success")
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice("debug", normalizeErrorMessage(error), "error")
+    } finally {
+      setIsResettingDebug(false)
     }
   }
 
@@ -380,27 +503,38 @@ export default function OrganizationSettings() {
   const saveMemberRole = async (userID: string) => {
     const nextRole = (memberRoleDraft[userID] || "").trim()
     if (!userID || !nextRole) {
-      setNotice("请选择成员角色")
+      showNotice("roles", "请选择成员角色", "warning")
       return
     }
     const member = (view?.members || []).find((item) => (item.userid || "").trim() === userID)
     if (member?.is_app_admin) {
-      setNotice("企微应用管理员角色由企业微信后台决定，平台内不可修改")
+      showNotice("roles", "企微应用管理员角色由企业微信后台决定，平台内不可修改", "warning")
       return
     }
     try {
+      setSavingMemberUserID(userID)
       const payload = JSON.stringify({ userid: userID, role: nextRole })
       const message = await executeOrganizationSettingsCommand("update_member_role", payload)
-      setNotice(message || "成员角色已更新")
-      await loadView()
+      showNotice("roles", message || "成员角色已更新", "success")
+      await loadView({ preserveMemberDraft: true, savedUserID: userID })
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showNotice("roles", normalizeErrorMessage(error), "error")
+    } finally {
+      setSavingMemberUserID("")
     }
   }
 
   const openRoleEditor = (role: NonNullable<OrganizationSettingsView["roles"]>[number]) => {
+    if (role.system_preset) {
+      showNotice("roles", "系统预设角色不可直接修改权限，请创建自定义角色后再配置。", "warning")
+      return
+    }
     setEditingRole(role)
+    setEditingRoleName((role.role_name || role.role || "").trim())
+    setEditingRoleDescription((role.description || "").trim())
     setEditingPermissions((role.permissions || []).map((item) => (item || "").trim()).filter(Boolean))
+    setPermissionSearch("")
+    setRoleEditorError("")
     setIsRoleEditorOpen(true)
   }
 
@@ -418,24 +552,138 @@ export default function OrganizationSettings() {
   const saveRolePermissions = async () => {
     const role = (editingRole?.role || "").trim()
     if (!role) {
-      setNotice("当前角色不可用")
+      setRoleEditorError("当前角色不可用")
+      return
+    }
+    if (editingRole?.system_preset) {
+      setRoleEditorError("系统预设角色不可直接修改权限，请创建自定义角色后再配置。")
+      return
+    }
+    const roleName = editingRoleName.trim()
+    if (!roleName) {
+      setRoleEditorError("请输入角色名称")
+      return
+    }
+    const duplicatedName = (view?.roles || []).some((item) => {
+      if ((item.role || "").trim() === role) return false
+      return (item.role_name || item.role || "").trim() === roleName
+    })
+    if (duplicatedName) {
+      setRoleEditorError("角色名称已存在，请换一个名称")
       return
     }
     try {
       setIsSavingRole(true)
-      const payload = JSON.stringify({
+      const profilePayload = JSON.stringify({
+        role,
+        role_name: roleName,
+        description: editingRoleDescription.trim(),
+      })
+      await executeOrganizationSettingsCommand("update_role_profile", profilePayload)
+      const permissionPayload = JSON.stringify({
         role,
         permissions: editingPermissions,
       })
-      const message = await executeOrganizationSettingsCommand("update_role_permissions", payload)
-      setNotice(message || "角色权限已更新")
+      const message = await executeOrganizationSettingsCommand("update_role_permissions", permissionPayload)
+      showNotice("roles", message || "角色权限已更新", "success")
       setIsRoleEditorOpen(false)
+      setEditingRole(null)
+      setEditingRoleName("")
+      setEditingRoleDescription("")
+      setEditingPermissions([])
+      setPermissionSearch("")
+      setRoleEditorError("")
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      setRoleEditorError(normalizeErrorMessage(error))
     } finally {
       setIsSavingRole(false)
     }
+  }
+
+  const deleteEditingRole = async () => {
+    const role = (editingRole?.role || "").trim()
+    if (!role || editingRole?.system_preset) {
+      setRoleEditorError("当前角色不可删除")
+      return
+    }
+    if (Number(editingRole.member_count || 0) > 0) {
+      setRoleEditorError("该角色仍有成员绑定，请先调整成员角色后再删除")
+      return
+    }
+    if (!window.confirm(`确定删除角色“${(editingRole.role_name || role).trim()}”吗？`)) return
+    try {
+      setIsDeletingRole(true)
+      const message = await executeOrganizationSettingsCommand("delete_role", JSON.stringify({ role }))
+      showNotice("roles", message || "角色已删除", "success")
+      setIsRoleEditorOpen(false)
+      setEditingRole(null)
+      setEditingRoleName("")
+      setEditingRoleDescription("")
+      setEditingPermissions([])
+      setPermissionSearch("")
+      setRoleEditorError("")
+      await loadView()
+    } catch (error) {
+      setRoleEditorError(normalizeErrorMessage(error))
+    } finally {
+      setIsDeletingRole(false)
+    }
+  }
+
+  const openCreateRoleDialog = () => {
+    setCreateRoleName("")
+    setCreateRoleDescription("")
+    setCreateRoleTemplate("blank")
+    setCreateRoleError("")
+    setIsCreateRoleOpen(true)
+    setNotice(null)
+  }
+
+  const submitCreateRole = async () => {
+    const roleName = createRoleName.trim()
+    if (!roleName) {
+      setCreateRoleError("请输入角色名称")
+      return
+    }
+    const duplicateName = (view?.roles || []).some((role) => (role.role_name || role.role || "").trim() === roleName)
+    if (duplicateName) {
+      setCreateRoleError("角色名称已存在，请换一个名称")
+      return
+    }
+    const templateRole = (view?.roles || []).find((role) => (role.role || "").trim() === createRoleTemplate)
+    const permissions = templateRole ? (templateRole.permissions || []) : []
+    try {
+      setIsCreatingRole(true)
+      const payload = JSON.stringify({
+        role_name: roleName,
+        description: createRoleDescription.trim(),
+        permissions,
+      })
+      const message = await executeOrganizationSettingsCommand("create_role", payload)
+      showNotice("roles", message || "角色已创建", "success")
+      setIsCreateRoleOpen(false)
+      await loadView()
+    } catch (error) {
+      setCreateRoleError(normalizeErrorMessage(error))
+    } finally {
+      setIsCreatingRole(false)
+    }
+  }
+
+  const handleSettingsTabChange = (value: string) => {
+    if (!SETTINGS_TABS.includes(value as SettingsTab)) return
+    const nextTab = value as SettingsTab
+    if (activeSettingsTab === "roles" && nextTab !== "roles" && hasDirtyMemberRoleDraft()) {
+      if (!window.confirm("成员角色还有未保存的修改，切换后将丢弃这些草稿。确定继续吗？")) return
+      setMemberRoleDraft(buildMemberRoleDraft(view))
+    }
+    setActiveSettingsTab(nextTab)
+    setNotice(null)
+    if (typeof window === "undefined") return
+    const url = new URL(window.location.href)
+    url.searchParams.set("tab", nextTab)
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`)
   }
 
   const integration = view?.integration
@@ -572,13 +820,6 @@ export default function OrganizationSettings() {
       },
     ]
   })()
-  const initialSettingsTab = (() => {
-    if (typeof window === "undefined") return "wecom"
-    const tab = new URLSearchParams(window.location.search).get("tab")
-    if (tab === "connectors") return "connectors"
-    if (new URLSearchParams(window.location.search).get("muyuai_connected") === "1") return "connectors"
-    return "wecom"
-  })()
   const readConnectionText = (connection: Record<string, unknown> | undefined, ...keys: string[]): string => {
     if (!connection) return "-"
     for (const key of keys) {
@@ -598,6 +839,33 @@ export default function OrganizationSettings() {
     }
   }
   const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
+  const memberRoleOptions = (() => {
+    const roles = view?.roles || []
+    if (roles.length === 0) return ROLE_OPTIONS
+    return roles
+      .map((role) => ({
+        key: (role.role || "").trim(),
+        label: (role.role_name || role.role || "").trim(),
+      }))
+      .filter((role) => role.key && role.label)
+  })()
+  const permissionGroups = (() => {
+    const query = permissionSearch.trim().toLowerCase()
+    const groups = new Map<string, string[]>()
+    for (const permission of view?.permission_catalog || []) {
+      const key = (permission || "").trim()
+      if (!key) continue
+      const label = renderInternalPermissionLabel(key)
+      if (query && !key.toLowerCase().includes(query) && !label.toLowerCase().includes(query)) continue
+      const group = resolveInternalPermissionGroup(key)
+      groups.set(group, [...(groups.get(group) || []), key])
+    }
+    return Array.from(groups.entries()).map(([group, permissions]) => ({
+      group,
+      permissions: [...permissions].sort((a, b) => a.localeCompare(b)),
+    }))
+  })()
+  const visibleNotice = notice && (notice.scope === "global" || notice.scope === activeSettingsTab) ? notice : null
 
   return (
     <div className="flex min-h-full flex-col bg-white rounded-xl border border-gray-200 shadow-sm">
@@ -606,7 +874,7 @@ export default function OrganizationSettings() {
         <p className="text-sm text-gray-500 mt-1">查看企业微信集成状态，并管理平台内部组织权限与调试配置</p>
       </div>
 
-      <Tabs defaultValue={initialSettingsTab} className="flex flex-col">
+      <Tabs value={activeSettingsTab} onValueChange={handleSettingsTabChange} variant="underline" className="flex flex-col">
         <div className="px-6 border-b border-gray-100 bg-white">
           <TabsList className="bg-transparent border-none gap-8 h-14">
             <TabsTrigger value="wecom" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
@@ -642,8 +910,8 @@ export default function OrganizationSettings() {
           {isLoading ? (
             <div className="mb-6 rounded-md border border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">加载组织设置中...</div>
           ) : null}
-          {notice ? (
-            <div className="mb-6 rounded-md border border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">{notice}</div>
+          {visibleNotice ? (
+            <div className={`mb-6 rounded-md border px-4 py-2 text-xs ${noticeClassName(visibleNotice.kind)}`}>{visibleNotice.message}</div>
           ) : null}
 
           {hasLoaded ? (
@@ -897,8 +1165,10 @@ export default function OrganizationSettings() {
                 <Button
                   className="bg-blue-600 hover:bg-blue-700 shadow-sm"
                   onClick={() => void syncOrgDirectory()}
+                  disabled={isSyncingOrg}
                 >
-                  <RefreshCw className="w-4 h-4 mr-2" /> 立即手动同步
+                  {isSyncingOrg ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {isSyncingOrg ? "同步中..." : "立即手动同步"}
                 </Button>
               </div>
 
@@ -910,7 +1180,9 @@ export default function OrganizationSettings() {
                       <div className="text-xs text-gray-500">开启后，系统将按策略自动同步组织与成员变更</div>
                     </div>
                     <Switch
+                      name="auto_sync_enabled"
                       checked={Boolean(orgSync?.auto_sync_enabled)}
+                      disabled={isLoading}
                       onCheckedChange={(checked) => {
                         void updateOrgSync(Boolean(checked), (orgSync?.sync_scope || "all").trim() || "all")
                       }}
@@ -969,11 +1241,17 @@ export default function OrganizationSettings() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[{ key: "all", title: "全量同步", desc: "同步所有部门与成员", icon: Users }, { key: "selected", title: "指定部门同步", desc: "仅同步选中的部门", icon: Shield }].map((item) => {
                         const selected = ((orgSync?.sync_scope || "all").trim() || "all") === item.key
+                        const disabled = item.key === "selected" && !selected
                         return (
                           <div
                             key={item.key}
-                            className={`p-5 border rounded-xl flex items-center justify-between cursor-pointer transition-all ${selected ? "border-2 border-blue-500 bg-blue-50 shadow-sm" : "border-gray-200 bg-white"}`}
+                            className={`p-5 border rounded-xl flex items-center justify-between transition-all ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} ${selected ? "border-2 border-blue-500 bg-blue-50 shadow-sm" : "border-gray-200 bg-white"}`}
                             onClick={() => {
+                              if (isLoading) return
+                              if (disabled) {
+                                showNotice("org", "指定部门同步需要先提供部门选择器，当前版本暂不开放切换。", "warning")
+                                return
+                              }
                               void updateOrgSync(Boolean(orgSync?.auto_sync_enabled), item.key)
                             }}
                           >
@@ -984,6 +1262,7 @@ export default function OrganizationSettings() {
                               <div className="flex flex-col">
                                 <span className={`text-sm font-bold ${selected ? "text-blue-900" : "text-gray-700"}`}>{item.title}</span>
                                 <span className={`text-[10px] font-medium ${selected ? "text-blue-600" : "text-gray-400"}`}>{item.desc}</span>
+                                {disabled ? <span className="mt-1 text-[10px] font-semibold text-orange-600">待部门选择器上线后开放</span> : null}
                               </div>
                             </div>
                             {selected ? <CheckCircle2 className="w-6 h-6 text-blue-600" /> : null}
@@ -991,10 +1270,20 @@ export default function OrganizationSettings() {
                         )
                       })}
                     </div>
-                    <div className="grid grid-cols-1 gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 md:grid-cols-4">
+                    <div className={`grid grid-cols-1 gap-3 rounded-xl border p-4 md:grid-cols-4 ${
+                      (orgSync?.last_sync_status || "").trim() === "partial"
+                        ? "border-orange-100 bg-orange-50/70"
+                        : (orgSync?.last_sync_status || "").trim() === "failed"
+                          ? "border-red-100 bg-red-50/70"
+                          : "border-gray-100 bg-gray-50"
+                    }`}>
                       <div>
                         <div className="text-[10px] text-gray-500">最近同步状态</div>
-                        <div className="text-xs font-semibold text-gray-800">{(orgSync?.last_sync_status || "idle").trim() || "idle"}</div>
+                        <div className="flex items-center gap-2 text-xs font-semibold text-gray-800">
+                          {(orgSync?.last_sync_status || "idle").trim() || "idle"}
+                          {(orgSync?.last_sync_status || "").trim() === "partial" ? <Badge variant="warning" className="text-[9px] px-1.5 py-0">部分完成</Badge> : null}
+                          {(orgSync?.last_sync_status || "").trim() === "failed" ? <Badge variant="destructive" className="text-[9px] px-1.5 py-0">失败</Badge> : null}
+                        </div>
                       </div>
                       <div>
                         <div className="text-[10px] text-gray-500">部门数量</div>
@@ -1032,17 +1321,11 @@ export default function OrganizationSettings() {
                 </div>
                 <Button
                   className="bg-blue-600 hover:bg-blue-700 shadow-sm"
-                  onClick={async () => {
-                    try {
-                      const message = await executeOrganizationSettingsCommand("create_role", JSON.stringify({ role_name: "自定义角色" }))
-                      setNotice(message || "角色已创建")
-                      await loadView()
-                    } catch (error) {
-                      setNotice(normalizeErrorMessage(error))
-                    }
-                  }}
+                  onClick={openCreateRoleDialog}
+                  disabled={isCreatingRole}
                 >
-                  <Plus className="w-4 h-4 mr-2" /> 新增角色
+                  {isCreatingRole ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+                  新增角色
                 </Button>
               </div>
 
@@ -1066,7 +1349,11 @@ export default function OrganizationSettings() {
                         <div className="flex items-center gap-1.5 text-[10px] text-gray-400 font-medium">
                           <Users className="w-3 h-3" /> {Number(role.member_count || 0)} 位成员
                         </div>
-                        <Button variant="link" className="h-auto p-0 text-blue-600 text-[10px] font-bold" onClick={() => openRoleEditor(role)}>编辑权限</Button>
+                        {role.system_preset ? (
+                          <span className="text-[10px] font-bold text-gray-400">系统预设只读</span>
+                        ) : (
+                          <Button variant="link" className="h-auto p-0 text-blue-600 text-[10px] font-bold" onClick={() => openRoleEditor(role)}>编辑角色</Button>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -1086,6 +1373,9 @@ export default function OrganizationSettings() {
                     if (!userID) return null
                     const isAppAdmin = member.is_app_admin === true
                     const currentRole = (memberRoleDraft[userID] || member.role || "staff").trim() || "staff"
+                    const persistedRole = ((member.role || "staff").trim() || "staff")
+                    const isSavingMember = savingMemberUserID === userID
+                    const roleChanged = currentRole !== persistedRole
                     return (
                       <div key={userID} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
                         <div className="min-w-0">
@@ -1100,20 +1390,23 @@ export default function OrganizationSettings() {
                         </div>
                         <div className="flex items-center gap-2">
                           <select
+                            id={`member-role-${userID}`}
+                            name={`member-role-${userID}`}
+                            aria-label={`${userID} 的平台角色`}
                             value={currentRole}
                             onChange={(event) => {
                               const value = event.target.value
                               setMemberRoleDraft((prev) => ({ ...prev, [userID]: value }))
                             }}
-                            disabled={isAppAdmin}
+                            disabled={isAppAdmin || isSavingMember}
                             className="h-8 rounded-md border border-gray-200 px-2 text-xs disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                           >
-                            {ROLE_OPTIONS.map((item) => (
+                            {memberRoleOptions.map((item) => (
                               <option key={item.key} value={item.key}>{item.label}</option>
                             ))}
                           </select>
-                          <Button size="sm" variant="outline" className="h-8 text-xs" disabled={isAppAdmin} onClick={() => void saveMemberRole(userID)}>
-                            保存
+                          <Button size="sm" variant="outline" className="h-8 text-xs" disabled={isAppAdmin || !roleChanged || isSavingMember} onClick={() => void saveMemberRole(userID)}>
+                            {isSavingMember ? "保存中..." : "保存"}
                           </Button>
                         </div>
                       </div>
@@ -1180,7 +1473,9 @@ export default function OrganizationSettings() {
                       </div>
                     </div>
                     <Switch
+                      name="enable_toolbar_debug_entry"
                       checked={Boolean(toolbarDebugSwitch?.enabled)}
+                      disabled={updatingDebugKey === "enable_toolbar_debug_entry"}
                       onCheckedChange={(checked) => {
                         void updateDebugSwitch("enable_toolbar_debug_entry", Boolean(checked))
                       }}
@@ -1325,11 +1620,11 @@ export default function OrganizationSettings() {
                           <div className="text-xs font-bold text-gray-900">{(item.label || item.key || "未命名开关").trim()}</div>
                           <div className="text-[10px] text-gray-500">{(item.description || "-").trim()}</div>
                         </div>
-                        <Switch checked={Boolean(item.enabled)} onCheckedChange={(checked) => {
+                        <Switch name={`debug-switch-${(item.key || "").trim()}`} checked={Boolean(item.enabled)} onCheckedChange={(checked) => {
                           const key = (item.key || "").trim()
                           if (!key) return
                           void updateDebugSwitch(key, Boolean(checked))
-                        }} />
+                        }} disabled={updatingDebugKey === (item.key || "").trim()} />
                       </div>
                     ))}
                   </div>
@@ -1349,16 +1644,20 @@ export default function OrganizationSettings() {
                     </div>
                     <div className="space-y-3">
                       <div className="text-xs font-bold text-gray-800">快速联调入口</div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold bg-white" onClick={() => setNotice("调试面板入口由运行时能力决定，请在侧边栏中查看")}>打开调试面板 <ExternalLink className="w-3 h-3 ml-1.5" /></Button>
-                        <Button variant="outline" size="sm" className="h-8 text-[10px] font-bold bg-white" onClick={() => setNotice("JSSDK 日志入口已记录，请在浏览器控制台查看")}>查看 JSSDK 日志</Button>
+                      <div className="space-y-2">
+                        <a href="/sidebar/kf" target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md border border-gray-200 bg-white px-3 text-[10px] font-bold text-gray-700 hover:bg-gray-100">
+                          打开客服工具栏入口 <ExternalLink className="w-3 h-3 ml-1.5" />
+                        </a>
+                        <div className="rounded-md border border-gray-100 bg-white px-3 py-2 text-[10px] leading-relaxed text-gray-500">
+                          JSSDK 日志请在浏览器开发者工具控制台查看，页面内不再用提示条模拟入口。
+                        </div>
                       </div>
                     </div>
                     <div className="pt-4 border-t border-gray-200 space-y-3">
                       <div className="text-xs font-bold text-gray-800">常见问题</div>
                       <ul className="space-y-2">
                         {(view?.recommendations || []).slice(0, 3).map((item) => (
-                          <li key={item} className="text-[10px] text-blue-600 hover:underline cursor-pointer flex items-center gap-1.5" onClick={() => setNotice(item)}>
+                          <li key={item} className="text-[10px] text-blue-600 flex items-center gap-1.5">
                             <ChevronRight className="w-3 h-3" /> {item}
                           </li>
                         ))}
@@ -1369,8 +1668,12 @@ export default function OrganizationSettings() {
               </div>
 
               <div className="pt-6 border-t border-gray-100 flex justify-end gap-3">
-                <Button variant="outline" className="text-xs font-bold h-9" onClick={() => void resetDebugSwitches()}>重置所有调试项</Button>
-                <Button className="bg-blue-600 hover:bg-blue-700 px-8 text-xs font-bold h-9 shadow-sm" onClick={() => void loadView()}>保存并刷新环境</Button>
+                <Button variant="outline" className="text-xs font-bold h-9" onClick={() => void resetDebugSwitches()} disabled={isResettingDebug}>
+                  {isResettingDebug ? "重置中..." : "重置所有调试项"}
+                </Button>
+                <Button className="bg-blue-600 hover:bg-blue-700 px-8 text-xs font-bold h-9 shadow-sm" onClick={() => void loadView()} disabled={isLoading}>
+                  {isLoading ? "刷新中..." : "刷新环境视图"}
+                </Button>
               </div>
             </div>
           </TabsContent>
@@ -1380,36 +1683,219 @@ export default function OrganizationSettings() {
       </Tabs>
 
       <Dialog
-        isOpen={isRoleEditorOpen}
-        onClose={() => setIsRoleEditorOpen(false)}
-        title={`编辑角色权限 · ${(editingRole?.role_name || editingRole?.role || "").trim()}`}
+        isOpen={isCreateRoleOpen}
+        onClose={() => {
+          if (isCreatingRole) return
+          setIsCreateRoleOpen(false)
+          setCreateRoleError("")
+        }}
+        title="新增角色"
         className="max-w-[560px]"
         footer={
           <div className="flex w-full justify-end gap-3">
-            <Button variant="outline" onClick={() => setIsRoleEditorOpen(false)}>取消</Button>
-            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void saveRolePermissions()} disabled={isSavingRole}>
-              {isSavingRole ? "保存中..." : "保存权限"}
+            <Button variant="outline" onClick={() => setIsCreateRoleOpen(false)} disabled={isCreatingRole}>取消</Button>
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void submitCreateRole()} disabled={isCreatingRole}>
+              {isCreatingRole ? "创建中..." : "创建角色"}
             </Button>
           </div>
         }
       >
-        <div className="space-y-3">
-          <div className="text-xs text-gray-500">平台内部权限点（不等于企业微信后台权限）</div>
-          <div className="grid grid-cols-2 gap-2">
-            {(view?.permission_catalog || []).map((perm) => {
-              const checked = editingPermissions.includes(perm)
-              return (
-                <label key={perm} className="flex items-center justify-between rounded border border-gray-200 px-3 py-2 text-xs text-gray-700">
-                  <span className="font-mono">{perm}</span>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleEditingPermission(perm)}
-                    className="h-3.5 w-3.5"
-                  />
-                </label>
-              )
-            })}
+        <div className="space-y-4">
+          {createRoleError ? (
+            <div className="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{createRoleError}</div>
+          ) : null}
+          <div className="space-y-1.5">
+            <label htmlFor="create-role-name" className="text-xs font-semibold text-gray-700">角色名称</label>
+            <Input
+              id="create-role-name"
+              name="role_name"
+              value={createRoleName}
+              maxLength={30}
+              placeholder="例如：客服主管"
+              onChange={(event) => {
+                setCreateRoleName(event.target.value)
+                setCreateRoleError("")
+              }}
+              disabled={isCreatingRole}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="create-role-description" className="text-xs font-semibold text-gray-700">角色说明</label>
+            <Input
+              id="create-role-description"
+              name="description"
+              value={createRoleDescription}
+              maxLength={80}
+              placeholder="说明该角色适用的人群和职责"
+              onChange={(event) => {
+                setCreateRoleDescription(event.target.value)
+                setCreateRoleError("")
+              }}
+              disabled={isCreatingRole}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="create-role-template" className="text-xs font-semibold text-gray-700">初始权限</label>
+            <select
+              id="create-role-template"
+              name="template_role"
+              value={createRoleTemplate}
+              onChange={(event) => {
+                setCreateRoleTemplate(event.target.value)
+                setCreateRoleError("")
+              }}
+              disabled={isCreatingRole}
+              className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+            >
+              <option value="blank">空白角色，创建后再配置权限</option>
+              {(view?.roles || []).map((role) => {
+                const roleKey = (role.role || "").trim()
+                if (!roleKey) return null
+                return (
+                  <option key={roleKey} value={roleKey}>
+                    复制“{(role.role_name || role.role || roleKey).trim()}”的权限
+                  </option>
+                )
+              })}
+            </select>
+            <div className="text-[11px] text-gray-500">系统预设角色保持只读；如需调整权限，请创建自定义角色。</div>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={isRoleEditorOpen}
+        onClose={() => {
+          if (isSavingRole || isDeletingRole) return
+          setIsRoleEditorOpen(false)
+          setEditingRole(null)
+          setEditingRoleName("")
+          setEditingRoleDescription("")
+          setEditingPermissions([])
+          setPermissionSearch("")
+          setRoleEditorError("")
+        }}
+        title={`编辑角色 · ${(editingRole?.role_name || editingRole?.role || "").trim()}`}
+        className="max-w-[680px]"
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <Button
+              variant="destructive"
+              onClick={() => void deleteEditingRole()}
+              disabled={isDeletingRole || isSavingRole || Number(editingRole?.member_count || 0) > 0}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {isDeletingRole ? "删除中..." : "删除角色"}
+            </Button>
+            <div className="flex gap-3">
+            <Button variant="outline" onClick={() => {
+              if (isSavingRole || isDeletingRole) return
+              setIsRoleEditorOpen(false)
+              setEditingRole(null)
+              setEditingRoleName("")
+              setEditingRoleDescription("")
+              setEditingPermissions([])
+              setPermissionSearch("")
+              setRoleEditorError("")
+            }} disabled={isSavingRole || isDeletingRole}>取消</Button>
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void saveRolePermissions()} disabled={isSavingRole || isDeletingRole}>
+              {isSavingRole ? "保存中..." : "保存角色"}
+            </Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          {roleEditorError ? (
+            <div className="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{roleEditorError}</div>
+          ) : null}
+          {Number(editingRole?.member_count || 0) > 0 ? (
+            <div className="rounded-md border border-orange-100 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+              当前有 {Number(editingRole?.member_count || 0)} 位成员绑定该角色，删除前需要先调整成员角色。
+            </div>
+          ) : null}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <label htmlFor="edit-role-name" className="text-xs font-semibold text-gray-700">角色名称</label>
+              <Input
+                id="edit-role-name"
+                name="role_name"
+                value={editingRoleName}
+                maxLength={30}
+                onChange={(event) => {
+                  setEditingRoleName(event.target.value)
+                  setRoleEditorError("")
+                }}
+                disabled={isSavingRole || isDeletingRole}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="edit-role-description" className="text-xs font-semibold text-gray-700">角色说明</label>
+              <Input
+                id="edit-role-description"
+                name="description"
+                value={editingRoleDescription}
+                maxLength={80}
+                onChange={(event) => {
+                  setEditingRoleDescription(event.target.value)
+                  setRoleEditorError("")
+                }}
+                disabled={isSavingRole || isDeletingRole}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold text-gray-700">平台内部权限点</div>
+                <div className="text-[11px] text-gray-500">已选 {editingPermissions.length} 项，不等于企业微信后台权限。</div>
+              </div>
+              <div className="relative w-56">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-gray-400" />
+                <Input
+                  id="permission-search"
+                  name="permission_search"
+                  value={permissionSearch}
+                  onChange={(event) => setPermissionSearch(event.target.value)}
+                  placeholder="搜索权限"
+                  className="h-9 pl-8 text-xs"
+                  disabled={isSavingRole || isDeletingRole}
+                />
+              </div>
+            </div>
+            <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+              {permissionGroups.length === 0 ? (
+                <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">没有匹配的权限点</div>
+              ) : permissionGroups.map((group) => (
+                <div key={group.group} className="rounded-lg border border-gray-100 bg-white">
+                  <div className="border-b border-gray-50 px-3 py-2 text-xs font-bold text-gray-800">{group.group}</div>
+                  <div className="grid grid-cols-1 gap-2 p-3 md:grid-cols-2">
+                    {group.permissions.map((perm) => {
+                      const checked = editingPermissions.includes(perm)
+                      const permissionInputID = `role-permission-${perm.replace(/[^a-zA-Z0-9_-]/g, "-")}`
+                      return (
+                        <label key={perm} htmlFor={permissionInputID} className={`flex min-h-14 items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs ${checked ? "border-blue-200 bg-blue-50" : "border-gray-200 bg-white"}`}>
+                          <span className="min-w-0">
+                            <span className="block truncate font-semibold text-gray-800">{renderInternalPermissionLabel(perm)}</span>
+                            <span className="block truncate font-mono text-[10px] text-gray-500">{perm}</span>
+                          </span>
+                          <input
+                            id={permissionInputID}
+                            name="role_permissions"
+                            type="checkbox"
+                            checked={checked}
+                            disabled={isSavingRole || isDeletingRole}
+                            onChange={() => toggleEditingPermission(perm)}
+                            className="h-3.5 w-3.5 shrink-0"
+                          />
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </Dialog>

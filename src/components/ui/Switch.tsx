@@ -7,18 +7,24 @@ interface SwitchProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(
-  ({ className, checked, onCheckedChange, ...props }, ref) => {
+  ({ className, checked, disabled, onCheckedChange, ...props }, ref) => {
+    const handleCheckedChange = (nextChecked: boolean) => {
+      if (disabled) return
+      onCheckedChange?.(nextChecked)
+    }
+
     return (
       <button
         type="button"
         role="switch"
         aria-checked={checked}
+        disabled={disabled}
         data-state={checked ? "checked" : "unchecked"}
         className={cn(
           "peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-blue-600 data-[state=unchecked]:bg-gray-200",
           className
         )}
-        onClick={() => onCheckedChange?.(!checked)}
+        onClick={() => handleCheckedChange(!checked)}
       >
         <span
           data-state={checked ? "checked" : "unchecked"}
@@ -30,7 +36,8 @@ const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(
           type="checkbox"
           className="sr-only"
           checked={checked}
-          onChange={(e) => onCheckedChange?.(e.target.checked)}
+          disabled={disabled}
+          onChange={(e) => handleCheckedChange(e.target.checked)}
           ref={ref}
           {...props}
         />
