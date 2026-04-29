@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
+import { type FeedbackKind, InlineFeedbackSlot, usePageFeedback } from "@/components/ui/PageFeedback";
 import {
   Search,
   RefreshCw,
@@ -334,6 +335,7 @@ function ServicerUpsertResultPanel({
 }
 
 export default function ReceptionChannels() {
+  const { showFeedback } = usePageFeedback();
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedChannel, setSelectedChannel] =
@@ -351,11 +353,12 @@ export default function ReceptionChannels() {
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isUpsertingServicers, setIsUpsertingServicers] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [detailNotice, setDetailNotice] = useState("");
   const [createNotice, setCreateNotice] = useState("");
+  const [createNoticeKind, setCreateNoticeKind] = useState<FeedbackKind>("warning");
   const [poolEditorNotice, setPoolEditorNotice] = useState("");
+  const [poolEditorNoticeKind, setPoolEditorNoticeKind] = useState<FeedbackKind>("warning");
   const [fallbackEditorNotice, setFallbackEditorNotice] = useState("");
+  const [fallbackEditorNoticeKind, setFallbackEditorNoticeKind] = useState<FeedbackKind>("warning");
   const [keyword, setKeyword] = useState("");
   const [organizationView, setOrganizationView] =
     useState<OrganizationSettingsView | null>(null);
@@ -387,6 +390,21 @@ export default function ReceptionChannels() {
   const [isFallbackEditorOpen, setIsFallbackEditorOpen] = useState(false);
   const detailOpenKFIDRef = useRef("");
 
+  const showCreateNotice = (message: string, kind: FeedbackKind = "warning") => {
+    setCreateNoticeKind(kind);
+    setCreateNotice(message);
+  };
+
+  const showPoolEditorNotice = (message: string, kind: FeedbackKind = "warning") => {
+    setPoolEditorNoticeKind(kind);
+    setPoolEditorNotice(message);
+  };
+
+  const showFallbackEditorNotice = (message: string, kind: FeedbackKind = "warning") => {
+    setFallbackEditorNoticeKind(kind);
+    setFallbackEditorNotice(message);
+  };
+
   const loadChannels = async (
     query?: string,
     options?: { showLoading?: boolean },
@@ -404,7 +422,7 @@ export default function ReceptionChannels() {
       setChannels(view?.channels || []);
       return true;
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
       return false;
     } finally {
       if (showLoading) {
@@ -417,12 +435,6 @@ export default function ReceptionChannels() {
     void loadChannels();
   }, []);
 
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
   const loadOrganizationOptions = async () => {
     if (isOrgOptionsLoading) return;
     try {
@@ -430,7 +442,7 @@ export default function ReceptionChannels() {
       const view = await getOrganizationSettingsView();
       setOrganizationView(view);
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
     } finally {
       setIsOrgOptionsLoading(false);
     }
@@ -462,10 +474,9 @@ export default function ReceptionChannels() {
   const handleRefreshList = async () => {
     try {
       setIsSyncing(true);
-      setNotice("");
       const refreshed = await loadChannels(keyword, { showLoading: false });
       if (refreshed) {
-        setNotice("接待渠道列表已刷新。");
+        showFeedback({ message: "接待渠道列表已刷新。", kind: "success" });
       }
     } finally {
       setIsSyncing(false);
@@ -490,7 +501,6 @@ export default function ReceptionChannels() {
   ) => {
     const target = (channel.open_kfid || "").trim();
     if (!target || syncingChannelIDs.has(target)) return;
-    const writeNotice = options?.source === "detail" ? setDetailNotice : setNotice;
     const displayName = getDisplayName(channel);
     setSyncingChannelIDs((prev) => new Set(prev).add(target));
     setChannels((prev) =>
@@ -505,7 +515,6 @@ export default function ReceptionChannels() {
       ),
     );
     try {
-      writeNotice("");
       const [result] = await Promise.all([
         triggerReceptionChannelSync(target),
         wait(420),
@@ -538,11 +547,14 @@ export default function ReceptionChannels() {
             }
           : current,
       );
-      writeNotice(`${displayName} 已刷新，成员和部门树请在组织与设置中单独同步。`);
+      showFeedback({
+        message: `${displayName} 已刷新，成员和部门树请在组织与设置中单独同步。`,
+        kind: "success",
+      });
       await loadChannels(keyword, { showLoading: false });
       await refreshOpenChannelDetail(target);
     } catch (error) {
-      writeNotice(normalizeErrorMessage(error));
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
     } finally {
       setSyncingChannelIDs((prev) => {
         const next = new Set(prev);
@@ -557,7 +569,6 @@ export default function ReceptionChannels() {
     setSelectedChannelDetail(null);
     setServicerUpsertResult(null);
     setSelectedServicerTargets([]);
-    setDetailNotice("");
     setPoolEditorNotice("");
     setFallbackEditorNotice("");
     setIsDetailLoading(true);
@@ -576,7 +587,7 @@ export default function ReceptionChannels() {
       );
       syncFallbackDraftFromDetail(detail, assignments);
     } catch (error) {
-      setDetailNotice(normalizeErrorMessage(error));
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
       setSelectedChannelDetail(null);
       setServicerAssignments([]);
       setServicerUpsertResult(null);
@@ -695,21 +706,21 @@ export default function ReceptionChannels() {
   const handleCreateChannel = async () => {
     const name = createName.trim();
     if (!name) {
-      setCreateNotice("请输入客服账号名称");
+      showCreateNotice("请输入客服账号名称");
       return;
     }
     if (createInitialUserIDs.length === 0 && createInitialDepartmentIDs.length === 0) {
-      setCreateNotice("请至少选择一个初始接待成员或部门");
+      showCreateNotice("请至少选择一个初始接待成员或部门");
       return;
     }
     if (createAvatarFile) {
       const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
       if (!allowedTypes.has(createAvatarFile.type)) {
-        setCreateNotice("请上传 PNG/JPG/JPEG/WEBP 图片");
+        showCreateNotice("请上传 PNG/JPG/JPEG/WEBP 图片");
         return;
       }
       if (createAvatarFile.size > 2 * 1024 * 1024) {
-        setCreateNotice("头像图片不能超过 2MB");
+        showCreateNotice("头像图片不能超过 2MB");
         return;
       }
     }
@@ -730,7 +741,10 @@ export default function ReceptionChannels() {
         initial_user_ids: createInitialUserIDs,
         initial_department_ids: createInitialDepartmentIDs,
       });
-      setNotice(created?.open_kfid ? "客服账号已创建" : "客服账号创建完成");
+      showFeedback({
+        message: created?.open_kfid ? "客服账号已创建" : "客服账号创建完成",
+        kind: "success",
+      });
       setIsCreateOpen(false);
       setCreateName("");
       setCreateAvatarFile(null);
@@ -740,7 +754,7 @@ export default function ReceptionChannels() {
         await loadDetail(created);
       }
     } catch (error) {
-      setCreateNotice(normalizeErrorMessage(error));
+      showCreateNotice(normalizeErrorMessage(error), "error");
     } finally {
       setIsCreating(false);
     }
@@ -766,7 +780,6 @@ export default function ReceptionChannels() {
     setSelectedFallbackTargets([]);
     setSelectedSceneValue("");
     setServicerUpsertResult(null);
-    setDetailNotice("");
     setPoolEditorNotice("");
     setFallbackEditorNotice("");
   };
@@ -1056,9 +1069,12 @@ export default function ReceptionChannels() {
     try {
       const url = await ensurePromotionURL();
       await navigator.clipboard.writeText(url);
-      setDetailNotice("推广链接已复制");
+      showFeedback({ message: "推广链接已复制", kind: "success" });
     } catch (error) {
-      setDetailNotice(normalizeErrorMessage(error) || "复制失败，请手动复制");
+      showFeedback({
+        message: normalizeErrorMessage(error) || "复制失败，请手动复制",
+        kind: "error",
+      });
     }
   };
 
@@ -1084,9 +1100,9 @@ export default function ReceptionChannels() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(downloadURL);
-      setDetailNotice("二维码下载已开始");
+      showFeedback({ message: "二维码下载已开始", kind: "success" });
     } catch (error) {
-      setDetailNotice(normalizeErrorMessage(error));
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
     }
   };
 
@@ -1206,18 +1222,19 @@ export default function ReceptionChannels() {
   const handleServicerPoolSave = async () => {
     const openKFID = getDetailOpenKFID();
     if (!openKFID) {
-      setPoolEditorNotice("当前渠道缺少 Open KFID");
+      showPoolEditorNotice("当前渠道缺少 Open KFID", "error");
       return;
     }
     const currentSelection = selectionItemsFromAssignments(servicerAssignments);
     const desiredSelection = selectedServicerTargetsDeduped;
     if (desiredSelection.length === 0) {
-      setPoolEditorNotice("当前未选择任何接待对象，请至少保留一个成员或部门。");
+      showPoolEditorNotice("当前未选择任何接待对象，请至少保留一个成员或部门。");
       return;
     }
     if (isSameSelection(currentSelection, desiredSelection)) {
       setServicerUpsertResult(null);
-      setPoolEditorNotice("接待池配置没有变化。");
+      setPoolEditorNotice("");
+      showFeedback({ message: "接待池配置没有变化。", kind: "warning" });
       return;
     }
     const currentUserSet = new Set(
@@ -1277,11 +1294,12 @@ export default function ReceptionChannels() {
       const failureCount = Number(summary?.failure_count || 0);
       const overallStatus = (summary?.overall_status || "").trim();
       if (overallStatus === "succeeded") {
-        setPoolEditorNotice("接待池配置已更新。");
+        setPoolEditorNotice("");
+        showFeedback({ message: "接待池配置已更新。", kind: "success" });
       } else if (overallStatus === "partial") {
-        setPoolEditorNotice(`部分对象保存成功：成功 ${successCount} 项，失败 ${failureCount} 项。`);
+        showPoolEditorNotice(`部分对象保存成功：成功 ${successCount} 项，失败 ${failureCount} 项。`);
       } else {
-        setPoolEditorNotice(`接待池保存未完成：失败 ${failureCount} 项。`);
+        showPoolEditorNotice(`接待池保存未完成：失败 ${failureCount} 项。`, "error");
       }
       if (successCount > 0) {
         const refreshedDetail = await getReceptionChannelDetail(openKFID);
@@ -1297,7 +1315,7 @@ export default function ReceptionChannels() {
         await loadChannels(keyword);
       }
     } catch (error) {
-      setPoolEditorNotice(normalizeErrorMessage(error));
+      showPoolEditorNotice(normalizeErrorMessage(error), "error");
       setServicerUpsertResult(null);
     } finally {
       setIsUpsertingServicers(false);
@@ -1307,7 +1325,7 @@ export default function ReceptionChannels() {
   const handleFallbackRouteSave = async () => {
     const openKFID = getDetailOpenKFID();
     if (!openKFID) {
-      setFallbackEditorNotice("当前渠道缺少 Open KFID");
+      showFallbackEditorNotice("当前渠道缺少 Open KFID", "error");
       return;
     }
     const humanUserIDs = mapSelectedUserIDsToPoolRaw(
@@ -1323,14 +1341,14 @@ export default function ReceptionChannels() {
         ? actionMode === "ai_only"
         : fallbackUseFullPoolInput;
     if (isPoolEmpty && requiresHuman) {
-      setFallbackEditorNotice("当前接待池为空，只能配置“仅 AI”兜底。");
+      showFallbackEditorNotice("当前接待池为空，只能配置“仅 AI”兜底。");
       return;
     }
     if (
       dispatchStrategyRequiresSpecificUser(dispatchStrategy) &&
       (humanDepartmentIDs.length > 0 || humanUserIDs.length !== 1)
     ) {
-      setFallbackEditorNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。");
+      showFallbackEditorNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。");
       return;
     }
     if (
@@ -1340,7 +1358,7 @@ export default function ReceptionChannels() {
       humanUserIDs.length === 0 &&
       humanDepartmentIDs.length === 0
     ) {
-      setFallbackEditorNotice(
+      showFallbackEditorNotice(
         "已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。",
       );
       return;
@@ -1379,9 +1397,11 @@ export default function ReceptionChannels() {
         },
       });
       if (result?.success) {
-        setFallbackEditorNotice(result.message || "兜底路由已更新");
+        setFallbackEditorNotice("");
+        showFeedback({ message: result.message || "兜底路由已更新", kind: "success" });
       } else {
-        setFallbackEditorNotice(result?.message || "兜底路由更新失败");
+        showFallbackEditorNotice(result?.message || "兜底路由更新失败", "error");
+        return;
       }
       const refreshedDetail = await getReceptionChannelDetail(openKFID);
       const refreshedAssignments = assignmentsFromDetail(refreshedDetail);
@@ -1391,7 +1411,7 @@ export default function ReceptionChannels() {
       setIsFallbackEditorOpen(false);
       await loadChannels(keyword);
     } catch (error) {
-      setFallbackEditorNotice(normalizeErrorMessage(error));
+      showFallbackEditorNotice(normalizeErrorMessage(error), "error");
     } finally {
       setIsSavingFallbackRoute(false);
     }
@@ -1402,7 +1422,7 @@ export default function ReceptionChannels() {
     setServicerUpsertResult(null);
     setPoolEditorNotice("");
     if (!openKFID) {
-      setPoolEditorNotice("当前渠道缺少 Open KFID");
+      showPoolEditorNotice("当前渠道缺少 Open KFID", "error");
       setIsPoolEditorOpen(true);
       return;
     }
@@ -1414,7 +1434,7 @@ export default function ReceptionChannels() {
       setSelectedServicerTargets(
         selectionItemsFromAssignments(servicerAssignments),
       );
-      setPoolEditorNotice(normalizeErrorMessage(error));
+      showPoolEditorNotice(normalizeErrorMessage(error), "error");
     }
     setIsPoolEditorOpen(true);
   };
@@ -1676,7 +1696,6 @@ export default function ReceptionChannels() {
               onClick={() => {
                 setCreateInitialPoolTargets([]);
                 setCreateNotice("");
-                setNotice("");
                 setIsCreateOpen(true);
               }}
             >
@@ -1684,12 +1703,6 @@ export default function ReceptionChannels() {
             </Button>
           </div>
         </div>
-        {notice ? (
-          <div className="px-4 py-2 text-xs text-blue-600 border-b border-gray-100 bg-blue-50">
-            {notice}
-          </div>
-        ) : null}
-
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-gray-600">
             <thead className="bg-gray-50 text-[11px] text-gray-500 uppercase tracking-wider">
@@ -1978,11 +1991,6 @@ export default function ReceptionChannels() {
                   </Button>
                 </div>
               </div>
-              {detailNotice ? (
-                <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                  {detailNotice}
-                </div>
-              ) : null}
             </div>
 
             <div className="space-y-3">
@@ -2140,11 +2148,6 @@ export default function ReceptionChannels() {
                     去同步组织架构
                   </Link>
                 </div>
-                {poolEditorNotice ? (
-                  <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                    {poolEditorNotice}
-                  </div>
-                ) : null}
                 {servicerUpsertResult?.summary ? (
                   <div
                     className={`rounded-lg border px-3 py-3 text-xs ${
@@ -2313,11 +2316,6 @@ export default function ReceptionChannels() {
                         ? "当前默认兜底规则会直接指定 1 名接待成员。"
                         : "当前默认兜底规则只使用接待池中的显式对象子集作为人工候选范围。"}
                 </div>
-                {fallbackEditorNotice ? (
-                  <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                    {fallbackEditorNotice}
-                  </div>
-                ) : null}
               </div>
             </div>
 
@@ -2378,11 +2376,7 @@ export default function ReceptionChannels() {
         }
       >
         <div className="space-y-4">
-          {poolEditorNotice ? (
-            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              {poolEditorNotice}
-            </div>
-          ) : null}
+          <InlineFeedbackSlot message={poolEditorNotice} kind={poolEditorNoticeKind} />
           <div className="space-y-2">
             <div className="text-sm font-semibold text-gray-900">选择当前渠道可接待的成员或部门</div>
             <div className="text-xs text-gray-500">
@@ -2442,11 +2436,7 @@ export default function ReceptionChannels() {
         }
       >
         <div className="space-y-4">
-          {fallbackEditorNotice ? (
-            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              {fallbackEditorNotice}
-            </div>
-          ) : null}
+          <InlineFeedbackSlot message={fallbackEditorNotice} kind={fallbackEditorNoticeKind} />
           <div className="space-y-2">
             <div className="text-sm font-semibold text-gray-900">设置默认兜底方式</div>
             <div className="text-xs text-gray-500">
@@ -2643,11 +2633,7 @@ export default function ReceptionChannels() {
         }
       >
         <div className="grid grid-cols-1 gap-4">
-          {createNotice ? (
-            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              {createNotice}
-            </div>
-          ) : null}
+          <InlineFeedbackSlot message={createNotice} kind={createNoticeKind} />
           <div className="space-y-1.5">
             <label htmlFor="create-channel-name" className="text-xs font-medium text-gray-700">
               客服账号名称

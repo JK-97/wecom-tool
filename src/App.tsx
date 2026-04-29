@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense } from "react"
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
+import { lazy, Suspense, useEffect, useRef } from "react"
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom"
 import { AuthProvider } from "./context/AuthContext"
 import ProtectedRoute from "./components/auth/ProtectedRoute"
+import { PageFeedbackProvider, usePageFeedback } from "./components/ui/PageFeedback"
 
 const Home = lazy(() => import("./pages/Home"))
 const SidebarLayout = lazy(() => import("./layouts/SidebarLayout"))
@@ -36,59 +37,77 @@ function RouteFallback() {
   )
 }
 
+function RouteFeedbackReset() {
+  const location = useLocation()
+  const { clearFeedback } = usePageFeedback()
+  const lastLocationKeyRef = useRef(`${location.pathname}${location.search}`)
+
+  useEffect(() => {
+    const nextLocationKey = `${location.pathname}${location.search}`
+    if (lastLocationKeyRef.current === nextLocationKey) return
+    lastLocationKeyRef.current = nextLocationKey
+    clearFeedback()
+  }, [clearFeedback, location.pathname, location.search])
+
+  return null
+}
+
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/home" element={<Navigate to="/" replace />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/callback" element={<OAuthCallbackPage />} />
+      <PageFeedbackProvider>
+        <RouteFeedbackReset />
+        <AuthProvider>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/home" element={<Navigate to="/" replace />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/auth/callback" element={<OAuthCallbackPage />} />
 
-            {/* Sidebar product routes */}
-            <Route
-              path="/sidebar"
-              element={
-                <ProtectedRoute>
-                  <SidebarLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route path="kf" element={<CSSidebar />} />
-              <Route path="contact" element={<ContactSidebarEntry />} />
+              {/* Sidebar product routes */}
+              <Route
+                path="/sidebar"
+                element={
+                  <ProtectedRoute>
+                    <SidebarLayout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route path="kf" element={<CSSidebar />} />
+                <Route path="contact" element={<ContactSidebarEntry />} />
 
-              {/* Transitional aliases */}
-              <Route path="cs" element={<Navigate to="/sidebar/kf" replace />} />
-              <Route path="group" element={<Navigate to="/sidebar/contact?mode=group" replace />} />
-            </Route>
+                {/* Transitional aliases */}
+                <Route path="cs" element={<Navigate to="/sidebar/kf" replace />} />
+                <Route path="group" element={<Navigate to="/sidebar/contact?mode=group" replace />} />
+              </Route>
 
-            {/* Main Web Routes (PC Dashboard) */}
-            <Route
-              path="/main"
-              element={
-                <ProtectedRoute>
-                  <MainLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route path="customer-360" element={<Customer360 />} />
-              <Route path="task-center" element={<TaskCenter />} />
-              <Route path="task-detail" element={<TaskDetailPage onBack={() => window.history.back()} />} />
-              <Route path="cs-center" element={<CSCommandCenter />} />
-              <Route path="customers" element={<CustomerList />} />
-              <Route path="group-detail" element={<GroupDetail onBack={() => window.history.back()} />} />
-              <Route path="strategy" element={<StrategyCenter />} />
-              <Route path="dashboard" element={<Dashboard onBack={() => window.history.back()} />} />
-              <Route path="settings" element={<OrganizationSettings />} />
-              <Route path="reception-channels" element={<ReceptionChannels />} />
-              <Route path="routing-rules" element={<RoutingRules />} />
-              <Route path="guide" element={<Guide />} />
-            </Route>
-          </Routes>
-        </Suspense>
-      </AuthProvider>
+              {/* Main Web Routes (PC Dashboard) */}
+              <Route
+                path="/main"
+                element={
+                  <ProtectedRoute>
+                    <MainLayout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route path="customer-360" element={<Customer360 />} />
+                <Route path="task-center" element={<TaskCenter />} />
+                <Route path="task-detail" element={<TaskDetailPage onBack={() => window.history.back()} />} />
+                <Route path="cs-center" element={<CSCommandCenter />} />
+                <Route path="customers" element={<CustomerList />} />
+                <Route path="group-detail" element={<GroupDetail onBack={() => window.history.back()} />} />
+                <Route path="strategy" element={<StrategyCenter />} />
+                <Route path="dashboard" element={<Dashboard onBack={() => window.history.back()} />} />
+                <Route path="settings" element={<OrganizationSettings />} />
+                <Route path="reception-channels" element={<ReceptionChannels />} />
+                <Route path="routing-rules" element={<RoutingRules />} />
+                <Route path="guide" element={<Guide />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </AuthProvider>
+      </PageFeedbackProvider>
     </BrowserRouter>
   )
 }

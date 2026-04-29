@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
 import { Card } from "@/components/ui/Card"
 import { Dialog } from "@/components/ui/Dialog"
+import { type FeedbackKind, InlineFeedbackSlot, usePageFeedback } from "@/components/ui/PageFeedback"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import {
   Search,
@@ -260,12 +261,13 @@ function firstSceneValueFromConditions(raw?: string): string {
 }
 
 export default function RoutingRules() {
+  const { showFeedback } = usePageFeedback()
   const [searchParams] = useSearchParams()
   const [view, setView] = useState<RoutingRulesViewModel>(initialRoutingRulesView)
   const [isLoading, setIsLoading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [notice, setNotice] = useState("")
   const [drawerNotice, setDrawerNotice] = useState("")
+  const [drawerNoticeKind, setDrawerNoticeKind] = useState<FeedbackKind>("warning")
 
   const [filterChannel, setFilterChannel] = useState(searchParams.get("channel") || "all")
   const [keyword, setKeyword] = useState("")
@@ -375,8 +377,13 @@ export default function RoutingRules() {
     setRegularPoolAssignments([])
     setSelectedRegularTargets([])
     if (message) {
-      setDrawerNotice(message)
+      showDrawerNotice(message)
     }
+  }
+
+  const showDrawerNotice = (message: string, kind: FeedbackKind = "warning") => {
+    setDrawerNoticeKind(kind)
+    setDrawerNotice(message)
   }
 
   const resetRegularDraft = (channelID = "") => {
@@ -690,7 +697,7 @@ export default function RoutingRules() {
       })
       setView(loaded)
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
       if (!preserveTable) {
         setView(initialRoutingRulesView)
       }
@@ -725,7 +732,7 @@ export default function RoutingRules() {
         }
       } catch (error) {
         if (!active) return
-        setDrawerNotice(normalizeErrorMessage(error))
+        showDrawerNotice(normalizeErrorMessage(error), "error")
       } finally {
         if (active) {
           setIsOrgOptionsLoading(false)
@@ -779,7 +786,7 @@ export default function RoutingRules() {
         }
       } catch (error) {
         if (!active) return
-        setDrawerNotice(normalizeErrorMessage(error))
+        showDrawerNotice(normalizeErrorMessage(error), "error")
       } finally {
         if (active) {
           setIsOrgOptionsLoading(false)
@@ -901,7 +908,6 @@ export default function RoutingRules() {
       noticeScope?: "page" | "drawer"
     },
   ) => {
-    const setScopedNotice = options?.noticeScope === "drawer" ? setDrawerNotice : setNotice
     try {
       setIsSubmitting(true)
       const result = await executeRoutingRulesCommand({
@@ -914,12 +920,17 @@ export default function RoutingRules() {
       if (options?.copyMessage) {
         try {
           await navigator.clipboard.writeText(message)
-          setScopedNotice("链接已复制")
+          showFeedback({ message: "链接已复制", kind: "success" })
         } catch {
-          setScopedNotice("复制失败，请手动复制")
+          showFeedback({ message: "复制失败，请手动复制", kind: "error" })
         }
       } else {
-        setScopedNotice(message)
+        const success = result?.success !== false
+        if (options?.noticeScope === "drawer" && !success) {
+          showDrawerNotice(message, "error")
+        } else {
+          showFeedback({ message, kind: success ? "success" : "error" })
+        }
       }
       if (options?.refresh !== false) {
         await loadView(
@@ -939,7 +950,12 @@ export default function RoutingRules() {
       }
       return result
     } catch (error) {
-      setScopedNotice(normalizeErrorMessage(error))
+      const message = normalizeErrorMessage(error)
+      if (options?.noticeScope === "drawer") {
+        showDrawerNotice(message, "error")
+      } else {
+        showFeedback({ message, kind: "error" })
+      }
       return null
     } finally {
       setIsSubmitting(false)
@@ -983,7 +999,7 @@ export default function RoutingRules() {
         )
       }
     } catch (error) {
-      setDrawerNotice(`规则已保存，但渠道详情刷新失败：${normalizeErrorMessage(error)}`)
+      showDrawerNotice(`规则已保存，但渠道详情刷新失败：${normalizeErrorMessage(error)}`)
     }
   }
 
@@ -991,14 +1007,14 @@ export default function RoutingRules() {
     const channelID = formChannelID.trim()
     if (isEditingDefaultRule) {
       if (!channelID) {
-        setDrawerNotice("当前默认兜底规则缺少渠道")
+        showDrawerNotice("当前默认兜底规则缺少渠道", "error")
         return
       }
       const actionMode = fallbackActionModeInput
       const dispatchStrategy = fallbackDispatchStrategyInput
       const requiresHuman = actionModeRequiresHuman(actionMode)
       if (fallbackPoolEmpty && requiresHuman) {
-        setDrawerNotice("当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。")
+        showDrawerNotice("当前接待池为空，只能配置“仅智能接待（ai_only）”兜底。")
         return
       }
       const useFullPool =
@@ -1014,7 +1030,7 @@ export default function RoutingRules() {
         dispatchStrategyRequiresSpecificUser(dispatchStrategy) &&
         (humanDepartmentIDs.length > 0 || humanUserIDs.length !== 1)
       ) {
-        setDrawerNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。")
+        showDrawerNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。")
         return
       }
       if (
@@ -1024,7 +1040,7 @@ export default function RoutingRules() {
         humanUserIDs.length === 0 &&
         humanDepartmentIDs.length === 0
       ) {
-        setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
+        showDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
         return
       }
       const result = await runCommand(
@@ -1056,11 +1072,11 @@ export default function RoutingRules() {
     const name = formName.trim()
     const scene = formScene.trim()
     if (!name) {
-      setDrawerNotice("请输入规则名称")
+      showDrawerNotice("请输入规则名称")
       return
     }
     if (!channelID) {
-      setDrawerNotice("请选择应用渠道")
+      showDrawerNotice("请选择应用渠道")
       return
     }
     const actionMode = regularActionModeInput
@@ -1077,14 +1093,14 @@ export default function RoutingRules() {
     )
     const humanDepartmentIDs = selectedRegularDepartmentsDeduped
     if (requiresHuman && regularPoolEmpty) {
-      setDrawerNotice("当前接待池为空，普通人工路由无法生效。请先配置接待池，或改为“仅 AI”。")
+      showDrawerNotice("当前接待池为空，普通人工路由无法生效。请先配置接待池，或改为“仅 AI”。")
       return
     }
     if (
       dispatchStrategyRequiresSpecificUser(dispatchStrategy) &&
       (humanDepartmentIDs.length > 0 || humanUserIDs.length !== 1)
     ) {
-      setDrawerNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。")
+      showDrawerNotice("当前分配策略需要明确指定 1 名人工成员，请只选择一名接待成员。")
       return
     }
     if (
@@ -1094,11 +1110,11 @@ export default function RoutingRules() {
       humanUserIDs.length === 0 &&
       humanDepartmentIDs.length === 0
     ) {
-      setDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
+      showDrawerNotice("已关闭“使用整个接待池”，请至少选择一个接待对象，或切回“使用整个接待池”。")
       return
     }
     if (actionModeSupportsAIToHumanKeywords(actionMode) && !aiToHumanKeywords) {
-      setDrawerNotice("请配置该路由的转人工关键词，命中后才会按当前策略转人工。")
+      showDrawerNotice("请配置该路由的转人工关键词，命中后才会按当前策略转人工。")
       return
     }
 
@@ -1402,8 +1418,6 @@ export default function RoutingRules() {
             </div>
           ) : null}
 
-          {notice ? <div className="px-4 py-2 text-xs text-blue-600 border-b border-gray-100 bg-blue-50">{notice}</div> : null}
-
           <div className="flex-1 overflow-auto bg-white">
             <table className="w-full text-left text-sm text-gray-600 border-separate border-spacing-0">
               <thead className="sticky top-0 bg-gray-50 text-[11px] text-gray-500 uppercase tracking-wider border-b border-gray-200 z-10">
@@ -1703,11 +1717,7 @@ export default function RoutingRules() {
         }
       >
         <div className="space-y-6">
-          {drawerNotice ? (
-            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              {drawerNotice}
-            </div>
-          ) : null}
+          <InlineFeedbackSlot message={drawerNotice} kind={drawerNoticeKind} />
           {isEditingDefaultRule ? (
             <>
               <div className="space-y-4">

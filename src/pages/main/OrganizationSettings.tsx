@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/Button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
 import { Dialog } from "@/components/ui/Dialog"
 import { Input } from "@/components/ui/Input"
+import { InlineFeedbackSlot, usePageFeedback } from "@/components/ui/PageFeedback"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs"
 import {
   Settings, Users, Shield, CheckCircle2, RefreshCw,
@@ -39,7 +40,6 @@ const SETTINGS_TABS = ["wecom", "org", "roles", "toolbar", "connectors", "debug"
 type SettingsTab = (typeof SETTINGS_TABS)[number]
 type NoticeKind = "info" | "success" | "warning" | "error"
 type NoticeScope = SettingsTab | "global"
-type NoticeState = { scope: NoticeScope; kind: NoticeKind; message: string } | null
 
 function resolveInitialSettingsTab(): SettingsTab {
   if (typeof window === "undefined") return "wecom"
@@ -48,19 +48,6 @@ function resolveInitialSettingsTab(): SettingsTab {
   if (SETTINGS_TABS.includes(tab as SettingsTab)) return tab as SettingsTab
   if (params.get("muyuai_connected") === "1") return "connectors"
   return "wecom"
-}
-
-function noticeClassName(kind: NoticeKind): string {
-  switch (kind) {
-    case "success":
-      return "border-green-100 bg-green-50 text-green-700"
-    case "warning":
-      return "border-orange-100 bg-orange-50 text-orange-700"
-    case "error":
-      return "border-red-100 bg-red-50 text-red-700"
-    default:
-      return "border-blue-100 bg-blue-50 text-blue-700"
-  }
 }
 
 const INTERNAL_PERMISSION_META: Record<string, { label: string; group: string }> = {
@@ -227,17 +214,16 @@ function isObjectPassed(status: string): boolean {
 }
 
 export default function OrganizationSettings() {
+  const { showFeedback, clearFeedback } = usePageFeedback()
   const [view, setView] = useState<OrganizationSettingsView | null>(null)
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveInitialSettingsTab())
   const [isLoading, setIsLoading] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [isRunningCheck, setIsRunningCheck] = useState(false)
-  const [notice, setNotice] = useState<NoticeState>(null)
   const [memberRoleDraft, setMemberRoleDraft] = useState<Record<string, string>>({})
   const [savingMemberUserID, setSavingMemberUserID] = useState("")
   const [connectorStatuses, setConnectorStatuses] = useState<Record<string, MuYuAIConnectorStatus | null>>({})
   const [isLoadingConnectors, setIsLoadingConnectors] = useState(false)
-  const [connectorNotice, setConnectorNotice] = useState("")
   const [testingConnectorKey, setTestingConnectorKey] = useState("")
   const [refreshingConnectorKey, setRefreshingConnectorKey] = useState("")
   const [connectingConnectorKey, setConnectingConnectorKey] = useState("")
@@ -261,13 +247,10 @@ export default function OrganizationSettings() {
   const [updatingDebugKey, setUpdatingDebugKey] = useState("")
   const [isResettingDebug, setIsResettingDebug] = useState(false)
 
-  const showNotice = (scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
+  const showNotice = (_scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
     const text = (message || "").trim()
-    if (!text) {
-      setNotice(null)
-      return
-    }
-    setNotice({ scope, kind, message: text })
+    if (!text) return
+    showFeedback({ message: text, kind })
   }
 
   const formatDateTime = (value?: string): string => {
@@ -341,7 +324,7 @@ export default function OrganizationSettings() {
       const muyuai = await getMuYuAIConnectorStatus()
       setConnectorStatuses((prev) => ({ ...prev, muyuai }))
     } catch (error) {
-      setConnectorNotice(normalizeErrorMessage(error))
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
       setConnectorStatuses((prev) => ({
         ...prev,
         muyuai: {
@@ -361,14 +344,6 @@ export default function OrganizationSettings() {
     void loadView()
     void loadConnectors()
   }, [])
-
-  useEffect(() => {
-    if (notice?.kind !== "success") return
-    const timer = window.setTimeout(() => {
-      setNotice((current) => (current === notice ? null : current))
-    }, 3500)
-    return () => window.clearTimeout(timer)
-  }, [notice])
 
   const runIntegrationCheck = async () => {
     try {
@@ -444,7 +419,7 @@ export default function OrganizationSettings() {
 
   const startConnectorOAuth = async (key: string) => {
     if (key !== "muyuai") {
-      setConnectorNotice("该连接方式暂未开放")
+      showFeedback({ message: "该连接方式暂未开放", kind: "warning" })
       return
     }
     try {
@@ -454,12 +429,12 @@ export default function OrganizationSettings() {
       const start = await startMuYuAIOAuth(returnURL.toString())
       const authURL = (start.AuthorizeURL || start.authorize_url || start.authorization_url || "").trim()
       if (!authURL) {
-        setConnectorNotice("暂时无法发起连接，请稍后再试")
+        showFeedback({ message: "暂时无法发起连接，请稍后再试", kind: "error" })
         return
       }
       window.location.assign(authURL)
     } catch (error) {
-      setConnectorNotice(normalizeErrorMessage(error))
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
     } finally {
       setConnectingConnectorKey("")
     }
@@ -467,16 +442,16 @@ export default function OrganizationSettings() {
 
   const refreshConnector = async (key: string) => {
     if (key !== "muyuai") {
-      setConnectorNotice("该连接方式暂不支持刷新")
+      showFeedback({ message: "该连接方式暂不支持刷新", kind: "warning" })
       return
     }
     try {
       setRefreshingConnectorKey(key)
       await refreshMuYuAIConnection()
-      setConnectorNotice("连接状态已更新，当前企业的授权关系保持不变")
+      showFeedback({ message: "连接状态已更新，当前企业的授权关系保持不变", kind: "success" })
       await loadConnectors()
     } catch (error) {
-      setConnectorNotice(normalizeErrorMessage(error))
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
     } finally {
       setRefreshingConnectorKey("")
     }
@@ -484,17 +459,17 @@ export default function OrganizationSettings() {
 
   const testConnector = async (key: string) => {
     if (key !== "muyuai") {
-      setConnectorNotice("该连接方式暂不支持校验")
+      showFeedback({ message: "该连接方式暂不支持校验", kind: "warning" })
       return
     }
     try {
       setTestingConnectorKey(key)
       const result = await testMuYuAIConnection()
       const message = (result.Message || result.message || "").trim()
-      setConnectorNotice(message || "连接校验通过，可以继续使用")
+      showFeedback({ message: message || "连接校验通过，可以继续使用", kind: "success" })
       await loadConnectors()
     } catch (error) {
-      setConnectorNotice(normalizeErrorMessage(error))
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
     } finally {
       setTestingConnectorKey("")
     }
@@ -637,7 +612,27 @@ export default function OrganizationSettings() {
     setCreateRoleTemplate("blank")
     setCreateRoleError("")
     setIsCreateRoleOpen(true)
-    setNotice(null)
+    clearFeedback()
+  }
+
+  const closeCreateRoleDialog = () => {
+    if (isCreatingRole) return
+    setIsCreateRoleOpen(false)
+    setCreateRoleName("")
+    setCreateRoleDescription("")
+    setCreateRoleTemplate("blank")
+    setCreateRoleError("")
+  }
+
+  const closeRoleEditor = () => {
+    if (isSavingRole || isDeletingRole) return
+    setIsRoleEditorOpen(false)
+    setEditingRole(null)
+    setEditingRoleName("")
+    setEditingRoleDescription("")
+    setEditingPermissions([])
+    setPermissionSearch("")
+    setRoleEditorError("")
   }
 
   const submitCreateRole = async () => {
@@ -679,7 +674,7 @@ export default function OrganizationSettings() {
       setMemberRoleDraft(buildMemberRoleDraft(view))
     }
     setActiveSettingsTab(nextTab)
-    setNotice(null)
+    clearFeedback()
     if (typeof window === "undefined") return
     const url = new URL(window.location.href)
     url.searchParams.set("tab", nextTab)
@@ -865,8 +860,6 @@ export default function OrganizationSettings() {
       permissions: [...permissions].sort((a, b) => a.localeCompare(b)),
     }))
   })()
-  const visibleNotice = notice && (notice.scope === "global" || notice.scope === activeSettingsTab) ? notice : null
-
   return (
     <div className="flex min-h-full flex-col bg-white rounded-xl border border-gray-200 shadow-sm">
       <div className="p-6 border-b border-gray-100 bg-gray-50/50">
@@ -907,13 +900,6 @@ export default function OrganizationSettings() {
               </div>
             </div>
           ) : null}
-          {isLoading ? (
-            <div className="mb-6 rounded-md border border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">加载组织设置中...</div>
-          ) : null}
-          {visibleNotice ? (
-            <div className={`mb-6 rounded-md border px-4 py-2 text-xs ${noticeClassName(visibleNotice.kind)}`}>{visibleNotice.message}</div>
-          ) : null}
-
           {hasLoaded ? (
           <>
           <TabsContent value="wecom" className="mt-0 space-y-8 max-w-3xl">
@@ -1499,12 +1485,6 @@ export default function OrganizationSettings() {
                 </Button>
               </div>
 
-              {connectorNotice ? (
-                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700 transition-all">
-                  {connectorNotice}
-                </div>
-              ) : null}
-
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 {CONNECTOR_CATALOG.map((item) => {
                   const status = connectorStatuses[item.key]
@@ -1684,16 +1664,12 @@ export default function OrganizationSettings() {
 
       <Dialog
         isOpen={isCreateRoleOpen}
-        onClose={() => {
-          if (isCreatingRole) return
-          setIsCreateRoleOpen(false)
-          setCreateRoleError("")
-        }}
+        onClose={closeCreateRoleDialog}
         title="新增角色"
         className="max-w-[560px]"
         footer={
           <div className="flex w-full justify-end gap-3">
-            <Button variant="outline" onClick={() => setIsCreateRoleOpen(false)} disabled={isCreatingRole}>取消</Button>
+            <Button variant="outline" onClick={closeCreateRoleDialog} disabled={isCreatingRole}>取消</Button>
             <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void submitCreateRole()} disabled={isCreatingRole}>
               {isCreatingRole ? "创建中..." : "创建角色"}
             </Button>
@@ -1701,9 +1677,7 @@ export default function OrganizationSettings() {
         }
       >
         <div className="space-y-4">
-          {createRoleError ? (
-            <div className="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{createRoleError}</div>
-          ) : null}
+          <InlineFeedbackSlot message={createRoleError} kind="error" />
           <div className="space-y-1.5">
             <label htmlFor="create-role-name" className="text-xs font-semibold text-gray-700">角色名称</label>
             <Input
@@ -1765,16 +1739,7 @@ export default function OrganizationSettings() {
 
       <Dialog
         isOpen={isRoleEditorOpen}
-        onClose={() => {
-          if (isSavingRole || isDeletingRole) return
-          setIsRoleEditorOpen(false)
-          setEditingRole(null)
-          setEditingRoleName("")
-          setEditingRoleDescription("")
-          setEditingPermissions([])
-          setPermissionSearch("")
-          setRoleEditorError("")
-        }}
+        onClose={closeRoleEditor}
         title={`编辑角色 · ${(editingRole?.role_name || editingRole?.role || "").trim()}`}
         className="max-w-[680px]"
         footer={
@@ -1788,16 +1753,7 @@ export default function OrganizationSettings() {
               {isDeletingRole ? "删除中..." : "删除角色"}
             </Button>
             <div className="flex gap-3">
-            <Button variant="outline" onClick={() => {
-              if (isSavingRole || isDeletingRole) return
-              setIsRoleEditorOpen(false)
-              setEditingRole(null)
-              setEditingRoleName("")
-              setEditingRoleDescription("")
-              setEditingPermissions([])
-              setPermissionSearch("")
-              setRoleEditorError("")
-            }} disabled={isSavingRole || isDeletingRole}>取消</Button>
+            <Button variant="outline" onClick={closeRoleEditor} disabled={isSavingRole || isDeletingRole}>取消</Button>
             <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void saveRolePermissions()} disabled={isSavingRole || isDeletingRole}>
               {isSavingRole ? "保存中..." : "保存角色"}
             </Button>
@@ -1806,9 +1762,7 @@ export default function OrganizationSettings() {
         }
       >
         <div className="space-y-5">
-          {roleEditorError ? (
-            <div className="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{roleEditorError}</div>
-          ) : null}
+          <InlineFeedbackSlot message={roleEditorError} kind="error" />
           {Number(editingRole?.member_count || 0) > 0 ? (
             <div className="rounded-md border border-orange-100 bg-orange-50 px-3 py-2 text-xs text-orange-700">
               当前有 {Number(editingRole?.member_count || 0)} 位成员绑定该角色，删除前需要先调整成员角色。
