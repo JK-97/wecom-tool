@@ -42,6 +42,7 @@ import {
 } from "@/services/organizationSettingsService"
 import {
   buildRawServicerIDsByStableIdentity,
+  hydrateServicerTargetSelection,
   mapSelectedUserIDsToPoolRaw,
   resolveServicerIdentityView,
 } from "@/services/servicerIdentity"
@@ -116,7 +117,7 @@ function formatRoutingTargetDetail(target?: RoutingTarget): string {
   const kind = (target?.kind || "").trim()
   switch (kind) {
     case "specific_user":
-      return "直接指定人工"
+      return "指定接待成员"
     case "full_pool":
       return "使用整个接待池"
     case "pool_subset":
@@ -124,6 +125,23 @@ function formatRoutingTargetDetail(target?: RoutingTarget): string {
     default:
       return ""
   }
+}
+
+function routingTargetObjectCount(target?: RoutingTarget | null): number {
+  return (
+    (target?.userIds || []).filter((item) => String(item || "").trim()).length +
+    (target?.departmentIds || []).filter((item) => Number(item || 0) > 0).length
+  )
+}
+
+function actionPayloadObjectCount(action: Record<string, unknown>): number {
+  const userCount = Array.isArray(action.assigned_staff_ids)
+    ? action.assigned_staff_ids.filter((item) => String(item || "").trim()).length
+    : 0
+  const departmentCount = Array.isArray(action.assigned_department_ids)
+    ? action.assigned_department_ids.filter((item) => Number(item || 0) > 0).length
+    : 0
+  return userCount + departmentCount
 }
 
 const ACTION_MODE_OPTIONS: Array<{
@@ -325,14 +343,7 @@ export default function RoutingRules() {
     detail: ReceptionChannelDetail | null,
     assignments?: KFServicerAssignment[],
   ) => {
-    const stableIdentityByRaw = new Map<string, string>()
-    ;(assignments || fallbackPoolAssignments).forEach((assignment) => {
-      const identity = resolveServicerIdentityView(assignment)
-      const rawID = identity.rawServicerUserID.trim()
-      const stableID = (identity.stableIdentity || rawID).trim()
-      if (!rawID || !stableID) return
-      stableIdentityByRaw.set(rawID, stableID)
-    })
+    const poolAssignments = assignments || fallbackPoolAssignments
     setFallbackDetail(detail)
     const actionMode = ((detail?.fallback_route?.action_mode || "ai_only").trim() ||
       "ai_only") as RoutingActionMode
@@ -355,18 +366,7 @@ export default function RoutingRules() {
         : detail?.fallback_route?.use_full_pool ?? fallbackTarget?.useFullPool ?? false,
     )
     setSelectedFallbackTargets(
-      normalizeSelectionItems([
-        ...((fallbackTarget?.userIds || []).map((userID) => ({
-          type: "user" as const,
-          id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
-        }))),
-        ...((fallbackTarget?.departmentIds || []).map(
-          (departmentID) => ({
-            type: "department" as const,
-            id: String(Number(departmentID || 0)),
-          }),
-        )),
-      ]),
+      hydrateServicerTargetSelection(fallbackTarget, poolAssignments),
     )
   }
 
@@ -521,6 +521,17 @@ export default function RoutingRules() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [selectedFallbackTargetsDeduped],
   )
+  const fallbackTargetHydrationIssue = useMemo(
+    () =>
+      !isOrgOptionsLoading &&
+      routingTargetObjectCount(fallbackDetail?.fallback_route?.target) > 0 &&
+      selectedFallbackTargetsDeduped.length === 0,
+    [
+      fallbackDetail?.fallback_route?.target,
+      isOrgOptionsLoading,
+      selectedFallbackTargetsDeduped.length,
+    ],
+  )
   const isEditingDefaultRule = selectedRule?.isDefault === true
   const currentPoolAllowedUserIDs = useMemo(
     () =>
@@ -611,6 +622,23 @@ export default function RoutingRules() {
         .map((item) => Number(item.id))
         .filter((item) => Number.isInteger(item) && item > 0),
     [selectedRegularTargetsDeduped],
+  )
+  const selectedRuleActionPayload = useMemo(
+    () => parseJSONRecord(selectedRule?.actionJson),
+    [selectedRule?.actionJson],
+  )
+  const regularTargetHydrationIssue = useMemo(
+    () =>
+      !isOrgOptionsLoading &&
+      !isEditingDefaultRule &&
+      actionPayloadObjectCount(selectedRuleActionPayload) > 0 &&
+      selectedRegularTargetsDeduped.length === 0,
+    [
+      isEditingDefaultRule,
+      isOrgOptionsLoading,
+      selectedRegularTargetsDeduped.length,
+      selectedRuleActionPayload,
+    ],
   )
   const regularPoolEmpty =
     regularDetail?.reception_pool?.empty === true ||
@@ -729,30 +757,21 @@ export default function RoutingRules() {
         setRegularDetail(detail)
         setRegularPoolAssignments(assignments)
         if (selectedRule && !selectedRule.isDefault) {
-          const stableIdentityByRaw = new Map<string, string>()
-          assignments.forEach((assignment) => {
-            const identity = resolveServicerIdentityView(assignment)
-            const rawID = identity.rawServicerUserID.trim()
-            const stableID = (identity.stableIdentity || rawID).trim()
-            if (!rawID || !stableID) return
-            stableIdentityByRaw.set(rawID, stableID)
-          })
           const action = parseJSONRecord(selectedRule.actionJson)
           setSelectedRegularTargets(
-            normalizeSelectionItems([
-              ...(Array.isArray(action.assigned_staff_ids)
-                ? action.assigned_staff_ids.map((userID) => ({
-                    type: "user" as const,
-                    id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
-                  }))
-                : []),
-              ...(Array.isArray(action.assigned_department_ids)
-                ? action.assigned_department_ids.map((departmentID) => ({
-                    type: "department" as const,
-                    id: String(Number(departmentID || 0)),
-                  }))
-                : []),
-            ]),
+            hydrateServicerTargetSelection(
+              {
+                userIds: Array.isArray(action.assigned_staff_ids)
+                  ? action.assigned_staff_ids.map((userID) => String(userID || "").trim()).filter(Boolean)
+                  : [],
+                departmentIds: Array.isArray(action.assigned_department_ids)
+                  ? action.assigned_department_ids
+                      .map((departmentID) => Number(departmentID || 0))
+                      .filter((departmentID) => Number.isInteger(departmentID) && departmentID > 0)
+                  : [],
+              },
+              assignments,
+            ),
           )
         }
         if (!organizationView) {
@@ -927,6 +946,47 @@ export default function RoutingRules() {
     }
   }
 
+  const refreshChannelTargetDraft = async (
+    channelID: string,
+    scope: "fallback" | "regular",
+  ) => {
+    const normalizedChannelID = channelID.trim()
+    if (!normalizedChannelID) return
+    try {
+      const detail = await getReceptionChannelDetail(normalizedChannelID)
+      let assignments = assignmentsFromReceptionDetail(detail)
+      if (assignments.length === 0) {
+        assignments = await listKFServicerAssignments(normalizedChannelID)
+      }
+      if (scope === "fallback") {
+        setFallbackPoolAssignments(assignments)
+        syncFallbackDraftFromDetail(detail, assignments)
+      } else {
+        setRegularDetail(detail)
+        setRegularPoolAssignments(assignments)
+        setSelectedRegularTargets(
+          hydrateServicerTargetSelection(
+            {
+              userIds: Array.isArray(selectedRuleActionPayload.assigned_staff_ids)
+                ? selectedRuleActionPayload.assigned_staff_ids
+                    .map((userID) => String(userID || "").trim())
+                    .filter(Boolean)
+                : [],
+              departmentIds: Array.isArray(selectedRuleActionPayload.assigned_department_ids)
+                ? selectedRuleActionPayload.assigned_department_ids
+                    .map((departmentID) => Number(departmentID || 0))
+                    .filter((departmentID) => Number.isInteger(departmentID) && departmentID > 0)
+                : [],
+            },
+            assignments,
+          ),
+        )
+      }
+    } catch (error) {
+      setDrawerNotice(`规则已保存，但渠道详情刷新失败：${normalizeErrorMessage(error)}`)
+    }
+  }
+
   const handleSaveRule = async () => {
     const channelID = formChannelID.trim()
     if (isEditingDefaultRule) {
@@ -988,6 +1048,7 @@ export default function RoutingRules() {
       if (!result?.success) {
         return
       }
+      await refreshChannelTargetDraft(channelID, "fallback")
       setIsDrawerOpen(false)
       return
     }
@@ -1074,6 +1135,7 @@ export default function RoutingRules() {
     if (!result?.success) {
       return
     }
+    await refreshChannelTargetDraft(channelID, "regular")
     setIsDrawerOpen(false)
   }
 
@@ -1194,8 +1256,13 @@ export default function RoutingRules() {
 
           <div className="p-4 border-b border-gray-100 flex items-center gap-4 bg-white shrink-0">
             <div className="relative w-64">
+              <label htmlFor="routing-rule-search" className="sr-only">
+                搜索规则名称
+              </label>
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
+                id="routing-rule-search"
+                name="routing_rule_search"
                 type="text"
                 placeholder="搜索规则名称..."
                 value={keyword}
@@ -1217,8 +1284,10 @@ export default function RoutingRules() {
             <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 space-y-3">
               <div className="grid grid-cols-4 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[11px] text-gray-500">规则状态</label>
+                  <label htmlFor="routing-status-filter" className="text-[11px] text-gray-500">规则状态</label>
                   <select
+                    id="routing-status-filter"
+                    name="routing_status_filter"
                     className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={statusFilter}
                     onChange={(event) => setStatusFilter(event.target.value)}
@@ -1229,8 +1298,10 @@ export default function RoutingRules() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-gray-500">规则类型</label>
+                  <label htmlFor="routing-rule-type-filter" className="text-[11px] text-gray-500">规则类型</label>
                   <select
+                    id="routing-rule-type-filter"
+                    name="routing_rule_type_filter"
                     className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={ruleTypeFilter}
                     onChange={(event) => setRuleTypeFilter(event.target.value)}
@@ -1241,8 +1312,10 @@ export default function RoutingRules() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-gray-500">接待模式</label>
+                  <label htmlFor="routing-mode-filter" className="text-[11px] text-gray-500">接待模式</label>
                   <select
+                    id="routing-mode-filter"
+                    name="routing_mode_filter"
                     className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={modeFilter}
                     onChange={(event) => setModeFilter(event.target.value)}
@@ -1256,8 +1329,10 @@ export default function RoutingRules() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-gray-500">分配目标</label>
+                  <label htmlFor="routing-target-filter" className="text-[11px] text-gray-500">分配目标</label>
                   <select
+                    id="routing-target-filter"
+                    name="routing_target_filter"
                     className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={targetFilter}
                     onChange={(event) => setTargetFilter(event.target.value)}
@@ -1273,8 +1348,10 @@ export default function RoutingRules() {
               </div>
               <div className="grid grid-cols-4 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[11px] text-gray-500">命中区间</label>
+                  <label htmlFor="routing-hit-bucket-filter" className="text-[11px] text-gray-500">命中区间</label>
                   <select
+                    id="routing-hit-bucket-filter"
+                    name="routing_hit_bucket_filter"
                     className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={hitBucketFilter}
                     onChange={(event) => setHitBucketFilter(event.target.value)}
@@ -1287,8 +1364,10 @@ export default function RoutingRules() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-gray-500">响应区间</label>
+                  <label htmlFor="routing-response-bucket-filter" className="text-[11px] text-gray-500">响应区间</label>
                   <select
+                    id="routing-response-bucket-filter"
+                    name="routing_response_bucket_filter"
                     className="w-full h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={responseBucketFilter}
                     onChange={(event) => setResponseBucketFilter(event.target.value)}
@@ -1300,8 +1379,10 @@ export default function RoutingRules() {
                   </select>
                 </div>
                 <div className="col-span-2 flex items-end justify-between">
-                  <label className="flex items-center gap-2 text-xs text-gray-600 pb-1">
+                  <label htmlFor="routing-diagnostics-only" className="flex items-center gap-2 text-xs text-gray-600 pb-1">
                     <input
+                      id="routing-diagnostics-only"
+                      name="routing_diagnostics_only"
                       type="checkbox"
                       className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       checked={diagnosticsOnly}
@@ -1648,8 +1729,10 @@ export default function RoutingRules() {
                   兜底动作
                 </h4>
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-gray-700">系统动作</label>
+                  <label htmlFor="routing-default-action-mode" className="text-xs font-medium text-gray-700">系统动作</label>
                   <select
+                    id="routing-default-action-mode"
+                    name="routing_default_action_mode"
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={fallbackActionModeInput}
                     onChange={(event) => {
@@ -1669,8 +1752,10 @@ export default function RoutingRules() {
                 {actionModeRequiresHuman(fallbackActionModeInput) ? (
                   <>
                     <div className="space-y-2">
-                      <label className="text-xs font-medium text-gray-700">分配策略</label>
+                      <label htmlFor="routing-default-dispatch-strategy" className="text-xs font-medium text-gray-700">分配策略</label>
                       <select
+                        id="routing-default-dispatch-strategy"
+                        name="routing_default_dispatch_strategy"
                         className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={fallbackDispatchStrategyInput}
                         onChange={(event) => {
@@ -1689,8 +1774,10 @@ export default function RoutingRules() {
                     </div>
                     {fallbackDispatchStrategyInput === "direct_if_available_else_queue" ? (
                       <div className="space-y-2">
-                        <label className="text-xs font-medium text-gray-700">直分容量阈值</label>
+                        <label htmlFor="routing-default-dispatch-threshold" className="text-xs font-medium text-gray-700">直分容量阈值</label>
                         <input
+                          id="routing-default-dispatch-threshold"
+                          name="routing_default_dispatch_threshold"
                           type="number"
                           min={1}
                           className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1743,10 +1830,12 @@ export default function RoutingRules() {
                             />
                             <span>
                               <span className="block font-medium text-gray-900">
-                                自定义候选范围（接待池对象子集）
+                                {fallbackRequiresSpecificUser ? "指定接待成员" : "自定义候选范围（接待池对象子集）"}
                               </span>
                               <span className="block text-xs text-gray-500">
-                                仅从当前接待池中的显式对象缩小人工候选范围。
+                                {fallbackRequiresSpecificUser
+                                  ? "直接指定 1 名当前接待池成员承接默认兜底。"
+                                  : "仅从当前接待池中的显式对象缩小人工候选范围。"}
                               </span>
                             </span>
                           </label>
@@ -1758,24 +1847,36 @@ export default function RoutingRules() {
                                 ? "请选择 1 名接待成员，作为直接指定人工。"
                                 : "这里只显示当前接待池中的成员和部门。"}
                             </div>
-                            <OrganizationDirectorySelect
-                              label="接待池对象子集"
-                              placeholder={
-                                isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"
-                              }
-                              searchPlaceholder="搜索接待池中的成员 / 部门"
-                              corpId={orgCorpID}
-                              treeRoots={fallbackTreeRoots}
-                              ungroupedUsers={fallbackUngroupedUserIDs}
-                              memberMap={orgMemberMap}
-                              departmentMap={orgDepartmentMap}
-                              selectedItems={selectedFallbackTargetsDeduped}
-                              onChange={setSelectedFallbackTargets}
-                              emptyText="当前接待池中还没有可选对象，请先配置接待池"
-                              disabled={isOrgOptionsLoading || fallbackPoolEmpty}
-                              allowedUserIDs={currentPoolAllowedUserIDs}
-                              allowedDepartmentIDs={fallbackSelectableDepartmentIDs}
-                            />
+                            {isOrgOptionsLoading ? (
+                              <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-4 text-xs text-blue-700">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                正在加载当前渠道接待池对象...
+                              </div>
+                            ) : (
+                              <>
+                                {fallbackTargetHydrationIssue ? (
+                                  <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                                    已保存目标存在，但未能映射到当前组织通讯录。请先同步组织架构或检查接待池对象。
+                                  </div>
+                                ) : null}
+                                <OrganizationDirectorySelect
+                                  label={fallbackRequiresSpecificUser ? "指定接待成员" : "接待池对象子集"}
+                                  placeholder="从当前接待池对象中选择"
+                                  searchPlaceholder="搜索接待池中的成员 / 部门"
+                                  corpId={orgCorpID}
+                                  treeRoots={fallbackTreeRoots}
+                                  ungroupedUsers={fallbackUngroupedUserIDs}
+                                  memberMap={orgMemberMap}
+                                  departmentMap={orgDepartmentMap}
+                                  selectedItems={selectedFallbackTargetsDeduped}
+                                  onChange={setSelectedFallbackTargets}
+                                  emptyText="当前接待池中还没有可选对象，请先配置接待池"
+                                  disabled={fallbackPoolEmpty}
+                                  allowedUserIDs={currentPoolAllowedUserIDs}
+                                  allowedDepartmentIDs={fallbackSelectableDepartmentIDs}
+                                />
+                              </>
+                            )}
                           </div>
                         ) : null}
                       </>
@@ -1797,10 +1898,12 @@ export default function RoutingRules() {
                 </h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">
+                    <label htmlFor="routing-rule-name" className="text-xs font-medium text-gray-700">
                       规则名称 <span className="text-red-500">*</span>
                     </label>
                     <input
+                      id="routing-rule-name"
+                      name="routing_rule_name"
                       type="text"
                       className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="如：VIP 客户优先路由"
@@ -1809,7 +1912,7 @@ export default function RoutingRules() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">
+                    <label htmlFor="routing-rule-channel" className="text-xs font-medium text-gray-700">
                       应用渠道 <span className="text-red-500">*</span>
                     </label>
                     {selectedRule ? (
@@ -1823,6 +1926,8 @@ export default function RoutingRules() {
                       </div>
                     ) : (
                       <select
+                        id="routing-rule-channel"
+                        name="routing_rule_channel"
                         className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={formChannelID}
                         onChange={(event) => {
@@ -1854,9 +1959,11 @@ export default function RoutingRules() {
                 </h4>
                 <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">Scene 精确匹配</label>
+                    <label htmlFor="routing-rule-scene" className="text-xs font-medium text-gray-700">Scene 精确匹配</label>
                     <div className="flex gap-2">
                       <input
+                        id="routing-rule-scene"
+                        name="routing_rule_scene"
                         type="text"
                         className="flex-1 h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="留空表示不限制 scene"
@@ -1892,8 +1999,10 @@ export default function RoutingRules() {
                     <p className="text-[10px] text-gray-400 italic">提示：留空表示不限制 scene。</p>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-700">scene_param 精确匹配（可选）</label>
+                    <label htmlFor="routing-rule-scene-param" className="text-xs font-medium text-gray-700">scene_param 精确匹配（可选）</label>
                     <input
+                      id="routing-rule-scene-param"
+                      name="routing_rule_scene_param"
                       type="text"
                       className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="如：campaign_2026_spring"
@@ -1901,8 +2010,10 @@ export default function RoutingRules() {
                       onChange={(event) => setFormSceneParamValue(event.target.value)}
                     />
                   </div>
-                  <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <label htmlFor="routing-rule-scene-param-required" className="flex items-center gap-2 text-xs text-gray-600">
                     <input
+                      id="routing-rule-scene-param-required"
+                      name="routing_rule_scene_param_required"
                       type="checkbox"
                       className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       checked={formSceneParamNonEmpty}
@@ -1919,8 +2030,10 @@ export default function RoutingRules() {
                   执行动作
                 </h4>
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-gray-700">系统动作</label>
+                  <label htmlFor="routing-rule-action-mode" className="text-xs font-medium text-gray-700">系统动作</label>
                   <select
+                    id="routing-rule-action-mode"
+                    name="routing_rule_action_mode"
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={regularActionModeInput}
                     onChange={(event) => {
@@ -1941,8 +2054,10 @@ export default function RoutingRules() {
                   <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
                     {actionModeSupportsAIToHumanKeywords(regularActionModeInput) ? (
                       <div className="space-y-2">
-                        <label className="text-xs font-medium text-gray-700">转人工关键词</label>
+                        <label htmlFor="routing-rule-ai-to-human-keywords" className="text-xs font-medium text-gray-700">转人工关键词</label>
                         <textarea
+                          id="routing-rule-ai-to-human-keywords"
+                          name="routing_rule_ai_to_human_keywords"
                           className="min-h-[88px] w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="如：转人工，人工客服，退款，投诉"
                           value={regularAIToHumanKeywordsInput}
@@ -1954,8 +2069,10 @@ export default function RoutingRules() {
                       </div>
                     ) : null}
                     <div className="space-y-2">
-                      <label className="text-xs font-medium text-gray-700">分配策略</label>
+                      <label htmlFor="routing-rule-dispatch-strategy" className="text-xs font-medium text-gray-700">分配策略</label>
                       <select
+                        id="routing-rule-dispatch-strategy"
+                        name="routing_rule_dispatch_strategy"
                         className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={regularDispatchStrategyInput}
                         onChange={(event) => {
@@ -1974,8 +2091,10 @@ export default function RoutingRules() {
                     </div>
                     {regularDispatchStrategyInput === "direct_if_available_else_queue" ? (
                       <div className="space-y-2">
-                        <label className="text-xs font-medium text-gray-700">直分容量阈值</label>
+                        <label htmlFor="routing-rule-dispatch-threshold" className="text-xs font-medium text-gray-700">直分容量阈值</label>
                         <input
+                          id="routing-rule-dispatch-threshold"
+                          name="routing_rule_dispatch_threshold"
                           type="number"
                           min={1}
                           className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -2016,8 +2135,14 @@ export default function RoutingRules() {
                           className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span>
-                          <span className="block font-medium text-gray-900">使用接待池对象子集</span>
-                          <span className="block text-xs text-gray-500">普通规则与默认兜底规则共享同一套显式对象表达式和运行时展开逻辑。</span>
+                          <span className="block font-medium text-gray-900">
+                            {regularRequiresSpecificUser ? "指定接待成员" : "使用接待池对象子集"}
+                          </span>
+                          <span className="block text-xs text-gray-500">
+                            {regularRequiresSpecificUser
+                              ? "直接指定 1 名当前接待池成员承接该规则。"
+                              : "普通规则与默认兜底规则共享同一套显式对象表达式和运行时展开逻辑。"}
+                          </span>
                         </span>
                       </label>
                     </div>
@@ -2028,29 +2153,45 @@ export default function RoutingRules() {
                             ? "请选择 1 名接待成员，作为直接指定人工。"
                             : "这里只显示当前接待池中的成员和部门。"}
                         </div>
-                        <OrganizationDirectorySelect
-                          label="接待池对象子集"
-                          placeholder={isOrgOptionsLoading ? "正在加载接待池对象..." : "从当前接待池对象中选择"}
-                          searchPlaceholder="搜索接待池中的成员 / 部门"
-                          corpId={orgCorpID}
-                          treeRoots={regularTreeRoots}
-                          ungroupedUsers={regularUngroupedUserIDs}
-                          memberMap={orgMemberMap}
-                          departmentMap={orgDepartmentMap}
-                          selectedItems={selectedRegularTargetsDeduped}
-                          onChange={setSelectedRegularTargets}
-                          emptyText="当前接待池中还没有可选对象，请先配置接待池"
-                          disabled={isOrgOptionsLoading || regularPoolEmpty}
-                          allowedUserIDs={currentRegularPoolAllowedUserIDs}
-                          allowedDepartmentIDs={regularSelectableDepartmentIDs}
-                        />
+                        {isOrgOptionsLoading ? (
+                          <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-4 text-xs text-blue-700">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            正在加载当前渠道接待池对象...
+                          </div>
+                        ) : (
+                          <>
+                            {regularTargetHydrationIssue ? (
+                              <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                                已保存目标存在，但未能映射到当前组织通讯录。请先同步组织架构或检查接待池对象。
+                              </div>
+                            ) : null}
+                            <OrganizationDirectorySelect
+                              label={regularRequiresSpecificUser ? "指定接待成员" : "接待池对象子集"}
+                              placeholder="从当前接待池对象中选择"
+                              searchPlaceholder="搜索接待池中的成员 / 部门"
+                              corpId={orgCorpID}
+                              treeRoots={regularTreeRoots}
+                              ungroupedUsers={regularUngroupedUserIDs}
+                              memberMap={orgMemberMap}
+                              departmentMap={orgDepartmentMap}
+                              selectedItems={selectedRegularTargetsDeduped}
+                              onChange={setSelectedRegularTargets}
+                              emptyText="当前接待池中还没有可选对象，请先配置接待池"
+                              disabled={regularPoolEmpty}
+                              allowedUserIDs={currentRegularPoolAllowedUserIDs}
+                              allowedDepartmentIDs={regularSelectableDepartmentIDs}
+                            />
+                          </>
+                        )}
                       </div>
                     ) : null}
                   </div>
                 ) : null}
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-gray-700">优先级</label>
+                  <label htmlFor="routing-rule-priority" className="text-xs font-medium text-gray-700">优先级</label>
                   <input
+                    id="routing-rule-priority"
+                    name="routing_rule_priority"
                     type="number"
                     min={1}
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"

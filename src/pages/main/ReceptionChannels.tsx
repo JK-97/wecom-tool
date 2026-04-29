@@ -35,6 +35,7 @@ import { normalizeErrorMessage } from "@/services/http";
 import { executeRoutingRulesCommand } from "@/services/routingService";
 import {
   buildRawServicerIDsByStableIdentity,
+  hydrateServicerTargetSelection,
   mapSelectedUserIDsToPoolRaw,
   resolveServicerIdentityView,
 } from "@/services/servicerIdentity";
@@ -234,6 +235,13 @@ const dispatchStrategySupportsHumanScope = (strategy?: string): boolean =>
 
 const dispatchStrategyRequiresSpecificUser = (strategy?: string): boolean =>
   (strategy || "").trim() === "specific_user";
+
+const routingTargetObjectCount = (target?: {
+  userIds?: string[];
+  departmentIds?: number[];
+} | null): number =>
+  (target?.userIds || []).filter((item) => String(item || "").trim()).length +
+  (target?.departmentIds || []).filter((item) => Number(item || 0) > 0).length;
 
 
 
@@ -592,14 +600,7 @@ export default function ReceptionChannels() {
     detail: ReceptionChannelDetail | null,
     assignments?: KFServicerAssignment[],
   ) => {
-    const stableIdentityByRaw = new Map<string, string>();
-    (assignments || servicerAssignments).forEach((assignment) => {
-      const identity = resolveServicerIdentityView(assignment);
-      const rawID = identity.rawServicerUserID.trim();
-      const stableID = (identity.stableIdentity || rawID).trim();
-      if (!rawID || !stableID) return;
-      stableIdentityByRaw.set(rawID, stableID);
-    });
+    const poolAssignments = assignments || servicerAssignments;
     const actionMode = ((detail?.fallback_route?.action_mode || "").trim() ||
       "ai_only") as RoutingActionMode;
     const dispatchStrategy = ((detail?.fallback_route?.dispatch_strategy || "").trim() ||
@@ -622,16 +623,7 @@ export default function ReceptionChannels() {
           ? false
           : Boolean(detail?.fallback_route?.use_full_pool ?? fallbackTarget?.useFullPool ?? true);
     setFallbackUseFullPoolInput(useFullPool);
-    const nextTargets = normalizeSelectionItems([
-        ...(fallbackTarget?.userIds || []).map((userID) => ({
-          type: "user" as const,
-          id: stableIdentityByRaw.get(String(userID || "").trim()) || String(userID || "").trim(),
-        })),
-        ...(fallbackTarget?.departmentIds || []).map((departmentID) => ({
-          type: "department" as const,
-          id: String(departmentID),
-        })),
-      ]);
+    const nextTargets = hydrateServicerTargetSelection(fallbackTarget, poolAssignments);
     if (actionMode === "ai_only" || useFullPool) {
       setSelectedFallbackTargets([]);
       return;
@@ -920,9 +912,39 @@ export default function ReceptionChannels() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [selectedFallbackTargetsDeduped],
   );
+  const fallbackTargetHydrationIssue = useMemo(
+    () =>
+      !isOrgOptionsLoading &&
+      routingTargetObjectCount(selectedChannelDetail?.fallback_route?.target) > 0 &&
+      selectedFallbackTargetsDeduped.length === 0,
+    [
+      isOrgOptionsLoading,
+      selectedChannelDetail?.fallback_route?.target,
+      selectedFallbackTargetsDeduped.length,
+    ],
+  );
   const currentPoolSelection = useMemo(
     () => selectionItemsFromAssignments(servicerAssignments),
     [servicerAssignments],
+  );
+  const fallbackRouteSummarySelection = useMemo(
+    () =>
+      hydrateServicerTargetSelection(
+        selectedChannelDetail?.fallback_route?.target,
+        servicerAssignments,
+      ),
+    [selectedChannelDetail?.fallback_route?.target, servicerAssignments],
+  );
+  const fallbackRouteSummaryHydrationIssue = useMemo(
+    () =>
+      !isDetailLoading &&
+      routingTargetObjectCount(selectedChannelDetail?.fallback_route?.target) > 0 &&
+      fallbackRouteSummarySelection.length === 0,
+    [
+      fallbackRouteSummarySelection.length,
+      isDetailLoading,
+      selectedChannelDetail?.fallback_route?.target,
+    ],
   );
   const currentPoolAllowedUserIDs = useMemo(
     () =>
@@ -2240,7 +2262,11 @@ export default function ReceptionChannels() {
                         {dispatchStrategyLabel(fallbackRoute?.dispatch_strategy)}
                       </Badge>
                       <Badge variant="secondary" className="bg-blue-50 text-blue-700">
-                        {fallbackRoute?.use_full_pool ? "使用整个接待池" : "使用接待池对象子集"}
+                        {fallbackRoute?.use_full_pool
+                          ? "使用整个接待池"
+                          : dispatchStrategyRequiresSpecificUser(fallbackRoute?.dispatch_strategy)
+                            ? "指定接待成员"
+                            : "使用接待池对象子集"}
                       </Badge>
                     </div>
                   </div>
@@ -2259,9 +2285,18 @@ export default function ReceptionChannels() {
                       当前使用整个接待池作为人工候选范围。
                     </div>
                   ) : (
-                    renderSelectionSummary(selectedFallbackTargetsDeduped, {
-                      emptyText: "当前未选择接待池对象子集。",
-                    })
+                    <>
+                      {fallbackRouteSummaryHydrationIssue ? (
+                        <div className="rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                          已保存目标存在，但未能映射到当前组织通讯录。请先同步组织架构或检查接待池对象。
+                        </div>
+                      ) : null}
+                      {renderSelectionSummary(fallbackRouteSummarySelection, {
+                        emptyText: dispatchStrategyRequiresSpecificUser(fallbackRoute?.dispatch_strategy)
+                          ? "当前未指定接待成员。"
+                          : "当前未选择接待池对象子集。",
+                      })}
+                    </>
                   )}
                 </div>
                 {Number(fallbackRoute?.dispatch_capacity_threshold || 0) > 0 ? (
@@ -2274,7 +2309,9 @@ export default function ReceptionChannels() {
                     ? "当前接待池为空，只能使用“仅 AI”。"
                     : fallbackRoute?.use_full_pool
                       ? "当前默认兜底规则会直接使用整个接待池作为人工候选范围。"
-                      : "当前默认兜底规则只使用接待池中的显式对象子集作为人工候选范围。"}
+                      : dispatchStrategyRequiresSpecificUser(fallbackRoute?.dispatch_strategy)
+                        ? "当前默认兜底规则会直接指定 1 名接待成员。"
+                        : "当前默认兜底规则只使用接待池中的显式对象子集作为人工候选范围。"}
                 </div>
                 {fallbackEditorNotice ? (
                   <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
@@ -2528,7 +2565,9 @@ export default function ReceptionChannels() {
                     className="mt-0.5"
                     disabled={isPoolEmpty || fallbackRequiresSpecificUser}
                   />
-                    <span>自定义候选范围（接待池对象子集）</span>
+                    <span>
+                      {fallbackRequiresSpecificUser ? "指定接待成员" : "自定义候选范围（接待池对象子集）"}
+                    </span>
                   </label>
               </div>
               {showFallbackTargetPicker ? (
@@ -2538,29 +2577,43 @@ export default function ReceptionChannels() {
                       ? "请选择 1 名接待成员，作为直接指定人工。"
                       : "这里只显示当前接待池中的成员和部门。"}
                   </div>
-                  <OrganizationDirectorySelect
-                    label="接待池对象子集"
-                    placeholder={isOrgOptionsLoading ? "正在加载接待池..." : "从当前接待池对象中选择"}
-                    searchPlaceholder="搜索接待池中的成员 / 部门"
-                  corpId={orgCorpID}
-                  treeRoots={fallbackTreeRoots}
-                  ungroupedUsers={fallbackUngroupedUserIDs}
-                  memberMap={orgMemberMap}
-                  departmentMap={orgDepartmentMap}
-                  selectedItems={selectedFallbackTargetsDeduped}
-                  onChange={(items) => {
-                    const nextItems = normalizeSelectionItems(items);
-                    setSelectedFallbackTargets(
-                      fallbackRequiresSpecificUser
-                        ? nextItems.filter((item) => item.type === "user").slice(-1)
-                        : nextItems,
-                    );
-                  }}
-                  emptyText="当前接待池中还没有可选对象，请先配置接待池"
-                  disabled={isOrgOptionsLoading || isPoolEmpty}
-                  allowedUserIDs={currentPoolAllowedUserIDs}
-                  allowedDepartmentIDs={fallbackSelectableDepartmentIDs}
-                  />
+                  {isOrgOptionsLoading ? (
+                    <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-4 text-xs text-blue-700">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      正在加载当前渠道接待池对象...
+                    </div>
+                  ) : (
+                    <>
+                      {fallbackTargetHydrationIssue ? (
+                        <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                          已保存目标存在，但未能映射到当前组织通讯录。请先同步组织架构或检查接待池对象。
+                        </div>
+                      ) : null}
+                      <OrganizationDirectorySelect
+                        label={fallbackRequiresSpecificUser ? "指定接待成员" : "接待池对象子集"}
+                        placeholder="从当前接待池对象中选择"
+                        searchPlaceholder="搜索接待池中的成员 / 部门"
+                        corpId={orgCorpID}
+                        treeRoots={fallbackTreeRoots}
+                        ungroupedUsers={fallbackUngroupedUserIDs}
+                        memberMap={orgMemberMap}
+                        departmentMap={orgDepartmentMap}
+                        selectedItems={selectedFallbackTargetsDeduped}
+                        onChange={(items) => {
+                          const nextItems = normalizeSelectionItems(items);
+                          setSelectedFallbackTargets(
+                            fallbackRequiresSpecificUser
+                              ? nextItems.filter((item) => item.type === "user").slice(-1)
+                              : nextItems,
+                          );
+                        }}
+                        emptyText="当前接待池中还没有可选对象，请先配置接待池"
+                        disabled={isPoolEmpty}
+                        allowedUserIDs={currentPoolAllowedUserIDs}
+                        allowedDepartmentIDs={fallbackSelectableDepartmentIDs}
+                      />
+                    </>
+                  )}
                 </div>
               ) : null}
             </>
