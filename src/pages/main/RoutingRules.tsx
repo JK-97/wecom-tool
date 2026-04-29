@@ -370,6 +370,130 @@ export default function RoutingRules() {
     )
   }
 
+  const clearRegularPoolDraft = (message?: string) => {
+    setRegularDetail(null)
+    setRegularPoolAssignments([])
+    setSelectedRegularTargets([])
+    if (message) {
+      setDrawerNotice(message)
+    }
+  }
+
+  const resetRegularDraft = (channelID = "") => {
+    setRegularDetail(null)
+    setRegularPoolAssignments([])
+    setFormName("")
+    setFormChannelID(channelID)
+    setFormScene("")
+    setFormSceneParamValue("")
+    setFormSceneParamNonEmpty(false)
+    setRegularActionModeInput("ai_only")
+    setRegularDispatchStrategyInput("none")
+    setRegularDispatchCapacityThresholdInput(0)
+    setRegularUseFullPoolInput(true)
+    setRegularAIToHumanKeywordsInput("")
+    setSelectedRegularTargets([])
+    setFormPriority(100)
+  }
+
+  const applyRegularActionMode = (nextMode: RoutingActionMode) => {
+    const nextStrategy = defaultDispatchStrategyForActionMode(nextMode)
+    setRegularActionModeInput(nextMode)
+    setRegularDispatchStrategyInput(nextStrategy)
+    setRegularDispatchCapacityThresholdInput(
+      nextStrategy === "direct_if_available_else_queue"
+        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+        : 0,
+    )
+    if (nextMode === "ai_only") {
+      setRegularUseFullPoolInput(true)
+      setRegularAIToHumanKeywordsInput("")
+      setSelectedRegularTargets([])
+      return
+    }
+    if (!actionModeSupportsAIToHumanKeywords(nextMode)) {
+      setRegularAIToHumanKeywordsInput("")
+    }
+    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+      setRegularUseFullPoolInput(false)
+      setSelectedRegularTargets((current) =>
+        normalizeSelectionItems(current.filter((item) => item.type === "user")),
+      )
+      return
+    }
+    if (dispatchStrategySupportsHumanScope(nextStrategy)) {
+      setRegularUseFullPoolInput(true)
+      setSelectedRegularTargets([])
+    }
+  }
+
+  const applyRegularDispatchStrategy = (nextStrategy: RoutingDispatchStrategy) => {
+    setRegularDispatchStrategyInput(nextStrategy)
+    setRegularDispatchCapacityThresholdInput(
+      nextStrategy === "direct_if_available_else_queue"
+        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+        : 0,
+    )
+    if (!dispatchStrategySupportsHumanScope(nextStrategy)) {
+      setRegularUseFullPoolInput(true)
+      setSelectedRegularTargets([])
+      return
+    }
+    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+      setRegularUseFullPoolInput(false)
+      setSelectedRegularTargets((current) =>
+        normalizeSelectionItems(current.filter((item) => item.type === "user")),
+      )
+    }
+  }
+
+  const applyFallbackActionMode = (nextMode: RoutingActionMode) => {
+    const nextStrategy = defaultDispatchStrategyForActionMode(nextMode)
+    setFallbackActionModeInput(nextMode)
+    setFallbackDispatchStrategyInput(nextStrategy)
+    setFallbackDispatchCapacityThresholdInput(
+      nextStrategy === "direct_if_available_else_queue"
+        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+        : 0,
+    )
+    if (nextMode === "ai_only") {
+      setFallbackUseFullPoolInput(true)
+      setSelectedFallbackTargets([])
+      return
+    }
+    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+      setFallbackUseFullPoolInput(false)
+      setSelectedFallbackTargets((current) =>
+        normalizeSelectionItems(current.filter((item) => item.type === "user")),
+      )
+      return
+    }
+    if (dispatchStrategySupportsHumanScope(nextStrategy)) {
+      setFallbackUseFullPoolInput(true)
+      setSelectedFallbackTargets([])
+    }
+  }
+
+  const applyFallbackDispatchStrategy = (nextStrategy: RoutingDispatchStrategy) => {
+    setFallbackDispatchStrategyInput(nextStrategy)
+    setFallbackDispatchCapacityThresholdInput(
+      nextStrategy === "direct_if_available_else_queue"
+        ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
+        : 0,
+    )
+    if (!dispatchStrategySupportsHumanScope(nextStrategy)) {
+      setFallbackUseFullPoolInput(true)
+      setSelectedFallbackTargets([])
+      return
+    }
+    if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+      setFallbackUseFullPoolInput(false)
+      setSelectedFallbackTargets((current) =>
+        normalizeSelectionItems(current.filter((item) => item.type === "user")),
+      )
+    }
+  }
+
   const orgCorpID = (organizationView?.integration?.corp_id || "").trim()
   const { departmentMap: orgDepartmentMap, memberMap: orgMemberMap } =
     useMemo(() => buildDirectoryMaps(organizationView), [organizationView])
@@ -672,20 +796,7 @@ export default function RoutingRules() {
     setDrawerNotice("")
     setSelectedRule(null)
     syncFallbackDraftFromDetail(null)
-    setRegularDetail(null)
-    setRegularPoolAssignments([])
-    setFormName("")
-    setFormScene("")
-    setFormSceneParamValue("")
-    setFormSceneParamNonEmpty(false)
-    setRegularActionModeInput("ai_only")
-    setRegularDispatchStrategyInput("none")
-    setRegularDispatchCapacityThresholdInput(DEFAULT_DIRECT_DISPATCH_THRESHOLD)
-    setRegularUseFullPoolInput(true)
-    setRegularAIToHumanKeywordsInput("")
-    setSelectedRegularTargets([])
-    setFormPriority(100)
-    setFormChannelID(filterChannel !== "all" ? filterChannel : (view.channelOptions[0]?.channelId || "").trim())
+    resetRegularDraft(filterChannel !== "all" ? filterChannel : (view.channelOptions[0]?.channelId || "").trim())
     setIsDrawerOpen(true)
   }
 
@@ -1380,9 +1491,18 @@ export default function RoutingRules() {
               <BarChart3 className="h-4 w-4 text-blue-600" />
               规则运行统计
             </h3>
-            <button onClick={() => setNotice("统计口径：基于路由规则运行统计物化数据。")}>
-              <HelpCircle className="h-4 w-4 text-gray-300 cursor-pointer" />
-            </button>
+            <div className="group relative">
+              <button
+                type="button"
+                aria-label="查看统计口径"
+                className="rounded p-1 text-gray-300 hover:bg-gray-50 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <HelpCircle className="h-4 w-4" />
+              </button>
+              <div className="pointer-events-none absolute right-0 top-7 z-20 hidden w-64 rounded-md border border-gray-200 bg-white px-3 py-2 text-[11px] leading-5 text-gray-600 shadow-lg group-hover:block group-focus-within:block">
+                统计口径基于路由规则运行统计物化数据，会随当前筛选渠道和规则集合变化。
+              </div>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -1533,23 +1653,7 @@ export default function RoutingRules() {
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={fallbackActionModeInput}
                     onChange={(event) => {
-                      const nextMode = event.target.value as RoutingActionMode
-                      const nextStrategy = defaultDispatchStrategyForActionMode(nextMode)
-                      setFallbackActionModeInput(nextMode)
-                      setFallbackDispatchStrategyInput(nextStrategy)
-                      setFallbackDispatchCapacityThresholdInput(
-                        nextStrategy === "direct_if_available_else_queue"
-                          ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
-                          : 0,
-                      )
-                      if (nextMode === "ai_only" || dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                        setFallbackUseFullPoolInput(nextMode === "ai_only")
-                      }
-                      if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                        setSelectedFallbackTargets((current) =>
-                          current.filter((item) => item.type === "user"),
-                        )
-                      }
+                      applyFallbackActionMode(event.target.value as RoutingActionMode)
                     }}
                   >
                     {ACTION_MODE_OPTIONS.map((item) => (
@@ -1570,19 +1674,7 @@ export default function RoutingRules() {
                         className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={fallbackDispatchStrategyInput}
                         onChange={(event) => {
-                          const nextStrategy = event.target.value as RoutingDispatchStrategy
-                          setFallbackDispatchStrategyInput(nextStrategy)
-                          setFallbackDispatchCapacityThresholdInput(
-                            nextStrategy === "direct_if_available_else_queue"
-                              ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
-                              : 0,
-                          )
-                          if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                            setFallbackUseFullPoolInput(false)
-                            setSelectedFallbackTargets((current) =>
-                              current.filter((item) => item.type === "user"),
-                            )
-                          }
+                          applyFallbackDispatchStrategy(event.target.value as RoutingDispatchStrategy)
                         }}
                       >
                         {fallbackDispatchOptions.map((item) => (
@@ -1624,7 +1716,10 @@ export default function RoutingRules() {
                               type="radio"
                               name="routing-default-full-pool"
                               checked={fallbackUseFullPoolInput && !fallbackRequiresSpecificUser}
-                              onChange={() => setFallbackUseFullPoolInput(true)}
+                              onChange={() => {
+                                setFallbackUseFullPoolInput(true)
+                                setSelectedFallbackTargets([])
+                              }}
                               disabled={fallbackPoolEmpty || fallbackRequiresSpecificUser}
                               className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
@@ -1717,21 +1812,37 @@ export default function RoutingRules() {
                     <label className="text-xs font-medium text-gray-700">
                       应用渠道 <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={formChannelID}
-                      onChange={(event) => setFormChannelID(event.target.value)}
-                    >
-                      {view.channelOptions.map((channel) => {
-                        const id = (channel.channelId || "").trim()
-                        if (!id) return null
-                        return (
-                          <option key={id} value={id}>
-                            {(channel.label || id).trim()}
-                          </option>
-                        )
-                      })}
-                    </select>
+                    {selectedRule ? (
+                      <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="text-sm font-medium text-gray-900">
+                          {(selectedRule.channel || selectedRule.channelId || "-").trim()}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-gray-500">
+                          已保存的路由规则归属渠道不可修改。如需换渠道，请新建一条规则。
+                        </div>
+                      </div>
+                    ) : (
+                      <select
+                        className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={formChannelID}
+                        onChange={(event) => {
+                          const nextChannelID = event.target.value
+                          if (nextChannelID === formChannelID) return
+                          setFormChannelID(nextChannelID)
+                          clearRegularPoolDraft("已切换应用渠道，请重新选择该渠道接待池中的人工对象。")
+                        }}
+                      >
+                        {view.channelOptions.map((channel) => {
+                          const id = (channel.channelId || "").trim()
+                          if (!id) return null
+                          return (
+                            <option key={id} value={id}>
+                              {(channel.label || id).trim()}
+                            </option>
+                          )
+                        })}
+                      </select>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1813,23 +1924,7 @@ export default function RoutingRules() {
                     className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={regularActionModeInput}
                     onChange={(event) => {
-                      const nextMode = event.target.value as RoutingActionMode
-                      const nextStrategy = defaultDispatchStrategyForActionMode(nextMode)
-                      setRegularActionModeInput(nextMode)
-                      setRegularDispatchStrategyInput(nextStrategy)
-                      setRegularDispatchCapacityThresholdInput(
-                        nextStrategy === "direct_if_available_else_queue"
-                          ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
-                          : 0,
-                      )
-                      if (nextMode === "ai_only" || dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                        setRegularUseFullPoolInput(nextMode === "ai_only")
-                      }
-                      if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                        setSelectedRegularTargets((current) =>
-                          current.filter((item) => item.type === "user"),
-                        )
-                      }
+                      applyRegularActionMode(event.target.value as RoutingActionMode)
                     }}
                   >
                     {ACTION_MODE_OPTIONS.map((item) => (
@@ -1864,19 +1959,7 @@ export default function RoutingRules() {
                         className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         value={regularDispatchStrategyInput}
                         onChange={(event) => {
-                          const nextStrategy = event.target.value as RoutingDispatchStrategy
-                          setRegularDispatchStrategyInput(nextStrategy)
-                          setRegularDispatchCapacityThresholdInput(
-                            nextStrategy === "direct_if_available_else_queue"
-                              ? DEFAULT_DIRECT_DISPATCH_THRESHOLD
-                              : 0,
-                          )
-                          if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                            setRegularUseFullPoolInput(false)
-                            setSelectedRegularTargets((current) =>
-                              current.filter((item) => item.type === "user"),
-                            )
-                          }
+                          applyRegularDispatchStrategy(event.target.value as RoutingDispatchStrategy)
                         }}
                       >
                         {regularDispatchOptions.map((item) => (
@@ -1911,7 +1994,10 @@ export default function RoutingRules() {
                           type="radio"
                           name="routing-regular-full-pool"
                           checked={regularUseFullPoolInput && !regularRequiresSpecificUser}
-                          onChange={() => setRegularUseFullPoolInput(true)}
+                          onChange={() => {
+                            setRegularUseFullPoolInput(true)
+                            setSelectedRegularTargets([])
+                          }}
                           disabled={regularPoolEmpty || regularRequiresSpecificUser}
                           className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
