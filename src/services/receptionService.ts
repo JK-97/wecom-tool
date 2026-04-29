@@ -101,6 +101,14 @@ export type ReceptionChannelDetail = {
   staff_members?: string[];
   servicer_assignments?: Array<{
     userid?: string;
+    raw_servicer_userid?: string;
+    resolved_userid?: string;
+    resolved_open_userid?: string;
+    display_identity?: string;
+    display_fallback?: string;
+    display_userid?: string;
+    resolution_status?: string;
+    role?: string;
     department_id?: number;
     status?: number;
   }>;

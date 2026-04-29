@@ -95,6 +95,13 @@ const assignmentsFromDetailPool = (
   ];
 };
 
+const assignmentsFromDetail = (
+  detail: ReceptionChannelDetail | null,
+): KFServicerAssignment[] => {
+  const assignments = detail?.servicer_assignments || [];
+  return assignments.length > 0 ? assignments : assignmentsFromDetailPool(detail);
+};
+
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -476,8 +483,11 @@ export default function ReceptionChannels() {
           target
       ) {
         const detail = await getReceptionChannelDetail(target);
+        const assignments = assignmentsFromDetail(detail);
         setSelectedChannelDetail(detail);
-        syncFallbackDraftFromDetail(detail, assignmentsFromDetailPool(detail));
+        setServicerAssignments(assignments);
+        setSelectedServicerTargets(selectionItemsFromAssignments(assignments));
+        syncFallbackDraftFromDetail(detail, assignments);
       }
     } catch (error) {
       setNotice(normalizeErrorMessage(error));
@@ -507,8 +517,8 @@ export default function ReceptionChannels() {
     }
     try {
       const detail = await getReceptionChannelDetail(channel.open_kfid);
+      const assignments = assignmentsFromDetail(detail);
       setSelectedChannelDetail(detail);
-      const assignments = assignmentsFromDetailPool(detail);
       setServicerAssignments(assignments);
       setSelectedServicerTargets(
         selectionItemsFromAssignments(assignments),
@@ -805,6 +815,13 @@ export default function ReceptionChannels() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [currentPoolSelection],
   );
+  const fallbackRequiresSpecificUser = dispatchStrategyRequiresSpecificUser(
+    fallbackDispatchStrategyInput,
+  );
+  const fallbackSelectableDepartmentIDs = useMemo(
+    () => (fallbackRequiresSpecificUser ? [] : currentPoolAllowedDepartmentIDs),
+    [currentPoolAllowedDepartmentIDs, fallbackRequiresSpecificUser],
+  );
   const {
     treeRoots: fallbackTreeRoots,
     ungroupedUsers: fallbackUngroupedUserIDs,
@@ -813,9 +830,9 @@ export default function ReceptionChannels() {
       buildSelectedObjectDirectoryTree(
         organizationView,
         currentPoolAllowedUserIDs,
-        currentPoolAllowedDepartmentIDs,
+        fallbackSelectableDepartmentIDs,
       ),
-    [organizationView, currentPoolAllowedDepartmentIDs, currentPoolAllowedUserIDs],
+    [organizationView, currentPoolAllowedUserIDs, fallbackSelectableDepartmentIDs],
   );
   const currentPoolRawUsersByNormalizedID = useMemo(
     () => buildRawServicerIDsByStableIdentity(servicerAssignments),
@@ -840,6 +857,9 @@ export default function ReceptionChannels() {
       DISPATCH_STRATEGY_OPTIONS.ai_only,
     [fallbackActionModeInput],
   );
+  const showFallbackTargetPicker =
+    actionModeRequiresHuman(fallbackActionModeInput) &&
+    (!fallbackUseFullPoolInput || fallbackRequiresSpecificUser);
 
   const promotionURL = (selectedScene?.url || "").trim();
 
@@ -1118,10 +1138,10 @@ export default function ReceptionChannels() {
         setPoolEditorNotice(`接待池保存未完成：失败 ${failureCount} 项。`);
       }
       if (successCount > 0) {
-        const refreshedAssignments = await listKFServicerAssignments(openKFID);
-        setServicerAssignments(refreshedAssignments);
         const refreshedDetail = await getReceptionChannelDetail(openKFID);
+        const refreshedAssignments = assignmentsFromDetail(refreshedDetail);
         setSelectedChannelDetail(refreshedDetail);
+        setServicerAssignments(refreshedAssignments);
         setSelectedServicerTargets(
           selectionItemsFromAssignments(refreshedAssignments),
         );
@@ -1222,8 +1242,10 @@ export default function ReceptionChannels() {
         setFallbackEditorNotice(result?.message || "兜底路由更新失败");
       }
       const refreshedDetail = await getReceptionChannelDetail(openKFID);
+      const refreshedAssignments = assignmentsFromDetail(refreshedDetail);
       setSelectedChannelDetail(refreshedDetail);
-      syncFallbackDraftFromDetail(refreshedDetail);
+      setServicerAssignments(refreshedAssignments);
+      syncFallbackDraftFromDetail(refreshedDetail, refreshedAssignments);
       setIsFallbackEditorOpen(false);
       await loadChannels(keyword);
     } catch (error) {
@@ -2292,7 +2314,12 @@ export default function ReceptionChannels() {
                   nextMode === "ai_only" ||
                   dispatchStrategyRequiresSpecificUser(nextStrategy)
                 ) {
-                  setFallbackUseFullPoolInput(true);
+                  setFallbackUseFullPoolInput(nextMode === "ai_only");
+                }
+                if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+                  setSelectedFallbackTargets((current) =>
+                    current.filter((item) => item.type === "user"),
+                  );
                 }
               }}
               className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -2324,6 +2351,9 @@ export default function ReceptionChannels() {
                     );
                     if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
                       setFallbackUseFullPoolInput(false);
+                      setSelectedFallbackTargets((current) =>
+                        current.filter((item) => item.type === "user"),
+                      );
                     }
                   }}
                   className="w-full h-9 rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -2377,11 +2407,9 @@ export default function ReceptionChannels() {
                 <label className="flex items-start gap-2 text-xs text-gray-700">
                   <input
                     type="radio"
-                    checked={fallbackUseFullPoolInput}
+                    checked={fallbackUseFullPoolInput && !fallbackRequiresSpecificUser}
                     onChange={() => setFallbackUseFullPoolInput(true)}
-                    disabled={dispatchStrategyRequiresSpecificUser(
-                      fallbackDispatchStrategyInput,
-                    )}
+                    disabled={fallbackRequiresSpecificUser}
                     className="mt-0.5"
                   />
                   <span>使用整个接待池（默认）</span>
@@ -2389,25 +2417,18 @@ export default function ReceptionChannels() {
                 <label className="flex items-start gap-2 text-xs text-gray-700">
                   <input
                     type="radio"
-                    checked={!fallbackUseFullPoolInput}
+                    checked={!fallbackUseFullPoolInput || fallbackRequiresSpecificUser}
                     onChange={() => setFallbackUseFullPoolInput(false)}
                     className="mt-0.5"
-                    disabled={
-                      isPoolEmpty ||
-                      dispatchStrategyRequiresSpecificUser(
-                        fallbackDispatchStrategyInput,
-                      )
-                    }
+                    disabled={isPoolEmpty || fallbackRequiresSpecificUser}
                   />
                     <span>自定义候选范围（接待池对象子集）</span>
                   </label>
               </div>
-              {!fallbackUseFullPoolInput ? (
+              {showFallbackTargetPicker ? (
                 <div className="space-y-2">
                   <div className="text-[11px] text-gray-500">
-                    {dispatchStrategyRequiresSpecificUser(
-                      fallbackDispatchStrategyInput,
-                    )
+                    {fallbackRequiresSpecificUser
                       ? "请选择 1 名接待成员，作为直接指定人工。"
                       : "这里只显示当前接待池中的成员和部门。"}
                   </div>
@@ -2425,7 +2446,7 @@ export default function ReceptionChannels() {
                   emptyText="当前接待池中还没有可选对象，请先配置接待池"
                   disabled={isOrgOptionsLoading || isPoolEmpty}
                   allowedUserIDs={currentPoolAllowedUserIDs}
-                  allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
+                  allowedDepartmentIDs={fallbackSelectableDepartmentIDs}
                   />
                 </div>
               ) : null}

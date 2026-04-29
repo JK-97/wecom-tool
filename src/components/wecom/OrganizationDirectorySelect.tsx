@@ -240,14 +240,17 @@ export function buildSelectedObjectDirectoryTree(
     return { treeRoots: [], ungroupedUsers: [] }
   }
 
+  const matchedUserSet = new Set<string>()
   const walk = (node: DirectoryTreeNode): DirectoryTreeNode | null => {
     const departmentID = Number(node.department.department_id || 0)
     const filteredChildren = node.children
       .map(walk)
       .filter(Boolean) as DirectoryTreeNode[]
-    const filteredMembers = node.memberIDs.filter((userID) =>
-      explicitUserSet.has(userID),
-    )
+    const filteredMembers = node.memberIDs.filter((userID) => {
+      const matched = explicitUserSet.has(userID)
+      if (matched) matchedUserSet.add(userID)
+      return matched
+    })
     const explicitDepartment = explicitDepartmentSet.has(departmentID)
     if (!explicitDepartment && filteredChildren.length === 0 && filteredMembers.length === 0) {
       return null
@@ -259,12 +262,31 @@ export function buildSelectedObjectDirectoryTree(
     }
   }
 
+  const treeRoots = fullTree.treeRoots.map(walk).filter(Boolean) as DirectoryTreeNode[]
+  const fallbackUngroupedUsers = Array.from(explicitUserSet).filter(
+    (userID) => !matchedUserSet.has(userID),
+  )
+
   return {
-    treeRoots: fullTree.treeRoots.map(walk).filter(Boolean) as DirectoryTreeNode[],
-    ungroupedUsers: fullTree.ungroupedUsers.filter((userID) =>
-      explicitUserSet.has(userID),
-    ),
+    treeRoots,
+    ungroupedUsers: normalizeSelectionItems([
+      ...fullTree.ungroupedUsers
+        .filter((userID) => explicitUserSet.has(userID))
+        .map((userID) => ({ type: "user" as const, id: userID })),
+      ...fallbackUngroupedUsers.map((userID) => ({ type: "user" as const, id: userID })),
+    ]).map((item) => item.id),
   }
+}
+
+const collectDepartmentIDs = (nodes: DirectoryTreeNode[]): number[] => {
+  const ids: number[] = []
+  const walk = (node: DirectoryTreeNode) => {
+    const departmentID = Number(node.department.department_id || 0)
+    if (departmentID > 0) ids.push(departmentID)
+    node.children.forEach(walk)
+  }
+  nodes.forEach(walk)
+  return ids
 }
 
 export function OrganizationDirectorySelect({
@@ -285,18 +307,11 @@ export function OrganizationDirectorySelect({
 }: OrganizationDirectorySelectProps) {
   const [query, setQuery] = useState("")
   const [expandedDepartments, setExpandedDepartments] = useState<Set<number>>(
-    () =>
-      new Set(
-        treeRoots.map((item) => Number(item.department.department_id || 0)),
-      ),
+    () => new Set(collectDepartmentIDs(treeRoots)),
   )
 
   useEffect(() => {
-    setExpandedDepartments(
-      new Set(
-        treeRoots.map((item) => Number(item.department.department_id || 0)),
-      ),
-    )
+    setExpandedDepartments(new Set(collectDepartmentIDs(treeRoots)))
   }, [treeRoots])
 
   const selectedKeys = useMemo(

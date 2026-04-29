@@ -197,6 +197,29 @@ function dispatchStrategyRequiresSpecificUser(strategy?: string): boolean {
   return (strategy || "").trim() === "specific_user"
 }
 
+function assignmentsFromReceptionDetail(
+  detail: ReceptionChannelDetail | null,
+): KFServicerAssignment[] {
+  const assignments = detail?.servicer_assignments || []
+  if (assignments.length > 0) return assignments
+  const pool = detail?.reception_pool
+  return [
+    ...((pool?.user_ids || [])
+      .map((userid) => String(userid || "").trim())
+      .filter(Boolean)
+      .map((userid) => ({
+        userid,
+        raw_servicer_userid: userid,
+        display_fallback: userid,
+        resolution_status: "local_view",
+      }))),
+    ...((pool?.department_ids || [])
+      .map((departmentID) => Number(departmentID || 0))
+      .filter((departmentID) => Number.isInteger(departmentID) && departmentID > 0)
+      .map((departmentID) => ({ department_id: departmentID }))),
+  ]
+}
+
 function parseJSONRecord(raw?: string): Record<string, unknown> {
   const text = String(raw || "").trim()
   if (!text) return {}
@@ -389,6 +412,13 @@ export default function RoutingRules() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [fallbackPoolAssignments],
   )
+  const fallbackRequiresSpecificUser = dispatchStrategyRequiresSpecificUser(
+    fallbackDispatchStrategyInput,
+  )
+  const fallbackSelectableDepartmentIDs = useMemo(
+    () => (fallbackRequiresSpecificUser ? [] : currentPoolAllowedDepartmentIDs),
+    [currentPoolAllowedDepartmentIDs, fallbackRequiresSpecificUser],
+  )
   const {
     treeRoots: fallbackTreeRoots,
     ungroupedUsers: fallbackUngroupedUserIDs,
@@ -397,9 +427,9 @@ export default function RoutingRules() {
       buildSelectedObjectDirectoryTree(
         organizationView,
         currentPoolAllowedUserIDs,
-        currentPoolAllowedDepartmentIDs,
+        fallbackSelectableDepartmentIDs,
       ),
-    [organizationView, currentPoolAllowedDepartmentIDs, currentPoolAllowedUserIDs],
+    [organizationView, currentPoolAllowedUserIDs, fallbackSelectableDepartmentIDs],
   )
   const fallbackPoolEmpty =
     fallbackDetail?.reception_pool?.empty === true ||
@@ -419,6 +449,13 @@ export default function RoutingRules() {
         .filter((item) => Number.isInteger(item) && item > 0),
     [regularPoolAssignments],
   )
+  const regularRequiresSpecificUser = dispatchStrategyRequiresSpecificUser(
+    regularDispatchStrategyInput,
+  )
+  const regularSelectableDepartmentIDs = useMemo(
+    () => (regularRequiresSpecificUser ? [] : currentRegularPoolAllowedDepartmentIDs),
+    [currentRegularPoolAllowedDepartmentIDs, regularRequiresSpecificUser],
+  )
   const {
     treeRoots: regularTreeRoots,
     ungroupedUsers: regularUngroupedUserIDs,
@@ -427,9 +464,9 @@ export default function RoutingRules() {
       buildSelectedObjectDirectoryTree(
         organizationView,
         currentRegularPoolAllowedUserIDs,
-        currentRegularPoolAllowedDepartmentIDs,
+        regularSelectableDepartmentIDs,
       ),
-    [organizationView, currentRegularPoolAllowedDepartmentIDs, currentRegularPoolAllowedUserIDs],
+    [organizationView, currentRegularPoolAllowedUserIDs, regularSelectableDepartmentIDs],
   )
   const selectedRegularTargetsDeduped = useMemo(
     () => normalizeSelectionItems(selectedRegularTargets),
@@ -463,6 +500,11 @@ export default function RoutingRules() {
     () => DISPATCH_STRATEGY_OPTIONS[regularActionModeInput] || DISPATCH_STRATEGY_OPTIONS.ai_only,
     [regularActionModeInput],
   )
+  const showFallbackTargetPicker =
+    dispatchStrategySupportsHumanScope(fallbackDispatchStrategyInput) &&
+    (!fallbackUseFullPoolInput || fallbackRequiresSpecificUser)
+  const showRegularTargetPicker =
+    !regularUseFullPoolInput || regularRequiresSpecificUser
 
   const loadView = async (
     channel: string,
@@ -515,11 +557,14 @@ export default function RoutingRules() {
     void (async () => {
       try {
         setIsOrgOptionsLoading(true)
-        const [detail, orgView, assignments] = await Promise.all([
+        const [detail, orgView] = await Promise.all([
           getReceptionChannelDetail(channelID),
           organizationView ? Promise.resolve(organizationView) : getOrganizationSettingsView(),
-          listKFServicerAssignments(channelID),
         ])
+        let assignments = assignmentsFromReceptionDetail(detail)
+        if (assignments.length === 0) {
+          assignments = await listKFServicerAssignments(channelID)
+        }
         if (!active) return
         setFallbackPoolAssignments(assignments)
         syncFallbackDraftFromDetail(detail, assignments)
@@ -548,11 +593,14 @@ export default function RoutingRules() {
     void (async () => {
       try {
         setIsOrgOptionsLoading(true)
-        const [detail, orgView, assignments] = await Promise.all([
+        const [detail, orgView] = await Promise.all([
           getReceptionChannelDetail(channelID),
           organizationView ? Promise.resolve(organizationView) : getOrganizationSettingsView(),
-          listKFServicerAssignments(channelID),
         ])
+        let assignments = assignmentsFromReceptionDetail(detail)
+        if (assignments.length === 0) {
+          assignments = await listKFServicerAssignments(channelID)
+        }
         if (!active) return
         setRegularDetail(detail)
         setRegularPoolAssignments(assignments)
@@ -1495,7 +1543,12 @@ export default function RoutingRules() {
                           : 0,
                       )
                       if (nextMode === "ai_only" || dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                        setFallbackUseFullPoolInput(true)
+                        setFallbackUseFullPoolInput(nextMode === "ai_only")
+                      }
+                      if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+                        setSelectedFallbackTargets((current) =>
+                          current.filter((item) => item.type === "user"),
+                        )
                       }
                     }}
                   >
@@ -1526,6 +1579,9 @@ export default function RoutingRules() {
                           )
                           if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
                             setFallbackUseFullPoolInput(false)
+                            setSelectedFallbackTargets((current) =>
+                              current.filter((item) => item.type === "user"),
+                            )
                           }
                         }}
                       >
@@ -1567,9 +1623,9 @@ export default function RoutingRules() {
                             <input
                               type="radio"
                               name="routing-default-full-pool"
-                              checked={fallbackUseFullPoolInput}
+                              checked={fallbackUseFullPoolInput && !fallbackRequiresSpecificUser}
                               onChange={() => setFallbackUseFullPoolInput(true)}
-                              disabled={fallbackPoolEmpty || dispatchStrategyRequiresSpecificUser(fallbackDispatchStrategyInput)}
+                              disabled={fallbackPoolEmpty || fallbackRequiresSpecificUser}
                               className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
                             <span>
@@ -1585,9 +1641,9 @@ export default function RoutingRules() {
                             <input
                               type="radio"
                               name="routing-default-full-pool"
-                              checked={!fallbackUseFullPoolInput}
+                              checked={!fallbackUseFullPoolInput || fallbackRequiresSpecificUser}
                               onChange={() => setFallbackUseFullPoolInput(false)}
-                              disabled={fallbackPoolEmpty}
+                              disabled={fallbackPoolEmpty || fallbackRequiresSpecificUser}
                               className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
                             <span>
@@ -1600,10 +1656,10 @@ export default function RoutingRules() {
                             </span>
                           </label>
                         </div>
-                        {!fallbackUseFullPoolInput ? (
+                        {showFallbackTargetPicker ? (
                           <div className="space-y-2">
                             <div className="text-[11px] text-gray-500">
-                              {dispatchStrategyRequiresSpecificUser(fallbackDispatchStrategyInput)
+                              {fallbackRequiresSpecificUser
                                 ? "请选择 1 名接待成员，作为直接指定人工。"
                                 : "这里只显示当前接待池中的成员和部门。"}
                             </div>
@@ -1623,7 +1679,7 @@ export default function RoutingRules() {
                               emptyText="当前接待池中还没有可选对象，请先配置接待池"
                               disabled={isOrgOptionsLoading || fallbackPoolEmpty}
                               allowedUserIDs={currentPoolAllowedUserIDs}
-                              allowedDepartmentIDs={currentPoolAllowedDepartmentIDs}
+                              allowedDepartmentIDs={fallbackSelectableDepartmentIDs}
                             />
                           </div>
                         ) : null}
@@ -1767,7 +1823,12 @@ export default function RoutingRules() {
                           : 0,
                       )
                       if (nextMode === "ai_only" || dispatchStrategyRequiresSpecificUser(nextStrategy)) {
-                        setRegularUseFullPoolInput(true)
+                        setRegularUseFullPoolInput(nextMode === "ai_only")
+                      }
+                      if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
+                        setSelectedRegularTargets((current) =>
+                          current.filter((item) => item.type === "user"),
+                        )
                       }
                     }}
                   >
@@ -1812,6 +1873,9 @@ export default function RoutingRules() {
                           )
                           if (dispatchStrategyRequiresSpecificUser(nextStrategy)) {
                             setRegularUseFullPoolInput(false)
+                            setSelectedRegularTargets((current) =>
+                              current.filter((item) => item.type === "user"),
+                            )
                           }
                         }}
                       >
@@ -1846,9 +1910,9 @@ export default function RoutingRules() {
                         <input
                           type="radio"
                           name="routing-regular-full-pool"
-                          checked={regularUseFullPoolInput}
+                          checked={regularUseFullPoolInput && !regularRequiresSpecificUser}
                           onChange={() => setRegularUseFullPoolInput(true)}
-                          disabled={regularPoolEmpty || dispatchStrategyRequiresSpecificUser(regularDispatchStrategyInput)}
+                          disabled={regularPoolEmpty || regularRequiresSpecificUser}
                           className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span>
@@ -1860,9 +1924,9 @@ export default function RoutingRules() {
                         <input
                           type="radio"
                           name="routing-regular-full-pool"
-                          checked={!regularUseFullPoolInput}
+                          checked={!regularUseFullPoolInput || regularRequiresSpecificUser}
                           onChange={() => setRegularUseFullPoolInput(false)}
-                          disabled={regularPoolEmpty}
+                          disabled={regularPoolEmpty || regularRequiresSpecificUser}
                           className="mt-0.5 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span>
@@ -1871,10 +1935,10 @@ export default function RoutingRules() {
                         </span>
                       </label>
                     </div>
-                    {!regularUseFullPoolInput ? (
+                    {showRegularTargetPicker ? (
                       <div className="space-y-2">
                         <div className="text-[11px] text-gray-500">
-                          {dispatchStrategyRequiresSpecificUser(regularDispatchStrategyInput)
+                          {regularRequiresSpecificUser
                             ? "请选择 1 名接待成员，作为直接指定人工。"
                             : "这里只显示当前接待池中的成员和部门。"}
                         </div>
@@ -1892,7 +1956,7 @@ export default function RoutingRules() {
                           emptyText="当前接待池中还没有可选对象，请先配置接待池"
                           disabled={isOrgOptionsLoading || regularPoolEmpty}
                           allowedUserIDs={currentRegularPoolAllowedUserIDs}
-                          allowedDepartmentIDs={currentRegularPoolAllowedDepartmentIDs}
+                          allowedDepartmentIDs={regularSelectableDepartmentIDs}
                         />
                       </div>
                     ) : null}
