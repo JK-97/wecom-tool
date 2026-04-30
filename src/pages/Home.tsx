@@ -166,11 +166,11 @@ export default function Home() {
                   <CardHeader className="p-4">
                     <CardTitle className="text-base flex items-center gap-2">
                       <UsersRound className="h-4 w-4 text-pink-500" />
-                      11. 群运营详情
+                      11. 客户群
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-4 pb-4 text-sm text-gray-500">
-                    群画像、活跃度分析与运营动态。
+                    查看真实客户群、群主、成员和同步状态。
                   </CardContent>
                 </Card>
               </Link>

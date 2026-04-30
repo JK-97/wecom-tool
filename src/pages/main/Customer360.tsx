@@ -24,6 +24,16 @@ import { normalizeErrorMessage } from "@/services/http"
 
 type TimelineTab = "all" | "cs" | "sales" | "order"
 
+function formatDateTime(value?: string): string {
+  const text = (value || "").trim()
+  if (!text) return ""
+  const parsed = Date.parse(text)
+  if (Number.isNaN(parsed)) {
+    return text
+  }
+  return new Date(parsed).toLocaleString("zh-CN", { hour12: false })
+}
+
 export default function Customer360() {
   const [isModifyModalOpen, setIsModifyModalOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<TimelineTab>("all")
@@ -91,6 +101,7 @@ export default function Customer360() {
   const tags = useMemo(() => (view?.tags || []).map((item) => (item || "").trim()).filter(Boolean), [view?.tags])
   const timeline = useMemo(() => view?.timeline || [], [view?.timeline])
   const firstTask = (view?.tasks || [])[0]
+  const lastSyncedAt = formatDateTime(view?.last_synced_at || view?.contact?.last_synced_at || view?.updated_at || view?.contact?.updated_at)
 
   const handleSaveProfile = async () => {
     if (!externalUserID) return
@@ -158,6 +169,9 @@ export default function Customer360() {
               <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                 {(view?.stage || "意向沟通中").trim()}
               </Badge>
+            </div>
+            <div className="mt-4 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-500">
+              本页展示本地同步结果{lastSyncedAt ? `，最近同步：${lastSyncedAt}` : "，同步时间以客户联系状态为准"}。
             </div>
           </CardContent>
         </Card>

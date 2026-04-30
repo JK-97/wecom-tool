@@ -30,11 +30,15 @@ export type Customer360ViewModel = {
     avatar?: string
     owner_userid?: string
     tags_json?: string
+    updated_at?: string
+    last_synced_at?: string
   }
   tags?: string[]
   stage?: string
   owner_userid?: string
   source_channel?: string
+  updated_at?: string
+  last_synced_at?: string
   timeline?: Customer360TimelineItem[]
   tasks?: Customer360Task[]
   ai_summary?: string

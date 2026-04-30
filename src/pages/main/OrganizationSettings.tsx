@@ -724,6 +724,7 @@ export default function OrganizationSettings() {
       case "contact_crm":
         return [
           { label: "权限：客户联系能力", passed: isPermissionGranted(permissionStatusByCode.get("contact_capability") || "") },
+          { label: "权限：客户基础信息", passed: isPermissionGranted(permissionStatusByCode.get("customer_basic_info") || "") },
           { label: "对象：客户联系能力就绪", passed: isObjectPassed(contactDomain.status), count: contactDomain.count },
         ]
       case "toolbar_runtime":

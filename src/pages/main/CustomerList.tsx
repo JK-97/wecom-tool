@@ -3,10 +3,15 @@ import { Button } from "@/components/ui/Button"
 import { Avatar } from "@/components/ui/Avatar"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { Dialog } from "@/components/ui/Dialog"
-import { Search, Filter, ChevronLeft, ChevronRight, MessageSquare, UserPlus, Edit2, Loader2 } from "lucide-react"
+import { Search, Filter, ChevronLeft, ChevronRight, MessageSquare, UserPlus, Edit2, Loader2, RefreshCw } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { normalizeErrorMessage } from "@/services/http"
+import { useAuth } from "@/context/AuthContext"
+import { CustomerContactSyncPanel } from "@/components/crm/CustomerContactSyncPanel"
+import { CustomerTagList } from "@/components/crm/CustomerTagList"
+import { usePageFeedback } from "@/components/ui/PageFeedback"
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 import {
   executeCustomerListCommand,
   getCustomerListView,
@@ -19,6 +24,58 @@ type CustomerTab = "all" | "today" | "todo" | "upgraded"
 
 const PAGE_SIZE = 10
 const KNOWN_STAGES = ["意向沟通中", "已报价待签", "已成交", "流失"]
+
+function readInitialCustomerFilters(): {
+  tab: CustomerTab
+  query: string
+  stage: string
+  tag: string
+  owner: string
+  page: number
+} {
+  if (typeof window === "undefined") {
+    return {
+      tab: "all" as CustomerTab,
+      query: "",
+      stage: "",
+      tag: "",
+      owner: "",
+      page: 1,
+    }
+  }
+  const params = new URLSearchParams(window.location.search)
+  const tab = params.get("tab")
+  const page = Number(params.get("page") || 1)
+  return {
+    tab: tab === "today" || tab === "todo" || tab === "upgraded" ? tab : "all",
+    query: (params.get("query") || "").trim(),
+    stage: (params.get("stage") || "").trim(),
+    tag: (params.get("tag") || "").trim(),
+    owner: (params.get("owner_userid") || "").trim(),
+    page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+  }
+}
+
+function replaceCustomerFilterURL(input: {
+  tab: CustomerTab
+  query: string
+  stage: string
+  tag: string
+  owner: string
+  page: number
+}) {
+  if (typeof window === "undefined") return
+  const params = new URLSearchParams()
+  if (input.tab !== "all") params.set("tab", input.tab)
+  if (input.query.trim()) params.set("query", input.query.trim())
+  if (input.stage.trim()) params.set("stage", input.stage.trim())
+  if (input.tag.trim()) params.set("tag", input.tag.trim())
+  if (input.owner.trim()) params.set("owner_userid", input.owner.trim())
+  if (input.page > 1) params.set("page", String(input.page))
+  const query = params.toString()
+  const nextURL = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+  window.history.replaceState({}, "", nextURL)
+}
 
 function formatDateTime(value?: string): string {
   const text = (value || "").trim()
@@ -72,20 +129,21 @@ function buildPaginationPages(currentPage: number, totalPages: number): Array<nu
 }
 
 export default function CustomerList() {
+  const initialFilters = useMemo(() => readInitialCustomerFilters(), [])
+  const auth = useAuth()
+  const { showFeedback } = usePageFeedback()
   const [isModifyModalOpen, setIsModifyModalOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [isImporting, setIsImporting] = useState(false)
   const [isBatchAssigning, setIsBatchAssigning] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [notice, setNotice] = useState("")
 
-  const [activeTab, setActiveTab] = useState<CustomerTab>("all")
-  const [queryInput, setQueryInput] = useState("")
-  const [query, setQuery] = useState("")
-  const [stage, setStage] = useState("")
-  const [tag, setTag] = useState("")
-  const [owner, setOwner] = useState("")
-  const [page, setPage] = useState(1)
+  const [activeTab, setActiveTab] = useState<CustomerTab>(initialFilters.tab)
+  const [queryInput, setQueryInput] = useState(initialFilters.query)
+  const [query, setQuery] = useState(initialFilters.query)
+  const [stage, setStage] = useState(initialFilters.stage)
+  const [tag, setTag] = useState(initialFilters.tag)
+  const [owner, setOwner] = useState(initialFilters.owner)
+  const [page, setPage] = useState(initialFilters.page)
 
   const [view, setView] = useState<CustomerListViewModel | null>(null)
   const [selectedIDs, setSelectedIDs] = useState<string[]>([])
@@ -98,11 +156,20 @@ export default function CustomerList() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setQuery(queryInput.trim())
-      setPage(1)
+      const nextQuery = queryInput.trim()
+      setQuery((previous) => {
+        if (previous !== nextQuery) {
+          setPage(1)
+        }
+        return nextQuery
+      })
     }, 260)
     return () => window.clearTimeout(timer)
   }, [queryInput])
+
+  useEffect(() => {
+    replaceCustomerFilterURL({ tab: activeTab, query, stage, tag, owner, page })
+  }, [activeTab, query, stage, tag, owner, page])
 
   const loadView = useCallback(async () => {
     try {
@@ -120,13 +187,13 @@ export default function CustomerList() {
       const currentIDs = new Set((data?.rows || []).map((row) => (row.external_userid || "").trim()).filter((id) => id !== ""))
       setSelectedIDs((previous) => previous.filter((id) => currentIDs.has(id)))
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showFeedback({ kind: "error", message: normalizeErrorMessage(error) })
       setView(null)
       setSelectedIDs([])
     } finally {
       setIsLoading(false)
     }
-  }, [activeTab, query, stage, tag, owner, page])
+  }, [activeTab, query, stage, tag, owner, page, showFeedback])
 
   useEffect(() => {
     void loadView()
@@ -203,7 +270,7 @@ export default function CustomerList() {
   const handleSaveCustomer = async () => {
     const externalUserID = (editingCustomer?.external_userid || "").trim()
     if (!externalUserID) {
-      setNotice("当前客户缺少 external_userid，无法保存")
+      showFeedback({ kind: "warning", message: "当前客户缺少 external_userid，无法保存" })
       return
     }
     try {
@@ -217,11 +284,11 @@ export default function CustomerList() {
           tags: editTags,
         },
       })
-      setNotice((result?.message || "客户信息已更新").trim())
+      showFeedback({ kind: "success", message: (result?.message || "客户信息已更新").trim() })
       setIsModifyModalOpen(false)
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showFeedback({ kind: "error", message: normalizeErrorMessage(error) })
     } finally {
       setIsSaving(false)
     }
@@ -229,12 +296,12 @@ export default function CustomerList() {
 
   const handleBatchAssign = async () => {
     if (selectedIDs.length === 0) {
-      setNotice("请先勾选至少一位客户")
+      showFeedback({ kind: "warning", message: "请先勾选至少一位客户" })
       return
     }
     const targetOwner = owner.trim()
     if (!targetOwner) {
-      setNotice("请先在“负责人”筛选中选择要分配给谁")
+      showFeedback({ kind: "warning", message: "请先在“负责人”筛选中选择目标平台负责人" })
       return
     }
     try {
@@ -246,33 +313,13 @@ export default function CustomerList() {
           owner_userid: targetOwner,
         },
       })
-      setNotice((result?.message || "批量分配完成").trim())
+      showFeedback({ kind: "success", message: (result?.message || "平台负责人已调整").trim() })
       setSelectedIDs([])
       await loadView()
     } catch (error) {
-      setNotice(normalizeErrorMessage(error))
+      showFeedback({ kind: "error", message: normalizeErrorMessage(error) })
     } finally {
       setIsBatchAssigning(false)
-    }
-  }
-
-  const handleImportCustomers = async () => {
-    try {
-      setIsImporting(true)
-      const result = await executeCustomerListCommand({
-        command: "import_customers",
-        payload: {
-          count: 3,
-          name_prefix: "导入客户",
-        },
-      })
-      setNotice((result?.message || "导入完成").trim())
-      setPage(1)
-      await loadView()
-    } catch (error) {
-      setNotice(normalizeErrorMessage(error))
-    } finally {
-      setIsImporting(false)
     }
   }
 
@@ -309,19 +356,28 @@ export default function CustomerList() {
             disabled={isBatchAssigning || selectedIDs.length === 0}
           >
             {isBatchAssigning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-            批量分配
+            调整平台负责人
           </Button>
-          <Button className="bg-blue-600 hover:bg-blue-700" onClick={handleImportCustomers} disabled={isImporting}>
-            {isImporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-            导入客户
+          <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void loadView()} disabled={isLoading}>
+            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+            刷新列表
           </Button>
         </div>
       </div>
+
+      <CustomerContactSyncPanel
+        compact
+        className="mx-4 mt-4 shrink-0"
+        onRetryDone={loadView}
+        onRefreshData={loadView}
+      />
 
       <div className="p-4 border-b border-gray-100 bg-white flex items-center gap-4 shrink-0">
         <div className="relative w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
+            id="customer-list-search"
+            name="customer_list_search"
             type="text"
             value={queryInput}
             onChange={(event) => setQueryInput(event.target.value)}
@@ -331,6 +387,8 @@ export default function CustomerList() {
         </div>
         <div className="h-6 w-px bg-gray-200 mx-2"></div>
         <select
+          id="customer-stage-filter"
+          name="customer_stage_filter"
           className="h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={stage}
           onChange={(event) => {
@@ -346,6 +404,8 @@ export default function CustomerList() {
           ))}
         </select>
         <select
+          id="customer-tag-filter"
+          name="customer_tag_filter"
           className="h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={tag}
           onChange={(event) => {
@@ -361,6 +421,8 @@ export default function CustomerList() {
           ))}
         </select>
         <select
+          id="customer-owner-filter"
+          name="customer_owner_filter"
           className="h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={owner}
           onChange={(event) => {
@@ -387,11 +449,9 @@ export default function CustomerList() {
             setPage(1)
           }}
         >
-          <Filter className="w-4 h-4 mr-2" /> 更多筛选
+          <Filter className="w-4 h-4 mr-2" /> 清空筛选
         </Button>
       </div>
-
-      {notice ? <div className="px-4 py-2 text-xs text-blue-600 border-b border-gray-100 bg-blue-50">{notice}</div> : null}
 
       <div className="flex-1 overflow-auto bg-white">
         <table className="w-full text-left text-sm text-gray-600 border-separate border-spacing-0">
@@ -425,7 +485,18 @@ export default function CustomerList() {
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-6 py-10 text-center text-sm text-gray-500">暂无客户数据</td>
+                <td colSpan={8} className="px-6 py-14 text-center text-sm text-gray-500">
+                  <div className="mx-auto flex max-w-sm flex-col items-center">
+                    <div className="text-sm font-semibold text-gray-900">
+                      {query || stage || tag || owner ? "没有匹配的客户" : "暂无客户数据"}
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-gray-500">
+                      {query || stage || tag || owner
+                        ? "可以清空搜索或筛选条件后再查看。"
+                        : "客户数据来自企业微信客户联系同步，同步完成后会展示在这里。"}
+                    </div>
+                  </div>
+                </td>
               </tr>
             ) : (
               rows.map((row) => {
@@ -433,7 +504,8 @@ export default function CustomerList() {
                 const tags = normalizeTagList(row.tags).filter((item) => shouldDisplayTag(item))
                 const checked = externalUserID !== "" && selectedIDs.includes(externalUserID)
                 const customerName = (row.name || "").trim() || "未命名客户"
-                const ownerName = (row.owner_name || "").trim() || (row.owner_userid || "").trim() || "待分配"
+                const ownerUserID = (row.owner_userid || "").trim()
+                const ownerName = (row.owner_name || "").trim() || ownerUserID || "待分配"
                 return (
                   <tr key={externalUserID || customerName} className="hover:bg-blue-50/40 transition-colors group">
                     <td className="px-6 py-4">
@@ -477,21 +549,7 @@ export default function CustomerList() {
                       </Badge>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {tags.length === 0 ? (
-                          <span className="text-xs text-gray-400">-</span>
-                        ) : (
-                          tags.slice(0, 3).map((item) => (
-                            <Badge
-                              key={`${externalUserID}-${item}`}
-                              variant="secondary"
-                              className="text-[10px] px-1.5 py-0 bg-gray-100 text-gray-600 border-transparent font-medium"
-                            >
-                              {item}
-                            </Badge>
-                          ))
-                        )}
-                      </div>
+                      <CustomerTagList tags={tags} maxVisible={4} />
                     </td>
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">{formatDateTime(row.last_interaction_at)}</div>
@@ -503,7 +561,16 @@ export default function CustomerList() {
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         <Avatar src={(row.owner_avatar || "").trim()} fallback={ownerName.charAt(0)} size="xs" />
-                        <span className="text-sm text-gray-700">{ownerName}</span>
+                        {ownerUserID ? (
+                          <WecomOpenDataName
+                            userid={ownerUserID}
+                            corpId={auth.corp?.id}
+                            fallback={ownerName}
+                            className="truncate text-sm text-gray-700"
+                          />
+                        ) : (
+                          <span className="text-sm text-gray-500">待分配</span>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
@@ -655,6 +722,8 @@ export default function CustomerList() {
                     addEditTag()
                   }
                 }}
+                id="customer-edit-tag-input"
+                name="customer_edit_tag"
                 placeholder="搜索或添加标签..."
                 className="w-full pl-9 pr-4 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
