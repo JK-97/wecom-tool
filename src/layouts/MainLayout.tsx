@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/Button"
 import { useAuth } from "@/context/AuthContext"
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
+import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment"
 
 const navItems = [
   { name: "微信客服中心", path: "/main/cs-center", icon: MessageSquare },
@@ -19,6 +20,44 @@ const navItems = [
   { name: "使用指南", path: "/main/guide", icon: HelpCircle },
 ]
 
+type LayoutDepartment = {
+  departmentID: number
+  name?: string
+}
+
+function MainLayoutDepartmentList({
+  departments,
+  corpId,
+  className,
+  prefix,
+}: {
+  departments: LayoutDepartment[]
+  corpId?: string
+  className?: string
+  prefix?: string
+}) {
+  const validDepartments = departments.filter((item) => Number(item.departmentID || 0) > 0)
+  if (validDepartments.length === 0) return null
+  return (
+    <span className={cn("inline-flex min-w-0 items-center gap-1", className)}>
+      {prefix ? <span className="shrink-0">{prefix}</span> : null}
+      <span className="inline-flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
+        {validDepartments.map((department, index) => (
+          <span key={department.departmentID} className="inline-flex min-w-0 items-center">
+            {index > 0 ? <span className="mx-1 text-gray-400">/</span> : null}
+            <WecomOpenDataDepartment
+              departmentId={department.departmentID}
+              corpId={corpId}
+              fallback={(department.name || "").trim() || `部门 #${department.departmentID}`}
+              className="max-w-[120px] truncate"
+            />
+          </span>
+        ))}
+      </span>
+    </span>
+  )
+}
+
 export default function MainLayout() {
   const location = useLocation()
   const auth = useAuth()
@@ -28,9 +67,7 @@ export default function MainLayout() {
     window.location.assign("/login")
   }
 
-  const departmentNames = (auth.user?.departments || [])
-    .map((item) => (item.name || "").trim())
-    .filter(Boolean)
+  const departments = auth.user?.departments || []
 
   return (
     <div className="flex h-screen w-full bg-[#F0F2F5]">
@@ -77,9 +114,18 @@ export default function MainLayout() {
                 className="truncate text-sm font-medium text-gray-900"
                 hintClassName="text-[10px] text-gray-400"
               />
-              <span className="text-xs text-gray-500">
+              <span className="inline-flex min-w-0 items-center gap-1 text-xs text-gray-500">
                 {auth.user?.userid || "-"}
-                {departmentNames.length > 0 ? ` · ${departmentNames.join(" / ")}` : ""}
+                {departments.length > 0 ? (
+                  <>
+                    <span className="text-gray-400">·</span>
+                    <MainLayoutDepartmentList
+                      departments={departments}
+                      corpId={auth.corp?.id}
+                      className="min-w-0"
+                    />
+                  </>
+                ) : null}
               </span>
             </div>
           </div>
@@ -94,7 +140,12 @@ export default function MainLayout() {
           </h1>
           <div className="flex items-center gap-4">
             {auth.corp?.id ? <span className="text-xs text-gray-500">{auth.corp.name || auth.corp.id}</span> : null}
-            {departmentNames.length > 0 ? <span className="text-xs text-gray-500">部门：{departmentNames.join(" / ")}</span> : null}
+            <MainLayoutDepartmentList
+              departments={departments}
+              corpId={auth.corp?.id}
+              className="max-w-[320px] text-xs text-gray-500"
+              prefix="部门："
+            />
             <Link to="/" className="text-sm text-blue-600 hover:underline">返回导航页</Link>
             <Button size="sm" variant="outline" onClick={() => void handleLogout()}>
               <LogOut className="mr-1 h-3.5 w-3.5" />
