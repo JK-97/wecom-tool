@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertCircle, CheckCircle2, Clock3, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
@@ -62,44 +62,65 @@ function latestTask(tasks?: CustomerContactSyncTask[]): CustomerContactSyncTask 
   return rows[0]
 }
 
+function activeSyncCount(status?: CustomerContactSyncStatus | null): number {
+  return readCount(status?.status_counts, "pending", "queued", "processing", "running")
+}
+
 export function CustomerContactSyncPanel({
   className,
   compact = false,
+  refreshKey,
   onRetryDone,
   onRefreshData,
 }: {
   className?: string
   compact?: boolean
+  refreshKey?: number | string
   onRetryDone?: () => void | Promise<void>
   onRefreshData?: () => void | Promise<void>
 }) {
   const { showFeedback } = usePageFeedback()
+  const didMountRef = useRef(false)
   const [status, setStatus] = useState<CustomerContactSyncStatus | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
   const [isForbidden, setIsForbidden] = useState(false)
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (options?: { silent?: boolean }) => {
     try {
-      setIsLoading(true)
+      if (!options?.silent) {
+        setIsLoading(true)
+      }
       const data = await getCustomerContactSyncStatus()
       setStatus(data)
       setIsForbidden(false)
+      return data
     } catch (error) {
       if (error instanceof APIRequestError && error.status === 403) {
         setStatus(null)
         setIsForbidden(true)
-        return
+        return null
       }
       showFeedback({ kind: "error", message: normalizeErrorMessage(error) })
+      return null
     } finally {
-      setIsLoading(false)
+      if (!options?.silent) {
+        setIsLoading(false)
+      }
     }
   }, [showFeedback])
 
   useEffect(() => {
     void reload()
   }, [reload])
+
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true
+      return
+    }
+    void reload({ silent: true })
+  }, [refreshKey, reload])
 
   const summary = useMemo(() => {
     const counts = status?.status_counts
@@ -143,8 +164,28 @@ export function CustomerContactSyncPanel({
   }, [status])
 
   const failedCount = readCount(status?.status_counts, "retryable", "dead", "failed")
+  const activeCount = activeSyncCount(status)
+  const hasActiveSync = activeCount > 0
   const canRetry = Boolean(status?.can_retry) && failedCount > 0
   const Icon = summary.icon
+
+  useEffect(() => {
+    if (isForbidden || !hasActiveSync) return
+    let cancelled = false
+    let refreshedAfterSettled = false
+    const timer = window.setInterval(() => {
+      void (async () => {
+        const nextStatus = await reload({ silent: true })
+        if (cancelled || activeSyncCount(nextStatus) > 0 || refreshedAfterSettled) return
+        refreshedAfterSettled = true
+        await onRefreshData?.()
+      })()
+    }, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [hasActiveSync, isForbidden, onRefreshData, reload])
 
   const handleRetry = async () => {
     try {
@@ -154,8 +195,10 @@ export function CustomerContactSyncPanel({
         kind: result?.success === false ? "info" : "success",
         message: (result?.message || "已提交客户联系同步重试").trim(),
       })
-      await reload()
-      await onRetryDone?.()
+      const nextStatus = await reload()
+      if (activeSyncCount(nextStatus) === 0) {
+        await onRetryDone?.()
+      }
     } catch (error) {
       showFeedback({ kind: "error", message: normalizeErrorMessage(error) })
     } finally {
@@ -164,8 +207,11 @@ export function CustomerContactSyncPanel({
   }
 
   const handleRefresh = async () => {
-    await reload()
     await onRefreshData?.()
+    const nextStatus = await reload()
+    if (activeSyncCount(nextStatus) > 0) {
+      showFeedback({ kind: "info", message: "已触发客户联系后台同步，完成后会自动刷新当前列表。" })
+    }
   }
 
   if (isForbidden) {

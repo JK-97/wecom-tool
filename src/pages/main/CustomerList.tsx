@@ -136,6 +136,7 @@ export default function CustomerList() {
   const [isLoading, setIsLoading] = useState(false)
   const [isBatchAssigning, setIsBatchAssigning] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [syncStatusRefreshKey, setSyncStatusRefreshKey] = useState(0)
 
   const [activeTab, setActiveTab] = useState<CustomerTab>(initialFilters.tab)
   const [queryInput, setQueryInput] = useState(initialFilters.query)
@@ -192,6 +193,7 @@ export default function CustomerList() {
       setSelectedIDs([])
     } finally {
       setIsLoading(false)
+      setSyncStatusRefreshKey((value) => value + 1)
     }
   }, [activeTab, query, stage, tag, owner, page, showFeedback])
 
@@ -368,6 +370,7 @@ export default function CustomerList() {
       <CustomerContactSyncPanel
         compact
         className="mx-4 mt-4 shrink-0"
+        refreshKey={syncStatusRefreshKey}
         onRetryDone={loadView}
         onRefreshData={loadView}
       />

@@ -208,6 +208,7 @@ export default function GroupDetail({ onBack }: { onBack: () => void }) {
   const [memberSort, setMemberSort] = useState<GroupSortMode>("default")
   const [isLoadingGroups, setIsLoadingGroups] = useState(false)
   const [isLoadingMoreGroups, setIsLoadingMoreGroups] = useState(false)
+  const [syncStatusRefreshKey, setSyncStatusRefreshKey] = useState(0)
   const [groupError, setGroupError] = useState("")
 
   const [detail, setDetail] = useState<GetGroupChatData | null>(null)
@@ -240,6 +241,9 @@ export default function GroupDetail({ onBack }: { onBack: () => void }) {
       } finally {
         setIsLoadingGroups(false)
         setIsLoadingMoreGroups(false)
+        if (!append) {
+          setSyncStatusRefreshKey((value) => value + 1)
+        }
       }
     },
     [showFeedback],
@@ -447,6 +451,7 @@ export default function GroupDetail({ onBack }: { onBack: () => void }) {
         <div className="flex h-full min-h-0 flex-col gap-4">
           <CustomerContactSyncPanel
             compact
+            refreshKey={syncStatusRefreshKey}
             onRetryDone={refreshPageData}
             onRefreshData={refreshPageData}
           />
