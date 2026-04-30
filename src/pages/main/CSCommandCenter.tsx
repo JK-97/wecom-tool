@@ -4,6 +4,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { Dialog } from "@/components/ui/Dialog";
 import { Textarea } from "@/components/ui/Textarea";
+import { usePageFeedback } from "@/components/ui/PageFeedback";
 import {
   Search,
   AlertCircle,
@@ -51,6 +52,7 @@ import {
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
+import { useStickyScroll } from "@/hooks/useStickyScroll";
 
 type SessionTab = "queue" | "active" | "closed";
 type DetailPanelTab = "monitor" | "upgrade" | "session";
@@ -58,6 +60,8 @@ const COMMAND_CENTER_MESSAGE_PAGE_SIZE = 30;
 const COMMAND_CENTER_REFRESH_DEBOUNCE_MS = 250;
 const COMMAND_CENTER_FALLBACK_REFRESH_INTERVAL_MS = 20000;
 const COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX = 36;
+const COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS = 1200;
+const COMMAND_CENTER_DETAIL_REFRESH_DEDUPE_MS = 1200;
 type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
 type DetailLoadMode = "reset" | "prepend_history" | "merge_incremental";
 type LiveRefreshRequest = { refreshView: boolean; refreshDetail: boolean };
@@ -578,8 +582,92 @@ function resolveSessionStatusPresentation(
   };
 }
 
+function SessionTimingBadge(props: {
+  tone: "danger" | "warning" | "queue";
+  icon?: ReactNode;
+  label: string;
+}) {
+  const toneClassName =
+    props.tone === "danger"
+      ? "bg-red-100 text-red-600"
+      : props.tone === "warning"
+        ? "bg-amber-100 text-amber-700"
+        : "bg-orange-100 text-orange-600";
+  return (
+    <div
+      className={`inline-flex h-6 w-[108px] items-center justify-center whitespace-nowrap rounded px-1.5 text-[10px] font-medium ${toneClassName}`}
+      title={props.label}
+    >
+      {props.icon}
+      <span className="min-w-0 truncate">{props.label}</span>
+    </div>
+  );
+}
+
+function CommandCenterStatusBadge(props: {
+  status: string;
+  label?: string;
+}) {
+  const status = props.status.trim();
+  if (status === "running" || status === "queued") {
+    return (
+      <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-blue-100 px-1.5 py-0 text-[10px] text-blue-700">
+        {props.label || "进行中"}
+      </Badge>
+    );
+  }
+  if (status === "failed") {
+    return (
+      <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-red-100 px-1.5 py-0 text-[10px] text-red-700">
+        {props.label || "分析失败"}
+      </Badge>
+    );
+  }
+  if (status === "succeeded") {
+    return (
+      <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-green-100 px-1.5 py-0 text-[10px] text-green-700">
+        {props.label || "最近已完成"}
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-gray-100 px-1.5 py-0 text-[10px] text-gray-600">
+      {props.label || "未启动"}
+    </Badge>
+  );
+}
+
+function HeaderAssignedIdentity(props: {
+  assignedDisplay: ReturnType<typeof resolveAssignedDisplay>;
+  corpId: string;
+}) {
+  const display = props.assignedDisplay;
+  return (
+    <span className="inline-flex h-5 min-w-[128px] max-w-[220px] items-center align-bottom">
+      {display.displayUserID ? (
+        <WecomOpenDataName
+          userid={display.displayUserID}
+          corpId={props.corpId}
+          fallback={display.displayFallback}
+          className="truncate text-sm text-gray-700"
+        />
+      ) : display.displayFallback ? (
+        <span
+          className="truncate text-sm text-gray-700"
+          title={display.rawID || display.displayFallback}
+        >
+          {display.displayFallback}
+        </span>
+      ) : (
+        <span className="text-gray-400">待分配</span>
+      )}
+    </span>
+  );
+}
+
 export default function CSCommandCenter() {
   const auth = useAuth();
+  const { showFeedback } = usePageFeedback();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [isEndModalOpen, setIsEndModalOpen] = useState(false);
@@ -597,7 +685,6 @@ export default function CSCommandCenter() {
   const [detailPanelTab, setDetailPanelTab] =
     useState<DetailPanelTab>("monitor");
   const [keyword, setKeyword] = useState("");
-  const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOpeningWecomSession, setIsOpeningWecomSession] = useState(false);
   const [transferCandidates, setTransferCandidates] = useState<
@@ -615,8 +702,6 @@ export default function CSCommandCenter() {
     useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
-  const [showBackToLatest, setShowBackToLatest] = useState(false);
-  const [isBrowsingHistory, setIsBrowsingHistory] = useState(false);
   const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
   const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -639,9 +724,10 @@ export default function CSCommandCenter() {
   const refreshQueuedRef = useRef(false);
   const refreshViewRequestedRef = useRef(false);
   const refreshDetailRequestedRef = useRef(false);
-  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const shouldStickToBottomRef = useRef(true);
-  const preserveScrollOffsetRef = useRef<number | null>(null);
+  const viewRefreshPromiseRef = useRef<Promise<CommandCenterViewModel> | null>(null);
+  const lastViewRefreshStartedAtRef = useRef(0);
+  const trailingViewRefreshTimerRef = useRef<number | null>(null);
+  const lastDetailRefreshRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
   const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
@@ -674,27 +760,6 @@ export default function CSCommandCenter() {
       return { label: "渠道", title: token };
     }
     return { label: "未知渠道", title: token };
-  };
-
-  const scrollToLatestMessage = (behavior: ScrollBehavior = "auto") => {
-    const container = chatScrollContainerRef.current;
-    if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior });
-    shouldStickToBottomRef.current = true;
-    setIsBrowsingHistory(false);
-    setShowBackToLatest(false);
-  };
-
-  const syncScrollState = () => {
-    const container = chatScrollContainerRef.current;
-    if (!container) return;
-    const distanceToBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    const isNearBottom =
-      distanceToBottom <= COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX;
-    shouldStickToBottomRef.current = isNearBottom;
-    setIsBrowsingHistory(!isNearBottom);
-    setShowBackToLatest(!isNearBottom);
   };
 
   const applyDetailSnapshot = (
@@ -749,11 +814,28 @@ export default function CSCommandCenter() {
     });
   };
 
-  const fetchViewSnapshot = async () =>
-    getCSCommandCenterView({
+  const fetchViewSnapshot = async () => {
+    const now = Date.now();
+    if (
+      viewRefreshPromiseRef.current &&
+      now - lastViewRefreshStartedAtRef.current < COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS
+    ) {
+      return viewRefreshPromiseRef.current;
+    }
+    lastViewRefreshStartedAtRef.current = now;
+    const request = getCSCommandCenterView({
       open_kfid: queryOpenKFID,
       limit: 200,
     });
+    viewRefreshPromiseRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (viewRefreshPromiseRef.current === request) {
+        viewRefreshPromiseRef.current = null;
+      }
+    }
+  };
 
   const fetchDetailSnapshot = async (
     session: Pick<CommandCenterSession, "open_kfid" | "external_userid"> | null,
@@ -856,14 +938,25 @@ export default function CSCommandCenter() {
     let resolvedSelected = currentSelected;
     let selectedChanged = false;
     let latestViewData: CommandCenterViewModel | null = null;
+    let trailingViewRefreshDelayMs = 0;
     // 列表是页级真相；详情只在当前选中会话命中更新时增量刷新，避免每次事件都双查。
     if (request.refreshView) {
-      latestViewData = await fetchViewSnapshot();
-      const viewResult = applyViewSnapshot(latestViewData, currentSelected);
-      resolvedSelected = viewResult?.resolvedSelected.sessionKey || "";
-      selectedChanged = viewResult?.selectedChanged === true;
+      const elapsedMs = Date.now() - lastViewRefreshStartedAtRef.current;
+      const shouldRefreshView = elapsedMs >= COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS;
+      if (shouldRefreshView) {
+        latestViewData = await fetchViewSnapshot();
+        const viewResult = applyViewSnapshot(latestViewData, currentSelected);
+        resolvedSelected = viewResult?.resolvedSelected.sessionKey || "";
+        selectedChanged = viewResult?.selectedChanged === true;
+      } else {
+        trailingViewRefreshDelayMs =
+          COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS - elapsedMs;
+      }
     }
     if (!request.refreshDetail || selectedChanged || !resolvedSelected) {
+      if (trailingViewRefreshDelayMs > 0) {
+        scheduleTrailingViewRefresh(trailingViewRefreshDelayMs);
+      }
       return;
     }
     const selectedThread = findCommandCenterSessionByKey(
@@ -871,11 +964,26 @@ export default function CSCommandCenter() {
         sessionsRef.current) as CommandCenterSession[],
       resolvedSelected,
     );
+    const detailRefreshKey = `${resolvedSelected}:${messageWindowRef.current.latestVersion}`;
+    const now = Date.now();
+    if (
+      lastDetailRefreshRef.current.key === detailRefreshKey &&
+      now - lastDetailRefreshRef.current.at < COMMAND_CENTER_DETAIL_REFRESH_DEDUPE_MS
+    ) {
+      if (trailingViewRefreshDelayMs > 0) {
+        scheduleTrailingViewRefresh(trailingViewRefreshDelayMs);
+      }
+      return;
+    }
+    lastDetailRefreshRef.current = { key: detailRefreshKey, at: now };
     const detailData = await fetchDetailSnapshot(selectedThread, {
       sinceVersion: messageWindowRef.current.latestVersion,
       limit: COMMAND_CENTER_MESSAGE_PAGE_SIZE,
     });
     applyDetailSnapshot(detailData, "merge_incremental", Date.now());
+    if (trailingViewRefreshDelayMs > 0) {
+      scheduleTrailingViewRefresh(trailingViewRefreshDelayMs);
+    }
     // Issue 3: 用户正在查看该会话时，新消息自动标记已读
     if (
       typeof document !== "undefined" &&
@@ -936,6 +1044,15 @@ export default function CSCommandCenter() {
     }, COMMAND_CENTER_REFRESH_DEBOUNCE_MS);
   };
 
+  const scheduleTrailingViewRefresh = (delayMs: number) => {
+    if (typeof window === "undefined") return;
+    if (trailingViewRefreshTimerRef.current !== null) return;
+    trailingViewRefreshTimerRef.current = window.setTimeout(() => {
+      trailingViewRefreshTimerRef.current = null;
+      queueLiveRefresh({ refreshView: true, refreshDetail: false });
+    }, Math.max(0, delayMs));
+  };
+
   useEffect(() => {
     selectedSessionKeyRef.current = selectedSessionKey.trim();
   }, [selectedSessionKey]);
@@ -948,17 +1065,26 @@ export default function CSCommandCenter() {
     realtimeCursorRef.current = 0;
     refreshViewRequestedRef.current = false;
     refreshDetailRequestedRef.current = false;
+    if (trailingViewRefreshTimerRef.current !== null) {
+      window.clearTimeout(trailingViewRefreshTimerRef.current);
+      trailingViewRefreshTimerRef.current = null;
+    }
+    viewRefreshPromiseRef.current = null;
+    lastViewRefreshStartedAtRef.current = 0;
+    lastDetailRefreshRef.current = { key: "", at: 0 };
   }, [queryOpenKFID]);
+
+  useEffect(
+    () => () => {
+      if (trailingViewRefreshTimerRef.current !== null) {
+        window.clearTimeout(trailingViewRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     setIsRoutingHistoryExpanded(false);
-  }, [selectedSessionKey]);
-
-  useEffect(() => {
-    shouldStickToBottomRef.current = true;
-    preserveScrollOffsetRef.current = null;
-    setIsBrowsingHistory(false);
-    setShowBackToLatest(false);
   }, [selectedSessionKey]);
 
   useEffect(() => {
@@ -1229,7 +1355,7 @@ export default function CSCommandCenter() {
         if (!alive) return;
         setTransferCandidates([]);
         setSelectedTransferServicerID("");
-        setNotice(normalizeErrorMessage(error));
+        showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
       })
       .finally(() => {
         if (!alive) return;
@@ -1238,7 +1364,7 @@ export default function CSCommandCenter() {
     return () => {
       alive = false;
     };
-  }, [isTransferModalOpen, selectedSession?.open_kfid]);
+  }, [isTransferModalOpen, selectedSession?.open_kfid, showFeedback]);
 
   const transferCandidatesFiltered = useMemo(() => {
     const query = transferSearch.trim().toLowerCase();
@@ -1270,29 +1396,31 @@ export default function CSCommandCenter() {
     return sortCommandCenterMessages(messageWindow.messages);
   }, [messageWindow.messages]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const container = chatScrollContainerRef.current;
-    if (!container) return;
-    if (preserveScrollOffsetRef.current !== null) {
-      const offsetFromBottom = preserveScrollOffsetRef.current;
-      preserveScrollOffsetRef.current = null;
-      window.requestAnimationFrame(() => {
-        const currentContainer = chatScrollContainerRef.current;
-        if (!currentContainer) return;
-        currentContainer.scrollTop = Math.max(
-          0,
-          currentContainer.scrollHeight - offsetFromBottom,
-        );
-        syncScrollState();
-      });
-      return;
-    }
-    if (!shouldStickToBottomRef.current) return;
-    window.requestAnimationFrame(() => {
-      scrollToLatestMessage();
-    });
-  }, [orderedMessages, selectedSessionKey]);
+  const messageScrollContentKey = useMemo(() => {
+    const first = orderedMessages[0];
+    const last = orderedMessages[orderedMessages.length - 1];
+    return [
+      selectedSessionKey,
+      orderedMessages.length,
+      first ? getCommandCenterMessageKey(first, 0) : "",
+      last ? getCommandCenterMessageKey(last, orderedMessages.length - 1) : "",
+      messageWindow.latestVersion,
+    ].join("|");
+  }, [messageWindow.latestVersion, orderedMessages, selectedSessionKey]);
+
+  const {
+    containerRef: chatScrollContainerRef,
+    cancelPreserveVisibleAnchor,
+    handleScroll: handleChatScroll,
+    isBrowsingHistory,
+    preparePreserveVisibleAnchor,
+    scrollToLatest: scrollToLatestMessage,
+    showBackToLatest,
+  } = useStickyScroll({
+    bottomThreshold: COMMAND_CENTER_SCROLL_BOTTOM_THRESHOLD_PX,
+    contentKey: messageScrollContentKey,
+    resetKey: selectedSessionKey,
+  });
 
   const queueCount = useMemo(
     () =>
@@ -1315,11 +1443,7 @@ export default function CSCommandCenter() {
 
   const handleLoadOlderMessages = async () => {
     if (!selectedSession || isLoadingOlderMessages || !hasOlderMessages) return;
-    const container = chatScrollContainerRef.current;
-    if (container) {
-      preserveScrollOffsetRef.current =
-        container.scrollHeight - container.scrollTop;
-    }
+    preparePreserveVisibleAnchor();
     try {
       setIsLoadingOlderMessages(true);
       const data = await fetchDetailSnapshot(selectedSession, {
@@ -1329,8 +1453,8 @@ export default function CSCommandCenter() {
       });
       applyDetailSnapshot(data, "prepend_history", Date.now());
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
-      preserveScrollOffsetRef.current = null;
+      cancelPreserveVisibleAnchor();
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
     } finally {
       setIsLoadingOlderMessages(false);
     }
@@ -1342,7 +1466,7 @@ export default function CSCommandCenter() {
     successMessage: string;
   }) => {
     if (!selectedSession?.open_kfid || !selectedSession?.external_userid) {
-      setNotice("未选择有效会话");
+      showFeedback({ message: "未选择有效会话", kind: "warning" });
       return false;
     }
     try {
@@ -1353,11 +1477,11 @@ export default function CSCommandCenter() {
         service_state: input.serviceState,
         servicer_userid: input.servicerUserID,
       });
-      setNotice(input.successMessage);
+      showFeedback({ message: input.successMessage, kind: "success" });
       await runRefreshCycle({ refreshView: true, refreshDetail: true });
       return true;
     } catch (error) {
-      setNotice(describeSessionActionError(error));
+      showFeedback({ message: describeSessionActionError(error), kind: "error" });
       return false;
     } finally {
       setIsSubmitting(false);
@@ -1366,7 +1490,7 @@ export default function CSCommandCenter() {
 
   const handleUpgrade = async () => {
     if (!selectedSession?.external_userid) {
-      setNotice("未选择会话");
+      showFeedback({ message: "未选择会话", kind: "warning" });
       return;
     }
     try {
@@ -1384,7 +1508,10 @@ export default function CSCommandCenter() {
           contact_name: selectedSession.name,
         },
       });
-      setNotice((result?.message || "升级命令已提交").trim());
+      showFeedback({
+        message: (result?.message || "升级命令已提交").trim(),
+        kind: result?.success ? "success" : "warning",
+      });
       setIsUpgradeModalOpen(false);
       if (result?.success) {
         setIsUpgradeSuccess(true);
@@ -1392,7 +1519,7 @@ export default function CSCommandCenter() {
       }
       await runRefreshCycle({ refreshView: true, refreshDetail: true });
     } catch (error) {
-      setNotice(normalizeErrorMessage(error));
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
     } finally {
       setIsSubmitting(false);
     }
@@ -1400,7 +1527,7 @@ export default function CSCommandCenter() {
 
   const handleOpenInWeCom = async () => {
     if (!selectedSession?.open_kfid || !selectedSession?.external_userid) {
-      setNotice("当前会话缺少企业微信跳转参数");
+      showFeedback({ message: "当前会话缺少企业微信跳转参数", kind: "warning" });
       return;
     }
     try {
@@ -1410,7 +1537,7 @@ export default function CSCommandCenter() {
         external_userid: selectedSession.external_userid,
       });
     } catch (error) {
-      setNotice(toJSSDKErrorMessage(error));
+      showFeedback({ message: toJSSDKErrorMessage(error), kind: "error" });
     } finally {
       setIsOpeningWecomSession(false);
     }
@@ -1604,6 +1731,8 @@ export default function CSCommandCenter() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
+              id="cs-command-center-search"
+              name="cs_command_center_search"
               type="text"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
@@ -1611,9 +1740,6 @@ export default function CSCommandCenter() {
               className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          {notice ? (
-            <div className="text-[11px] text-blue-600">{notice}</div>
-          ) : null}
         </div>
 
         <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
@@ -1642,7 +1768,7 @@ export default function CSCommandCenter() {
               return (
                 <div
                   key={sessionKey || (session.name || "session").trim()}
-                  className={`p-4 cursor-pointer transition-colors ${selected ? "bg-blue-50/50 border-l-4 border-blue-600" : "hover:bg-gray-50"}`}
+                  className={`min-h-[116px] cursor-pointer border-l-4 p-4 transition-colors ${selected ? "border-blue-600 bg-blue-50/50" : "border-transparent hover:bg-gray-50"}`}
                   onClick={() => {
                     setSelectedSessionKey(sessionKey);
                     if (sessionKey) {
@@ -1659,13 +1785,13 @@ export default function CSCommandCenter() {
                   }}
                 >
                   <div className="flex items-start justify-between mb-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                       <Avatar src="" size="sm" />
-                      <div className="flex flex-col">
-                        <span className="text-sm font-medium text-gray-900">
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate text-sm font-medium text-gray-900">
                           {(session.name || "未命名客户").trim()}
                         </span>
-                        <div className="flex items-center gap-1 mt-0.5">
+                        <div className="mt-0.5 flex min-h-[18px] min-w-0 items-center gap-1">
                           {(() => {
                             const sourcePresentation =
                               resolveChannelPresentation(session.source);
@@ -1682,7 +1808,7 @@ export default function CSCommandCenter() {
                             );
                           })()}
                           <Badge
-                            className={`text-[9px] px-1 py-0 border-none ${sessionStatus.badgeClassName}`}
+                            className={`min-w-[48px] justify-center text-[9px] px-1 py-0 border-none ${sessionStatus.badgeClassName}`}
                           >
                             {sessionStatus.label}
                           </Badge>
@@ -1691,34 +1817,36 @@ export default function CSCommandCenter() {
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       {replyOverdue ? (
-                        <div className="flex items-center text-xs font-medium text-red-600 bg-red-100 px-1.5 py-0.5 rounded">
-                          <AlertCircle className="w-3 h-3 mr-1" /> 超时告警
-                        </div>
+                        <SessionTimingBadge
+                          tone="danger"
+                          icon={<AlertCircle className="mr-1 h-3 w-3" />}
+                          label="超时告警"
+                        />
                       ) : bucket === "queue" ? (
-                        <div
-                          className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}
-                        >
-                          <Clock className="w-3 h-3 mr-1" /> 排队{" "}
-                          {queueWaitText || "-"}
-                        </div>
+                        <SessionTimingBadge
+                          tone={slaStatus === "warning" ? "warning" : "queue"}
+                          icon={<Clock className="mr-1 h-3 w-3" />}
+                          label={`排队 ${queueWaitText || "-"}`}
+                        />
                       ) : bucket === "active" && unreadCount > 0 ? (
                         // 接待中：显示未回复时长（= 客户最后发消息至今），有多少条未读
-                        <div
-                          className={`flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded ${slaStatus === "warning" ? "text-amber-700 bg-amber-100" : "text-orange-600 bg-orange-100"}`}
-                        >
-                          <Clock className="w-3 h-3 mr-1" />
-                          {pendingReplyText
-                            ? `未回复 ${pendingReplyText}`
-                            : `${unreadCount} 未读`}
-                        </div>
+                        <SessionTimingBadge
+                          tone={slaStatus === "warning" ? "warning" : "queue"}
+                          icon={<Clock className="mr-1 h-3 w-3" />}
+                          label={
+                            pendingReplyText
+                              ? `未回复 ${pendingReplyText}`
+                              : `${unreadCount} 未读`
+                          }
+                        />
                       ) : null}
                     </div>
                   </div>
-                  <p className="text-xs text-gray-600 line-clamp-1 mb-2">
+                  <p className="mb-2 min-h-[16px] break-words text-xs text-gray-600 line-clamp-1 [overflow-wrap:anywhere]">
                     {(session.last_message || "暂无消息").trim()}
                   </p>
                   <div className="flex items-center justify-between text-[10px] text-gray-500">
-                    <span className="flex items-center gap-1">
+                    <span className="flex min-w-0 items-center gap-1">
                       <GitBranch className="w-3 h-3" />{" "}
                       {assignedDisplay.displayUserID ? (
                         <span
@@ -1748,7 +1876,7 @@ export default function CSCommandCenter() {
                         "待分配"
                       )}
                     </span>
-                    <span>
+                    <span className="ml-2 w-[86px] shrink-0 text-right tabular-nums">
                       {(session.last_active || "")
                         .replace("T", " ")
                         .slice(0, 16)}
@@ -1773,24 +1901,12 @@ export default function CSCommandCenter() {
                   {sessionStatus.label}
                 </Badge>
               ) : null}
-              <span className="min-w-0 text-sm text-gray-500 border-l border-gray-200 pl-4">
+              <span className="inline-flex min-w-0 items-center text-sm text-gray-500 border-l border-gray-200 pl-4">
                 接待人：
-                {assignedDisplayForHeader.displayUserID ? (
-                  <span className="inline-flex min-w-0 items-center gap-2">
-                    <WecomOpenDataName
-                      userid={assignedDisplayForHeader.displayUserID}
-                      corpId={corpID}
-                      fallback={assignedDisplayForHeader.displayFallback}
-                      className="text-sm text-gray-700"
-                    />
-                  </span>
-                ) : assignedDisplayForHeader.displayFallback ? (
-                  <span className="inline-flex items-center gap-2 text-sm text-gray-700">
-                    {assignedDisplayForHeader.displayFallback}
-                  </span>
-                ) : (
-                  "待分配"
-                )}
+                <HeaderAssignedIdentity
+                  assignedDisplay={assignedDisplayForHeader}
+                  corpId={corpID}
+                />
               </span>
             </div>
             <div className="ml-auto shrink-0">
@@ -1809,32 +1925,32 @@ export default function CSCommandCenter() {
             </div>
           </div>
 
-          <div className="px-6 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11px]">
-            <div className="flex items-center gap-1.5 text-gray-500">
+          <div className="flex min-h-[40px] flex-wrap items-center gap-x-6 gap-y-2 border-t border-gray-100 bg-gray-50 px-6 py-2 text-[11px]">
+            <div className="flex min-w-[120px] items-center gap-1.5 text-gray-500">
               <span className="font-medium">来源渠道:</span>
               <span
-                className="text-gray-900"
+                className="min-w-[72px] truncate text-gray-900"
                 title={selectedSourcePresentation.title || undefined}
               >
                 {selectedSourcePresentation.label}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-gray-500">
+            <div className="flex min-w-[150px] items-center gap-1.5 text-gray-500">
               <span className="font-medium">匹配路由:</span>
               {readRoutingRuleName(latestMatchedRoutingRecord) ? (
                 <Link
                   to={readRoutingRuleLink(latestMatchedRoutingRecord)}
-                  className="text-blue-600 hover:underline"
+                  className="max-w-[150px] truncate text-blue-600 hover:underline"
                 >
                   {readRoutingRuleName(latestMatchedRoutingRecord)}
                 </Link>
               ) : (
-                <span className="text-gray-900">-</span>
+                <span className="min-w-[72px] text-gray-900">-</span>
               )}
             </div>
-            <div className="flex items-center gap-1.5 text-gray-500">
+            <div className="flex min-w-[120px] items-center gap-1.5 text-gray-500">
               <span className="font-medium">当前状态:</span>
-              <span className="text-gray-900">
+              <span className="min-w-[48px] text-gray-900">
                 {(
                   sessionStatus.label ||
                   latestRoutingRecord?.details?.result_state_label ||
@@ -1889,7 +2005,7 @@ export default function CSCommandCenter() {
                   <div
                     ref={chatScrollContainerRef}
                     className="h-full overflow-y-auto bg-[#F5F7FA] p-6"
-                    onScroll={syncScrollState}
+                    onScroll={handleChatScroll}
                   >
                     <div className="flex flex-col gap-6">
                       {hasOlderMessages ? (
@@ -1923,7 +2039,8 @@ export default function CSCommandCenter() {
                           return (
                             <div
                               key={getCommandCenterMessageKey(message, index)}
-                              className={`flex items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
+                              data-sticky-scroll-item="true"
+                              className={`flex min-w-0 items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
                             >
                               {outgoing ? (
                                 <div
@@ -1940,7 +2057,7 @@ export default function CSCommandCenter() {
                               ) : (
                                 <Avatar src="" size="sm" />
                               )}
-                              <div className="flex max-w-[70%] flex-col">
+                              <div className="flex max-w-[70%] min-w-0 flex-col">
                                 {outgoing ? (
                                   <div className="mb-1 flex justify-end">
                                     {isAssistantMessage ? (
@@ -1957,13 +2074,13 @@ export default function CSCommandCenter() {
                                   </div>
                                 ) : null}
                                 <div
-                                  className={`px-4 py-2.5 shadow-sm rounded-2xl ${
+                                  className={`min-w-0 px-4 py-2.5 shadow-sm rounded-2xl ${
                                     outgoing
                                       ? "bg-blue-600 text-white rounded-tr-none"
                                       : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
                                   }`}
                                 >
-                                  <p className="text-sm">
+                                  <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">
                                     {(message.content || "").trim()}
                                   </p>
                                   <p
@@ -2079,30 +2196,13 @@ export default function CSCommandCenter() {
                   className="mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
                 >
                   <div className="space-y-6">
-                    <div>
+                    <div className="min-h-[96px]">
                       <div className="mb-2 flex items-center justify-between">
                         <div className="text-xs text-gray-500">客户情绪</div>
-                        {analysisStatus === "running" ||
-                        analysisStatus === "queued" ? (
-                          <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">
-                            进行中
-                          </Badge>
-                        ) : analysisStatus === "failed" ? (
-                          <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">
-                            分析失败
-                          </Badge>
-                        ) : analysisStatus === "succeeded" ? (
-                          <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">
-                            最近已完成
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-gray-100 text-gray-600 border-none text-[10px] px-1.5 py-0">
-                            未启动
-                          </Badge>
-                        )}
+                        <CommandCenterStatusBadge status={analysisStatus} />
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-2xl">
+                      <div className="flex min-h-[32px] items-center gap-2">
+                        <span className="inline-flex w-8 justify-center text-2xl">
                           {emotionPresentation.emoji}
                         </span>
                         <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
@@ -2118,23 +2218,25 @@ export default function CSCommandCenter() {
                         </span>
                       </div>
                       {activeMonitor?.emotion?.reason ? (
-                        <div className="mt-2 text-[11px] leading-relaxed text-gray-500">
+                        <div className="mt-2 min-h-[34px] text-[11px] leading-relaxed text-gray-500">
                           {activeMonitor.emotion.reason.trim()}
                         </div>
-                      ) : null}
+                      ) : (
+                        <div className="mt-2 min-h-[34px]" aria-hidden="true" />
+                      )}
                     </div>
 
-                    <div>
+                    <div className="min-h-[360px]">
                       <div className="mb-2 text-xs text-gray-500">会话摘要</div>
-                      <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">
+                      <div className="min-h-[96px] rounded-md border border-gray-100 bg-gray-50 p-3 text-sm leading-relaxed text-gray-700">
                         {summaryText}
                       </div>
                       <div className="mt-3 space-y-3">
-                        <div>
+                        <div className="min-h-[68px]">
                           <div className="mb-2 text-[11px] text-gray-500">
                             经营判断
                           </div>
-                          <div className="flex flex-wrap gap-1.5">
+                          <div className="flex min-h-[22px] flex-wrap gap-1.5">
                             {activeMonitor?.summary_detail?.customer_intent ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
                                 诉求：{activeMonitor.summary_detail.customer_intent.trim()}
@@ -2189,7 +2291,7 @@ export default function CSCommandCenter() {
                         analysisFacts.decisionSignals.length > 0 ||
                         activeMonitor?.summary_detail?.opportunity_level ||
                         analysisFacts.opportunitySignals.length > 0 ? (
-                          <div>
+                          <div className="min-h-[72px]">
                             <div className="mb-2 text-[11px] text-gray-500">
                               机会与阻塞
                             </div>
@@ -2228,13 +2330,15 @@ export default function CSCommandCenter() {
                               ) : null}
                             </div>
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="min-h-[72px]" aria-hidden="true" />
+                        )}
 
                         {analysisFacts.nextBestActions.length > 0 ||
                         analysisFacts.requiredInformation.length > 0 ||
                         analysisFacts.replyGuardrails.length > 0 ||
                         activeMonitor?.summary_detail?.handoff_recommendation ? (
-                          <div>
+                          <div className="min-h-[72px]">
                             <div className="mb-2 text-[11px] text-gray-500">
                               下一步动作
                             </div>
@@ -2271,11 +2375,13 @@ export default function CSCommandCenter() {
                               ) : null}
                             </div>
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="min-h-[72px]" aria-hidden="true" />
+                        )}
                       </div>
                     </div>
 
-                    <div>
+                    <div className="min-h-[96px]">
                       <div className="mb-2 text-xs text-gray-500">合规质检</div>
                       {complianceRisk ? (
                         <div className="flex items-center gap-2 rounded-md border border-red-100 bg-red-50 p-2 text-sm text-red-600">
