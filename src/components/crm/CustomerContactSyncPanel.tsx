@@ -48,6 +48,8 @@ function taskStatusLabel(status?: string): string {
       return "同步中"
     case "retryable":
       return "可重试"
+    case "stalled":
+      return "已超时"
     case "dead":
       return "失败"
     case "succeeded":
@@ -137,15 +139,16 @@ export function CustomerContactSyncPanel({
     const processing = readCount(counts, "processing", "running")
     const retryable = readCount(counts, "retryable")
     const dead = readCount(counts, "dead", "failed")
+    const stalled = readCount(counts, "stalled")
     const succeeded = readCount(counts, "succeeded", "success")
-    const failed = retryable + dead
+    const failed = retryable + dead + stalled
     const task = latestTask(status?.recent_tasks)
     if (failed > 0) {
       return {
         tone: "warning" as const,
         icon: AlertCircle,
-        title: "客户联系同步有失败任务",
-        description: `失败 ${failed} 个，可重试 ${retryable} 个；最近任务：${taskTypeLabel(task?.task_type)} ${taskStatusLabel(task?.status)}`,
+        title: "客户联系同步需要处理",
+        description: `异常 ${failed} 个，其中超时 ${stalled} 个；最近任务：${taskTypeLabel(task?.task_type)} ${taskStatusLabel(task?.status)}`,
       }
     }
     if (processing + pending > 0) {
@@ -172,7 +175,7 @@ export function CustomerContactSyncPanel({
     }
   }, [status])
 
-  const failedCount = readCount(status?.status_counts, "retryable", "dead", "failed")
+  const failedCount = readCount(status?.status_counts, "retryable", "dead", "failed", "stalled")
   const activeCount = activeSyncCount(status)
   const hasActiveSync = activeCount > 0
   const canRetry = Boolean(status?.can_retry) && failedCount > 0
@@ -180,6 +183,7 @@ export function CustomerContactSyncPanel({
   const pendingCount = readCount(status?.status_counts, "pending", "queued")
   const processingCount = readCount(status?.status_counts, "processing", "running")
   const succeededCount = readCount(status?.status_counts, "succeeded", "success")
+  const stalledCount = readCount(status?.status_counts, "stalled")
 
   useEffect(() => {
     if (isForbidden || !hasActiveSync) return
@@ -283,10 +287,11 @@ export function CustomerContactSyncPanel({
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                   {[
                     ["同步中", processingCount],
                     ["排队中", pendingCount],
+                    ["超时", stalledCount],
                     ["异常", failedCount],
                     ["已完成", succeededCount],
                   ].map(([label, value]) => (
@@ -378,7 +383,7 @@ export function CustomerContactSyncPanel({
               <div className="text-sm font-semibold text-gray-900">{summary.title}</div>
               {failedCount > 0 ? (
                 <Badge variant="warning" className="px-2 py-0 text-[10px]">
-                  失败 {failedCount}
+                  异常 {failedCount}
                 </Badge>
               ) : null}
             </div>
