@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react"
-import Markdown from "react-markdown"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   BookOpen,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/Button"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
+import { GuideMarkdown } from "@/components/guide/GuideMarkdown"
 import { cn } from "@/lib/utils"
 import { GUIDE_DOCS, type GuideDoc } from "@/content/guide/manifest"
 
@@ -27,7 +27,7 @@ type TocItem = {
   level: 2 | 3
 }
 
-const categoryOrder: GuideDoc["category"][] = ["快速开始", "业务配置", "日常使用"]
+const categoryOrder: GuideDoc["category"][] = ["快速开始", "系统设置", "业务配置", "日常使用", "问题排查"]
 
 function slugify(text: string) {
   return text
@@ -51,16 +51,53 @@ function buildDocURL(docID: string) {
 }
 
 function extractHeadings(doc: GuideDoc): TocItem[] {
-  return (doc.content.match(/^#{2,3}\s+(.+)$/gm) || []).map((line) => {
-    const marker = line.match(/^#{2,3}/)?.[0] || "##"
-    const text = line.replace(/^#{2,3}\s+/, "").trim()
-    const level: TocItem["level"] = marker.length === 3 ? 3 : 2
-    return {
-      id: `${doc.id}-${slugify(text)}`,
-      text,
-      level,
+  const items: TocItem[] = []
+  const seen = new Set<string>()
+  let codeFenceLanguage = ""
+  let codeFenceLines: string[] = []
+
+  const pushItem = (text: string, level: TocItem["level"]) => {
+    const normalized = text.trim()
+    if (!normalized) return
+    const id = `${doc.id}-${slugify(normalized)}`
+    if (seen.has(id)) return
+    seen.add(id)
+    items.push({ id, text: normalized, level })
+  }
+
+  doc.content.split("\n").forEach((line) => {
+    const fenceMatch = line.match(/^```([\w-]+)/)
+    if (fenceMatch && !codeFenceLanguage) {
+      codeFenceLanguage = fenceMatch[1]
+      codeFenceLines = []
+      return
     }
+
+    if (line.trim() === "```" && codeFenceLanguage) {
+      if (["mermaid", "guide-table", "guide-figure", "guide-html"].includes(codeFenceLanguage)) {
+        const title = codeFenceLines
+          .map((item) => item.trim())
+          .find((item) => item.startsWith("title:"))
+          ?.replace(/^title:\s*/, "")
+          .trim()
+        if (title) pushItem(title, 3)
+      }
+      codeFenceLanguage = ""
+      codeFenceLines = []
+      return
+    }
+
+    if (codeFenceLanguage) {
+      codeFenceLines.push(line)
+      return
+    }
+
+    const headingMatch = line.match(/^(#{2,3})\s+(.+)$/)
+    if (!headingMatch) return
+    pushItem(headingMatch[2], headingMatch[1].length === 3 ? 3 : 2)
   })
+
+  return items
 }
 
 function stripMarkdown(content: string) {
@@ -86,33 +123,6 @@ function getRelatedDocs(doc: GuideDoc) {
     .filter((item): item is GuideDoc => Boolean(item))
 }
 
-function normalizeCalloutText(text: string) {
-  return text
-    .replace(/\[!(INFO|TIP|WARNING|IMPORTANT|CAUTION)\]/gi, "")
-    .replace(/^(提示|注意|说明|重要|警告)[:：]\s*/, "")
-    .trim()
-}
-
-function MarkdownCallout({ children }: { children: React.ReactNode }) {
-  const text = normalizeCalloutText(
-    React.Children.toArray(children)
-      .map((child) => {
-        if (typeof child === "string") return child
-        if (React.isValidElement<{ children?: React.ReactNode }>(child)) {
-          return React.Children.toArray(child.props.children).join("")
-        }
-        return ""
-      })
-      .join(" "),
-  )
-  return (
-    <div className="my-6 flex gap-3 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
-      <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-      <div>{text || children}</div>
-    </div>
-  )
-}
-
 export default function Guide() {
   const { showFeedback } = usePageFeedback()
   const initialDocID =
@@ -133,6 +143,7 @@ export default function Guide() {
         doc.description,
         doc.category,
         doc.role,
+        doc.tags.join(" "),
         stripMarkdown(doc.content),
       ]
         .join(" ")
@@ -170,7 +181,7 @@ export default function Guide() {
   useEffect(() => {
     if (!activeDoc || !contentRef.current) return
     const scroller = contentRef.current
-    const headingSelector = `h2[id^="${activeDoc.id}-"], h3[id^="${activeDoc.id}-"]`
+    const headingSelector = `h2[id^="${activeDoc.id}-"], h3[id^="${activeDoc.id}-"], section[id^="${activeDoc.id}-"], figure[id^="${activeDoc.id}-"]`
     const headingNodes = Array.from(scroller.querySelectorAll<HTMLElement>(headingSelector))
     if (headingNodes.length === 0) return
 
@@ -397,88 +408,7 @@ export default function Guide() {
                 </header>
 
                 <div className="px-5 py-6 sm:px-8 sm:py-8">
-                  <div
-                    className="max-w-none text-gray-700"
-                  >
-                    <Markdown
-                      components={{
-                        h1: () => null,
-                        h2: ({ children }) => {
-                          const text = React.Children.toArray(children).join("")
-                          return (
-                            <h2
-                              id={`${activeDoc.id}-${slugify(text)}`}
-                              className="mt-10 scroll-mt-8 border-b border-gray-100 pb-3 text-xl font-semibold text-gray-950 first:mt-0"
-                            >
-                              {children}
-                            </h2>
-                          )
-                        },
-                        h3: ({ children }) => (
-                          <h3
-                            id={`${activeDoc.id}-${slugify(React.Children.toArray(children).join(""))}`}
-                            className="mt-7 scroll-mt-8 text-base font-semibold text-gray-900"
-                          >
-                            {children}
-                          </h3>
-                        ),
-                        p: ({ children }) => (
-                          <p className="mt-4 text-[15px] leading-7 text-gray-600">
-                            {children}
-                          </p>
-                        ),
-                        ul: ({ children }) => (
-                          <ul className="my-5 space-y-2 rounded-lg border border-gray-100 bg-gray-50 px-6 py-4 text-[15px] leading-7 text-gray-600 marker:text-blue-500">
-                            {children}
-                          </ul>
-                        ),
-                        ol: ({ children }) => (
-                          <ol className="my-5 space-y-3 rounded-lg border border-blue-100 bg-blue-50/40 px-6 py-4 text-[15px] leading-7 text-gray-700 marker:font-semibold marker:text-blue-600">
-                            {children}
-                          </ol>
-                        ),
-                        li: ({ children }) => (
-                          <li className="pl-1 text-[15px] leading-7 text-gray-600">
-                            {children}
-                          </li>
-                        ),
-                        strong: ({ children }) => (
-                          <strong className="font-semibold text-gray-950">{children}</strong>
-                        ),
-                        code: ({ children }) => (
-                          <code className="rounded bg-blue-50 px-1.5 py-0.5 text-[13px] font-medium text-blue-700">
-                            {children}
-                          </code>
-                        ),
-                        a: ({ href, children }) => {
-                          const targetHref = href || "#"
-                          if (targetHref.startsWith("/")) {
-                            return (
-                              <Link
-                                to={targetHref}
-                                className="inline-flex items-center rounded text-blue-600 underline-offset-2 hover:underline"
-                              >
-                                {children}
-                              </Link>
-                            )
-                          }
-                          return (
-                            <a
-                              href={targetHref}
-                              target={targetHref.startsWith("http") ? "_blank" : undefined}
-                              rel="noreferrer"
-                              className="text-blue-600 underline-offset-2 hover:underline"
-                            >
-                              {children}
-                            </a>
-                          )
-                        },
-                        blockquote: ({ children }) => <MarkdownCallout>{children}</MarkdownCallout>,
-                      }}
-                    >
-                      {activeDoc.content}
-                    </Markdown>
-                  </div>
+                  <GuideMarkdown content={activeDoc.content} docID={activeDoc.id} slugify={slugify} />
 
                   <div className="mt-12 border-t border-gray-100 pt-8">
                     <div className="rounded-lg border border-gray-100 bg-gray-50 px-5 py-4">
