@@ -96,7 +96,7 @@ export default function App() {
                 <Route path="task-detail" element={<TaskDetailPage onBack={() => window.history.back()} />} />
                 <Route path="cs-center" element={<CSCommandCenter />} />
                 <Route path="customers" element={<CustomerList />} />
-                <Route path="group-detail" element={<GroupDetail onBack={() => window.history.back()} />} />
+                <Route path="group-detail" element={<GroupDetail />} />
                 <Route path="strategy" element={<StrategyCenter />} />
                 <Route path="dashboard" element={<Dashboard onBack={() => window.history.back()} />} />
                 <Route path="settings" element={<OrganizationSettings />} />

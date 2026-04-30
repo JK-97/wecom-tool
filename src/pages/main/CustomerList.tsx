@@ -3,13 +3,14 @@ import { Button } from "@/components/ui/Button"
 import { Avatar } from "@/components/ui/Avatar"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { Dialog } from "@/components/ui/Dialog"
-import { Search, Filter, ChevronLeft, ChevronRight, MessageSquare, UserPlus, Edit2, Loader2, RefreshCw } from "lucide-react"
+import { Search, Filter, MessageSquare, UserPlus, Edit2, Loader2, RefreshCw } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { normalizeErrorMessage } from "@/services/http"
 import { useAuth } from "@/context/AuthContext"
 import { CustomerContactSyncPanel } from "@/components/crm/CustomerContactSyncPanel"
 import { CustomerTagList } from "@/components/crm/CustomerTagList"
+import { CRMTablePagination } from "@/components/crm/CRMTablePagination"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 import {
@@ -22,7 +23,8 @@ import {
 
 type CustomerTab = "all" | "today" | "todo" | "upgraded"
 
-const PAGE_SIZE = 10
+const DEFAULT_PAGE_SIZE = 20
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 const KNOWN_STAGES = ["意向沟通中", "已报价待签", "已成交", "流失"]
 
 function readInitialCustomerFilters(): {
@@ -32,6 +34,7 @@ function readInitialCustomerFilters(): {
   tag: string
   owner: string
   page: number
+  pageSize: number
 } {
   if (typeof window === "undefined") {
     return {
@@ -41,11 +44,13 @@ function readInitialCustomerFilters(): {
       tag: "",
       owner: "",
       page: 1,
+      pageSize: DEFAULT_PAGE_SIZE,
     }
   }
   const params = new URLSearchParams(window.location.search)
   const tab = params.get("tab")
   const page = Number(params.get("page") || 1)
+  const pageSize = Number(params.get("page_size") || DEFAULT_PAGE_SIZE)
   return {
     tab: tab === "today" || tab === "todo" || tab === "upgraded" ? tab : "all",
     query: (params.get("query") || "").trim(),
@@ -53,6 +58,7 @@ function readInitialCustomerFilters(): {
     tag: (params.get("tag") || "").trim(),
     owner: (params.get("owner_userid") || "").trim(),
     page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+    pageSize: PAGE_SIZE_OPTIONS.includes(pageSize) ? pageSize : DEFAULT_PAGE_SIZE,
   }
 }
 
@@ -63,6 +69,7 @@ function replaceCustomerFilterURL(input: {
   tag: string
   owner: string
   page: number
+  pageSize: number
 }) {
   if (typeof window === "undefined") return
   const params = new URLSearchParams()
@@ -72,6 +79,7 @@ function replaceCustomerFilterURL(input: {
   if (input.tag.trim()) params.set("tag", input.tag.trim())
   if (input.owner.trim()) params.set("owner_userid", input.owner.trim())
   if (input.page > 1) params.set("page", String(input.page))
+  if (input.pageSize !== DEFAULT_PAGE_SIZE) params.set("page_size", String(input.pageSize))
   const query = params.toString()
   const nextURL = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
   window.history.replaceState({}, "", nextURL)
@@ -115,19 +123,6 @@ function displayOptionLabel(option: CustomerListFilterOption): string {
   return label || value
 }
 
-function buildPaginationPages(currentPage: number, totalPages: number): Array<number | "ellipsis"> {
-  if (totalPages <= 5) {
-    return Array.from({ length: totalPages }, (_, index) => index + 1)
-  }
-  if (currentPage <= 3) {
-    return [1, 2, 3, "ellipsis", totalPages]
-  }
-  if (currentPage >= totalPages - 2) {
-    return [1, "ellipsis", totalPages - 2, totalPages - 1, totalPages]
-  }
-  return [1, "ellipsis", currentPage, "ellipsis", totalPages]
-}
-
 export default function CustomerList() {
   const initialFilters = useMemo(() => readInitialCustomerFilters(), [])
   const auth = useAuth()
@@ -145,6 +140,7 @@ export default function CustomerList() {
   const [tag, setTag] = useState(initialFilters.tag)
   const [owner, setOwner] = useState(initialFilters.owner)
   const [page, setPage] = useState(initialFilters.page)
+  const [pageSize, setPageSize] = useState(initialFilters.pageSize)
 
   const [view, setView] = useState<CustomerListViewModel | null>(null)
   const [selectedIDs, setSelectedIDs] = useState<string[]>([])
@@ -169,8 +165,8 @@ export default function CustomerList() {
   }, [queryInput])
 
   useEffect(() => {
-    replaceCustomerFilterURL({ tab: activeTab, query, stage, tag, owner, page })
-  }, [activeTab, query, stage, tag, owner, page])
+    replaceCustomerFilterURL({ tab: activeTab, query, stage, tag, owner, page, pageSize })
+  }, [activeTab, query, stage, tag, owner, page, pageSize])
 
   const loadView = useCallback(async () => {
     try {
@@ -182,7 +178,7 @@ export default function CustomerList() {
         tag,
         owner_userid: owner,
         page,
-        page_size: PAGE_SIZE,
+        page_size: pageSize,
       })
       setView(data)
       const currentIDs = new Set((data?.rows || []).map((row) => (row.external_userid || "").trim()).filter((id) => id !== ""))
@@ -195,7 +191,7 @@ export default function CustomerList() {
       setIsLoading(false)
       setSyncStatusRefreshKey((value) => value + 1)
     }
-  }, [activeTab, query, stage, tag, owner, page, showFeedback])
+  }, [activeTab, query, stage, tag, owner, page, pageSize, showFeedback])
 
   useEffect(() => {
     void loadView()
@@ -210,10 +206,9 @@ export default function CustomerList() {
   const total = Number(view?.pagination?.total || 0)
   const currentPage = Math.max(1, Number(view?.pagination?.page || page || 1))
   const totalPages = Math.max(1, Number(view?.pagination?.total_pages || 1))
-  const pageButtons = useMemo(() => buildPaginationPages(currentPage, totalPages), [currentPage, totalPages])
 
-  const startIndex = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1
-  const endIndex = total === 0 ? 0 : Math.min(total, (currentPage - 1) * PAGE_SIZE + rows.length)
+  const startIndex = total === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const endIndex = total === 0 ? 0 : Math.min(total, (currentPage - 1) * pageSize + rows.length)
 
   const selectedOnPage = useMemo(() => {
     const currentIDs = rows.map((row) => (row.external_userid || "").trim()).filter((id) => id !== "")
@@ -351,6 +346,12 @@ export default function CustomerList() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-3">
+          <CustomerContactSyncPanel
+            compact
+            refreshKey={syncStatusRefreshKey}
+            onRetryDone={loadView}
+            onRefreshData={loadView}
+          />
           <Button
             variant="outline"
             className="text-gray-600 border-gray-200 hover:bg-gray-50"
@@ -366,14 +367,6 @@ export default function CustomerList() {
           </Button>
         </div>
       </div>
-
-      <CustomerContactSyncPanel
-        compact
-        className="mx-4 mt-4 shrink-0"
-        refreshKey={syncStatusRefreshKey}
-        onRetryDone={loadView}
-        onRefreshData={loadView}
-      />
 
       <div className="p-4 border-b border-gray-100 bg-white flex items-center gap-4 shrink-0">
         <div className="relative w-64">
@@ -601,51 +594,21 @@ export default function CustomerList() {
         </table>
       </div>
 
-      <div className="p-4 border-t border-gray-200 bg-white flex items-center justify-between shrink-0">
-        <span className="text-sm text-gray-500">
-          显示 {startIndex} 到 {endIndex} 条，共 {total} 条
-        </span>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 w-8 p-0"
-            disabled={currentPage <= 1}
-            onClick={() => setPage((previous) => Math.max(1, previous - 1))}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          {pageButtons.map((item, index) => {
-            if (item === "ellipsis") {
-              return (
-                <span key={`ellipsis-${index}`} className="text-gray-400 px-1">
-                  ...
-                </span>
-              )
-            }
-            const isCurrent = item === currentPage
-            return (
-              <Button
-                key={`page-${item}`}
-                variant="outline"
-                size="sm"
-                className={`h-8 w-8 p-0 ${isCurrent ? "bg-blue-50 text-blue-600 border-blue-200" : ""}`}
-                onClick={() => setPage(item)}
-              >
-                {item}
-              </Button>
-            )
-          })}
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 w-8 p-0"
-            disabled={currentPage >= totalPages}
-            onClick={() => setPage((previous) => Math.min(totalPages, previous + 1))}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+      <div className="p-4 border-t border-gray-200 bg-white shrink-0">
+        <CRMTablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          total={total}
+          onPageChange={setPage}
+          onPageSizeChange={(nextPageSize) => {
+            setPageSize(nextPageSize)
+            setPage(1)
+          }}
+        />
       </div>
 
       <Dialog

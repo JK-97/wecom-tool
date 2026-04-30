@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertCircle, CheckCircle2, Clock3, Loader2, RefreshCw, RotateCcw } from "lucide-react"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
+import { Dialog } from "@/components/ui/Dialog"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { APIRequestError, normalizeErrorMessage } from "@/services/http"
 import {
@@ -66,6 +67,13 @@ function activeSyncCount(status?: CustomerContactSyncStatus | null): number {
   return readCount(status?.status_counts, "pending", "queued", "processing", "running")
 }
 
+function toneClasses(tone: "warning" | "success" | "info" | "muted") {
+  if (tone === "warning") return "border-orange-200 bg-orange-50 text-orange-700"
+  if (tone === "success") return "border-green-200 bg-green-50 text-green-700"
+  if (tone === "info") return "border-blue-200 bg-blue-50 text-blue-700"
+  return "border-gray-200 bg-white text-gray-600"
+}
+
 export function CustomerContactSyncPanel({
   className,
   compact = false,
@@ -85,6 +93,7 @@ export function CustomerContactSyncPanel({
   const [isLoading, setIsLoading] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
   const [isForbidden, setIsForbidden] = useState(false)
+  const [isDetailOpen, setIsDetailOpen] = useState(false)
 
   const reload = useCallback(async (options?: { silent?: boolean }) => {
     try {
@@ -144,7 +153,7 @@ export function CustomerContactSyncPanel({
         tone: "info" as const,
         icon: Loader2,
         title: "客户联系数据正在同步",
-        description: `同步中 ${processing} 个，排队中 ${pending} 个；页面会先展示本地已同步数据。`,
+        description: `同步中 ${processing} 个，排队中 ${pending} 个；列表会先展示已同步的数据。`,
       }
     }
     if (succeeded > 0) {
@@ -152,14 +161,14 @@ export function CustomerContactSyncPanel({
         tone: "success" as const,
         icon: CheckCircle2,
         title: "客户联系数据最近已同步",
-        description: task?.updated_at ? `最近更新：${formatDateTime(task.updated_at)}` : "数据来自企业微信客户联系同步结果。",
+        description: task?.updated_at ? `最近更新：${formatDateTime(task.updated_at)}` : "数据已从企业微信同步到平台。",
       }
     }
     return {
       tone: "muted" as const,
       icon: Clock3,
       title: "等待客户联系首次同步",
-      description: "进入客户或客户群页面会触发后台同步；同步完成后列表会自动有真实数据可查。",
+      description: "进入客户或群运营页面后会自动同步；完成后即可查看客户和客户群。",
     }
   }, [status])
 
@@ -168,6 +177,9 @@ export function CustomerContactSyncPanel({
   const hasActiveSync = activeCount > 0
   const canRetry = Boolean(status?.can_retry) && failedCount > 0
   const Icon = summary.icon
+  const pendingCount = readCount(status?.status_counts, "pending", "queued")
+  const processingCount = readCount(status?.status_counts, "processing", "running")
+  const succeededCount = readCount(status?.status_counts, "succeeded", "success")
 
   useEffect(() => {
     if (isForbidden || !hasActiveSync) return
@@ -210,8 +222,112 @@ export function CustomerContactSyncPanel({
     await onRefreshData?.()
     const nextStatus = await reload()
     if (activeSyncCount(nextStatus) > 0) {
-      showFeedback({ kind: "info", message: "已触发客户联系后台同步，完成后会自动刷新当前列表。" })
+      showFeedback({ kind: "info", message: "正在同步客户联系数据，完成后会自动刷新当前列表。" })
     }
+  }
+
+  if (compact) {
+    return (
+      <>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn("gap-2 border px-3", toneClasses(summary.tone), className)}
+          onClick={() => setIsDetailOpen(true)}
+          title={summary.description}
+        >
+          <Icon className={cn("h-4 w-4", summary.tone === "info" ? "animate-spin" : "")} />
+          <span>同步详情</span>
+          {failedCount > 0 ? <span className="font-semibold">异常 {failedCount}</span> : null}
+          {failedCount === 0 && hasActiveSync ? <span className="font-semibold">同步中 {activeCount}</span> : null}
+        </Button>
+        <Dialog
+          isOpen={isDetailOpen}
+          onClose={() => setIsDetailOpen(false)}
+          title="数据同步详情"
+          className="max-w-2xl"
+          footer={
+            <>
+              <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
+                关闭
+              </Button>
+              <Button variant="outline" onClick={handleRefresh} disabled={isLoading || isRetrying}>
+                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                刷新数据
+              </Button>
+              {canRetry ? (
+                <Button onClick={handleRetry} disabled={isRetrying || isLoading}>
+                  {isRetrying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                  重试失败任务
+                </Button>
+              ) : null}
+            </>
+          }
+        >
+          <div className="space-y-4">
+            {isForbidden ? (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+                当前账号可查看自己权限范围内的数据；同步失败和重试由管理员或主管处理。
+              </div>
+            ) : (
+              <>
+                <div className={cn("rounded-lg border p-4", toneClasses(summary.tone))}>
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                      <Icon className={cn("h-5 w-5", summary.tone === "info" ? "animate-spin" : "")} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-gray-900">{summary.title}</div>
+                      <div className="mt-1 text-sm leading-6 text-gray-600">{summary.description}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  {[
+                    ["同步中", processingCount],
+                    ["排队中", pendingCount],
+                    ["异常", failedCount],
+                    ["已完成", succeededCount],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="rounded-lg border border-gray-100 bg-white p-3">
+                      <div className="text-xs text-gray-500">{label}</div>
+                      <div className="mt-1 text-lg font-semibold text-gray-900">{Number(value || 0)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-gray-900">最近任务</div>
+                  <div className="max-h-64 overflow-auto rounded-lg border border-gray-100">
+                    {(status?.recent_tasks || []).length === 0 ? (
+                      <div className="p-4 text-sm text-gray-500">暂无同步任务记录。</div>
+                    ) : (
+                      <div className="divide-y divide-gray-100">
+                        {(status?.recent_tasks || []).slice(0, 12).map((task) => (
+                          <div key={task.id || task.task_key} className="flex items-start justify-between gap-4 p-3 text-sm">
+                            <div className="min-w-0">
+                              <div className="font-medium text-gray-900">{taskTypeLabel(task.task_type)}</div>
+                              <div className="mt-1 truncate text-xs text-gray-500">{task.task_key || "-"}</div>
+                              {task.last_error ? <div className="mt-1 text-xs text-orange-700">{task.last_error}</div> : null}
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <Badge variant="secondary" className="px-2 py-0 text-[10px]">
+                                {taskStatusLabel(task.status)}
+                              </Badge>
+                              <div className="mt-1 text-xs text-gray-400">{formatDateTime(task.updated_at)}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </Dialog>
+      </>
+    )
   }
 
   if (isForbidden) {
@@ -219,9 +335,9 @@ export function CustomerContactSyncPanel({
       <div className={cn("rounded-lg border border-gray-200 bg-white px-4 py-3", className)}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-gray-900">客户联系数据由后台同步</div>
+            <div className="text-sm font-semibold text-gray-900">客户联系数据会自动同步</div>
             <div className="mt-1 text-xs text-gray-500">
-              当前账号可查看自己权限范围内的数据；全量同步状态和失败重试由管理员或主管处理。
+              当前账号可查看自己权限范围内的数据；同步失败和重试由管理员或主管处理。
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isLoading}>

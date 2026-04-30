@@ -41,6 +41,7 @@ export type CustomerGroupChatAdmin = {
 export type ListGroupChatsData = {
   group_chats?: CustomerGroupChat[]
   next_cursor?: string
+  total?: number
 }
 
 export type GetGroupChatData = {
@@ -70,11 +71,18 @@ type RawGroupChatAdmin = {
 export async function listGroupChats(params?: {
   cursor?: string
   limit?: number
+  page?: number
+  page_size?: number
 }): Promise<ListGroupChatsData | null> {
   const search = new URLSearchParams()
-  const limit = Number(params?.limit || 0)
+  const limit = Number(params?.page_size || params?.limit || 0)
   if (Number.isFinite(limit) && limit > 0) {
     search.set("limit", String(limit))
+    search.set("page_size", String(limit))
+  }
+  const page = Number(params?.page || 0)
+  if (Number.isFinite(page) && page > 0) {
+    search.set("page", String(page))
   }
   const cursor = (params?.cursor || "").trim()
   if (cursor) {

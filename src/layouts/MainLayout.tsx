@@ -8,9 +8,8 @@ import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartm
 
 const navItems = [
   { name: "微信客服中心", path: "/main/cs-center", icon: MessageSquare },
-  { name: "客户中心", path: "/main/customer-360", icon: Users },
   { name: "客户列表", path: "/main/customers", icon: Users },
-  { name: "客户群", path: "/main/group-detail", icon: Users },
+  { name: "群运营", path: "/main/group-detail", icon: Users },
   { name: "跟进任务中心", path: "/main/task-center", icon: CheckSquare },
   { name: "接待渠道", path: "/main/reception-channels", icon: LinkIcon },
   { name: "路由规则", path: "/main/routing-rules", icon: GitBranch },
