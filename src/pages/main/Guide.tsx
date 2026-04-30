@@ -1,571 +1,600 @@
-import React, { useState, useMemo, useEffect } from "react"
-import { 
-  Book, 
-  MessageSquare, 
-  UserCheck, 
-  UserPlus, 
-  Users, 
-  Settings, 
-  Terminal, 
-  HelpCircle, 
-  Search, 
-  ChevronRight, 
-  ExternalLink, 
-  Clock, 
-  Info, 
-  Copy, 
-  AlertTriangle,
-  Lightbulb,
-  Zap,
-  ShieldAlert
-} from "lucide-react"
-import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/Button"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import Markdown from "react-markdown"
+import { Link } from "react-router-dom"
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Copy,
+  ExternalLink,
+  HelpCircle,
+  Info,
+  MessageSquare,
+  Search,
+  Send,
+  ThumbsDown,
+  ThumbsUp,
+} from "lucide-react"
+import { Button } from "@/components/ui/Button"
+import { usePageFeedback } from "@/components/ui/PageFeedback"
+import { cn } from "@/lib/utils"
+import { GUIDE_DOCS, type GuideDoc } from "@/content/guide/manifest"
 
-// Mock Guide Data
-const GUIDE_SECTIONS = [
-  {
-    id: "overview",
-    title: "产品总览",
-    description: "了解平台核心价值、适用角色及主要功能模块",
-    icon: Book,
-    content: `
-# 产品总览
+type TocItem = {
+  id: string
+  text: string
+  level: 2 | 3
+}
 
-企业微信双域客户沟通平台是一个“聊天侧执行 + 主页端管理协同 + 统一客户与任务底座”的业务平台，旨在打通公域流量（微信客服）与私域经营（客户联系）的闭环。
+const categoryOrder: GuideDoc["category"][] = ["快速开始", "业务配置", "日常使用"]
 
-> [!INFO]
-> **定位说明**：本平台不是原生企业微信的替代品，而是其能力的增强与业务闭环的实现工具。
+function slugify(text: string) {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\u4e00-\u9fa5]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
 
-## 核心价值
-平台通过“双域流转”机制，解决企业在客户服务与经营中的断层问题：
-- **微信客服域**：承接高频咨询，侧重响应效率与标准服务。
-- **客户联系域**：承接深度经营，侧重转化推进与长期维护。
-- **统一底座**：串联客户全生命周期的互动轨迹、升级记录与任务状态。
+function readHashDocID() {
+  const hash = decodeURIComponent(window.location.hash.replace(/^#/, "")).trim()
+  if (!hash) return ""
+  const exactDoc = GUIDE_DOCS.find((doc) => doc.id === hash)
+  if (exactDoc) return exactDoc.id
+  const headingDoc = GUIDE_DOCS.find((doc) => hash.startsWith(`${doc.id}-`))
+  return headingDoc?.id || ""
+}
 
-## 适用角色
-- **企业管理员**：负责全局配置、权限分配与系统集成。
-- **客服主管**：负责接待渠道、路由策略与服务质量监控。
-- **一线客服**：负责接待咨询、解决问题并识别高价值客户进行“升级”。
-- **销售/运营**：在聊天侧使用工具栏进行深度跟进、记录结果与执行 SOP。
+function buildDocURL(docID: string) {
+  return `${window.location.origin}${window.location.pathname}${window.location.search}#${docID}`
+}
 
-## 快速上手路径
-### 1. 基础接入
-管理员完成企业微信应用接入与工具栏 URL 配置。
-### 2. 渠道与路由
-客服主管配置接待渠道（open_kfid）并设置分发规则。
-### 3. 会话处理
-客服在主页端处理会话，对意向客户执行“升级为客户联系”。
-### 4. 深度跟进
-销售在企微聊天侧通过工具栏查看客户画像并记录跟进动作。
-    `
-  },
-  {
-    id: "cs-supervisor",
-    title: "客服主管：配置渠道与路由",
-    description: "管理接待入口与自动化分发逻辑",
-    icon: UserCheck,
-    content: `
-# 客服主管：配置渠道与路由
+function extractHeadings(doc: GuideDoc): TocItem[] {
+  return (doc.content.match(/^#{2,3}\s+(.+)$/gm) || []).map((line) => {
+    const marker = line.match(/^#{2,3}/)?.[0] || "##"
+    const text = line.replace(/^#{2,3}\s+/, "").trim()
+    const level: TocItem["level"] = marker.length === 3 ? 3 : 2
+    return {
+      id: `${doc.id}-${slugify(text)}`,
+      text,
+      level,
+    }
+  })
+}
 
-客服主管的核心职责是确保客户能够从正确的入口进入，并被最合适的成员接待。
+function stripMarkdown(content: string) {
+  return content
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`[\]()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
 
-## 配置接待渠道
-在 \`接待渠道\` 模块中，您可以管理多个微信客服入口：
-- **渠道识别**：通过 \`open_kfid\` 唯一标识一个接待入口。
-- **状态管理**：实时查看渠道的同步状态与启用情况。
-- **默认场景**：为不同来源（如扫码、搜索、广告）预设不同的接待场景。
+function groupDocs(docs: GuideDoc[]) {
+  return categoryOrder
+    .map((category) => ({
+      category,
+      docs: docs.filter((doc) => doc.category === category),
+    }))
+    .filter((group) => group.docs.length > 0)
+}
 
-> [!TIP]
-> 建议为每个主要业务线设置独立的接待渠道，以便进行精细化的数据统计与路由分发。
+function getRelatedDocs(doc: GuideDoc) {
+  return doc.relatedDocIds
+    .map((id) => GUIDE_DOCS.find((item) => item.id === id))
+    .filter((item): item is GuideDoc => Boolean(item))
+}
 
-## 配置路由规则
-路由规则决定了客户进入后的流转逻辑：
-1. **优先级机制**：系统按规则列表从上至下匹配，首条命中即生效。
-2. **条件组合**：支持按渠道、时间段、客户标签等维度进行组合匹配。
-3. **目标分配**：可分配至特定成员、技能组或第三方系统。
+function normalizeCalloutText(text: string) {
+  return text
+    .replace(/\[!(INFO|TIP|WARNING|IMPORTANT|CAUTION)\]/gi, "")
+    .replace(/^(提示|注意|说明|重要|警告)[:：]\s*/, "")
+    .trim()
+}
 
-## 监控与优化
-- **超时预警**：关注 \`微信客服中心\` 中的超时会话，及时调整人力。
-- **规则复盘**：定期查看 \`数据看板\`，分析各规则的命中率与转化效果。
-    `
-  },
-  {
-    id: "cs-staff",
-    title: "客服：处理并升级会话",
-    description: "高效接待咨询并识别高价值客户",
-    icon: MessageSquare,
-    content: `
-# 客服：处理并升级会话
-
-一线客服是客户进入平台的第一触点，重点在于“解决问题”与“识别价值”。
-
-## 会话处理流程
-1. **待处理识别**：在 \`微信客服中心\` 实时查看新进入的咨询。
-2. **辅助工具**：利用侧边栏的知识库、快捷回复提高响应效率。
-3. **状态流转**：根据处理进度标记为“接待中”、“已解决”或“需转交”。
-
-## 升级为客户联系
-当识别到客户具有长期经营价值时，应执行“升级”动作：
-- **操作路径**：在会话详情页点击“升级为客户联系”。
-- **信息补齐**：填写客户意向、后续负责人及跟进建议。
-- **自动流转**：升级后，系统将自动在销售/运营的工具栏中生成待办任务。
-
-> [!IMPORTANT]
-> 升级动作是公域转私域的关键节点，请务必在升级时填写详尽的“客户摘要”，以降低后续交接成本。
-    `
-  },
-  {
-    id: "sales-sidebar",
-    title: "销售：单聊工具栏跟进",
-    description: "在企微聊天侧进行深度转化",
-    icon: UserPlus,
-    content: `
-# 销售：单聊工具栏跟进
-
-销售人员主要在企业微信原生聊天窗口中工作，通过侧边工具栏获取业务支撑。
-
-## 核心功能模块
-- **客户 360 视图**：查看客户的基本信息、标签、历史互动及客服升级记录。
-- **建议话术**：根据客户当前阶段，系统自动推荐最佳沟通话术。
-- **素材库**：一键发送产品手册、报价单、案例视频等素材。
-- **跟进记录**：实时记录沟通结果，系统将自动同步至主页端客户中心。
-
-## 最佳实践
-1. **沟通前预判**：先看工具栏中的“最近互动摘要”，了解客户背景。
-2. **执行 SOP**：按照系统提示的 SOP 步骤进行引导。
-3. **即时记录**：沟通结束后立即在工具栏勾选“跟进结果”，避免遗忘。
-
-> [!CAUTION]
-> 请勿在工具栏中录入敏感或非业务相关的个人隐私信息，所有记录均受合规审计。
-    `
-  },
-  {
-    id: "ops-sidebar",
-    title: "运营：群聊工具栏",
-    description: "社群批量经营与风险识别",
-    icon: Users,
-    content: `
-# 运营：群聊工具栏
-
-群聊工具栏旨在提升社群运营的标准化程度与风险控制能力。
-
-## 群运营看板
-- **群画像**：实时统计群成员规模、活跃度及关键成员分布。
-- **AI 总结**：自动提炼群内热议话题，帮助运营者快速掌握舆情。
-- **风险预警**：识别群内违规言论、竞品链接或负面情绪。
-
-## SOP 任务执行
-系统会根据群生命周期自动推送运营任务：
-- **入群欢迎**：新成员入群自动提醒发送欢迎语。
-- **活动分发**：定时提醒在群内发布营销活动或干货内容。
-- **定期维护**：提醒进行群内互动或清理僵尸粉。
-
-> [!TIP]
-> 结合“素材采纳率”数据，不断优化 SOP 中的内容模板，提升群内转化效果。
-    `
-  },
-  {
-    id: "admin-config",
-    title: "管理员：配置工具栏接入",
-    description: "系统集成、权限管理与环境配置",
-    icon: Settings,
-    content: `
-# 管理员：配置工具栏接入
-
-管理员需确保底层能力的正确配置，这是所有业务功能运行的前提。
-
-## 接入三部曲
-1. **应用授权**：在企业微信后台完成自建应用的创建与授权。
-2. **入口配置**：将平台提供的工具栏 URL 配置到企微后台的“聊天工具栏”入口。
-3. **可信域名**：确保 JSSDK 签名域名、业务域名均已正确备案并授权。
-
-## 权限体系
-- **功能权限**：按角色分配主页端模块访问权限。
-- **数据权限**：配置成员可见的客户范围（个人、部门、全公司）。
-- **敏感权限**：管理导出、删除等高危操作的审批流。
-
-> [!WARNING]
-> 修改“可信域名”或“Secret”会导致现有 JSSDK 签名失效，请在非业务高峰期进行操作。
-    `
-  },
-  {
-    id: "dev-debug",
-    title: "DEBUG 工具与联调说明",
-    description: "开发者调试工具与常见错误排查",
-    icon: Terminal,
-    content: `
-# DEBUG 工具与联调说明
-
-本模块仅供技术人员在实施与联调阶段使用。
-
-## 联调检查清单
-- **JSSDK 状态**：调用 \`wx.config\` 是否返回 \`ok\`。
-- **Context 识别**：是否能正确获取 \`external_userid\` 或 \`chat_id\`。
-- **AgentConfig**：涉及客户联系接口时，必须正确配置 \`agentConfig\`。
-
-## 常见错误码 (Error Codes)
-- **40093**: \`jsapi_ticket\` 过期或无效。
-- **80001**: 可信域名未配置或不匹配。
-- **42001**: \`access_token\` 超时。
-
-## 调试建议
-使用企业微信开发者工具进行初步排查，真机调试时请开启 \`debug: true\` 模式查看原生弹窗报错。
-    `
-  },
-  {
-    id: "faq",
-    title: "常见问题",
-    description: "业务逻辑与操作细节疑难解答",
-    icon: HelpCircle,
-    content: `
-# 常见问题
-
-## 平台与原生企微的关系？
-平台是基于企微 API 构建的业务层，旨在提供更强的管理协同能力。聊天动作仍在企微内完成，但业务记录与策略下发在平台完成。
-
-## 为什么我搜不到某个客户？
-请检查：
-1. 该客户是否已添加为外部联系人。
-2. 您的数据权限是否覆盖了该客户。
-3. 搜索关键词是否匹配（支持姓名、备注、手机号）。
-
-## 升级为客户联系后，原客服会话会消失吗？
-不会。原客服会话记录将保留在客服中心，但该客户的后续经营主阵地将转移至客户联系域。
-    `
-  }
-]
+function MarkdownCallout({ children }: { children: React.ReactNode }) {
+  const text = normalizeCalloutText(
+    React.Children.toArray(children)
+      .map((child) => {
+        if (typeof child === "string") return child
+        if (React.isValidElement<{ children?: React.ReactNode }>(child)) {
+          return React.Children.toArray(child.props.children).join("")
+        }
+        return ""
+      })
+      .join(" "),
+  )
+  return (
+    <div className="my-6 flex gap-3 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+      <div>{text || children}</div>
+    </div>
+  )
+}
 
 export default function Guide() {
-  const [activeSectionId, setActiveSectionId] = useState(GUIDE_SECTIONS[0].id)
+  const { showFeedback } = usePageFeedback()
+  const initialDocID =
+    typeof window === "undefined" ? "" : readHashDocID() || GUIDE_DOCS[0].id
+  const [activeDocID, setActiveDocID] = useState(initialDocID)
   const [searchQuery, setSearchQuery] = useState("")
-  const [toc, setToc] = useState<{ id: string; text: string }[]>([])
+  const [feedbackValue, setFeedbackValue] = useState<"helpful" | "unhelpful" | "">("")
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [activeHeadingID, setActiveHeadingID] = useState("")
+  const contentRef = useRef<HTMLElement | null>(null)
 
-  const activeSection = useMemo(() => 
-    GUIDE_SECTIONS.find(s => s.id === activeSectionId) || GUIDE_SECTIONS[0]
-  , [activeSectionId])
-
-  // Generate TOC from active section content
-  useEffect(() => {
-    const headings = activeSection.content.match(/^##\s+(.+)$/gm) || []
-    const tocItems = headings.map(h => {
-      const text = h.replace(/^##\s+/, "").trim()
-      const id = text.toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, "-")
-      return { id, text }
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+  const filteredDocs = useMemo(() => {
+    if (!normalizedQuery) return GUIDE_DOCS
+    return GUIDE_DOCS.filter((doc) => {
+      const haystack = [
+        doc.title,
+        doc.description,
+        doc.category,
+        doc.role,
+        stripMarkdown(doc.content),
+      ]
+        .join(" ")
+        .toLowerCase()
+      return haystack.includes(normalizedQuery)
     })
-    setToc(tocItems)
-  }, [activeSection])
+  }, [normalizedQuery])
 
-  const filteredSections = useMemo(() => {
-    if (!searchQuery) return GUIDE_SECTIONS
-    return GUIDE_SECTIONS.filter(s => 
-      s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.content.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    if (filteredDocs.length === 0) return
+    if (!filteredDocs.some((doc) => doc.id === activeDocID)) {
+      setActiveDocID(filteredDocs[0].id)
+    }
+  }, [activeDocID, filteredDocs])
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const nextDocID = readHashDocID()
+      if (nextDocID) setActiveDocID(nextDocID)
+    }
+    window.addEventListener("hashchange", handleHashChange)
+    handleHashChange()
+    return () => window.removeEventListener("hashchange", handleHashChange)
+  }, [])
+
+  const activeDoc = filteredDocs.find((doc) => doc.id === activeDocID) || null
+  const groupedDocs = useMemo(() => groupDocs(filteredDocs), [filteredDocs])
+  const toc = useMemo(() => (activeDoc ? extractHeadings(activeDoc) : []), [activeDoc])
+  const relatedDocs = useMemo(() => (activeDoc ? getRelatedDocs(activeDoc) : []), [activeDoc])
+
+  useEffect(() => {
+    setActiveHeadingID(toc[0]?.id || "")
+  }, [activeDocID, toc])
+
+  useEffect(() => {
+    if (!activeDoc || !contentRef.current) return
+    const scroller = contentRef.current
+    const headingSelector = `h2[id^="${activeDoc.id}-"], h3[id^="${activeDoc.id}-"]`
+    const headingNodes = Array.from(scroller.querySelectorAll<HTMLElement>(headingSelector))
+    if (headingNodes.length === 0) return
+
+    const updateActiveHeading = () => {
+      const scrollerTop = scroller.getBoundingClientRect().top
+      const readingLine = scrollerTop + 120
+      const current =
+        headingNodes
+          .filter((node) => node.getBoundingClientRect().top <= readingLine)
+          .at(-1) || headingNodes[0]
+      setActiveHeadingID(current.id)
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visibleHeadings = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)
+
+        if (visibleHeadings[0]?.target instanceof HTMLElement) {
+          setActiveHeadingID(visibleHeadings[0].target.id)
+        }
+      },
+      {
+        root: scroller,
+        rootMargin: "0px 0px -65% 0px",
+        threshold: [0, 1],
+      },
     )
-  }, [searchQuery])
 
-  const copyLink = () => {
-    const url = window.location.href.split('#')[0] + '#' + activeSectionId
-    navigator.clipboard.writeText(url)
+    headingNodes.forEach((node) => observer.observe(node))
+    scroller.addEventListener("scroll", updateActiveHeading, { passive: true })
+    updateActiveHeading()
+
+    return () => {
+      observer.disconnect()
+      scroller.removeEventListener("scroll", updateActiveHeading)
+    }
+  }, [activeDoc, activeDocID])
+
+  useEffect(() => {
+    if (!activeDoc || typeof window === "undefined") return
+    const hash = decodeURIComponent(window.location.hash.replace(/^#/, "")).trim()
+    if (!hash.startsWith(`${activeDoc.id}-`)) return
+
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById(hash)
+      target?.scrollIntoView({ block: "start" })
+      if (target) setActiveHeadingID(hash)
+    })
+  }, [activeDoc])
+
+  const selectDoc = (docID: string) => {
+    setActiveDocID(docID)
+    setFeedbackValue("")
+    setMobileNavOpen(false)
+    window.history.replaceState(null, "", `#${docID}`)
+    contentRef.current?.scrollTo({ top: 0, behavior: "smooth" })
+  }
+
+  const jumpToHeading = (item: TocItem) => {
+    const target = document.getElementById(item.id)
+    if (!target) return
+    window.history.replaceState(null, "", `#${item.id}`)
+    target.scrollIntoView({ block: "start", behavior: "smooth" })
+    setActiveHeadingID(item.id)
+  }
+
+  const copyLink = async () => {
+    if (!activeDoc) return
+    const url = buildDocURL(activeDoc.id)
+    try {
+      await navigator.clipboard.writeText(url)
+      showFeedback({ message: "指南链接已复制。", kind: "success" })
+    } catch {
+      showFeedback({ message: "当前浏览器不允许复制，请手动复制地址栏链接。", kind: "warning" })
+    }
+  }
+
+  const submitFeedback = (value: "helpful" | "unhelpful") => {
+    setFeedbackValue(value)
+    showFeedback({
+      message: value === "helpful" ? "感谢反馈，我们会继续完善指南。" : "已记录反馈，我们会优先优化这篇指南。",
+      kind: "success",
+    })
+  }
+
+  const contactSupport = () => {
+    showFeedback({
+      message: "请联系企业管理员或项目对接人处理；后续可在这里接入在线支持入口。",
+      kind: "info",
+    })
   }
 
   return (
-    <div className="flex h-full bg-[#F8FAFC] -m-8 overflow-hidden">
-      {/* Left Sidebar - Grouped Navigation */}
-      <div className="w-80 shrink-0 border-r border-gray-200 bg-white flex flex-col">
-        <div className="p-6 border-b border-gray-100">
+    <div className="-m-8 flex h-[calc(100%+4rem)] min-h-0 flex-col overflow-hidden bg-white lg:flex-row">
+      <aside className="flex w-full shrink-0 flex-col border-b border-gray-200 bg-white lg:w-[296px] lg:border-b-0 lg:border-r">
+        <div className="border-b border-gray-100 p-4">
+          <label htmlFor="guide-search" className="sr-only">
+            搜索使用指南
+          </label>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
-              type="text"
-              placeholder="搜索指南..."
-              className="h-10 w-full rounded-xl border border-gray-200 bg-gray-50 pl-9 pr-4 text-sm focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10 transition-all"
+              id="guide-search"
+              name="guide_search"
+              type="search"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="搜索指南"
+              className="h-10 w-full rounded-md border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+          <div className="mt-2 min-h-4 text-[11px] text-gray-400">
+            {normalizedQuery ? `找到 ${filteredDocs.length} 篇相关指南` : "按业务场景查找指南"}
+          </div>
+          <button
+            type="button"
+            className="mt-3 flex h-9 w-full items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3 text-left text-xs font-medium text-gray-700 lg:hidden"
+            onClick={() => setMobileNavOpen((open) => !open)}
+            aria-expanded={mobileNavOpen}
+          >
+            <span className="truncate">{activeDoc ? `当前：${activeDoc.title}` : "选择指南"}</span>
+            <ChevronDown className={cn("h-4 w-4 shrink-0 text-gray-400 transition-transform", mobileNavOpen && "rotate-180")} />
+          </button>
         </div>
-        
-        <nav className="flex-1 overflow-y-auto p-4 space-y-8">
-          <div>
-            <div className="px-3 mb-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest">快速开始</div>
-            <div className="space-y-1">
-              {filteredSections.filter(s => s.id === 'overview').map((section) => (
-                <button
-                  key={section.id}
-                  onClick={() => setActiveSectionId(section.id)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 rounded-xl px-3 py-3 text-left transition-all group",
-                    activeSectionId === section.id
-                      ? "bg-blue-50 text-blue-600 shadow-sm"
-                      : "text-gray-600 hover:bg-gray-50"
-                  )}
-                >
-                  <div className="flex items-center gap-3 font-bold text-sm">
-                    <section.icon className={cn("h-4 w-4", activeSectionId === section.id ? "text-blue-600" : "text-gray-400")} />
-                    {section.title}
-                  </div>
-                  <div className={cn("text-[11px] pl-7 leading-relaxed", activeSectionId === section.id ? "text-blue-500/70" : "text-gray-400")}>
-                    {section.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
 
-          <div>
-            <div className="px-3 mb-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest">业务配置指南</div>
-            <div className="space-y-1">
-              {filteredSections.filter(s => ['cs-supervisor', 'cs-staff', 'sales-sidebar', 'ops-sidebar'].includes(s.id)).map((section) => (
-                <button
-                  key={section.id}
-                  onClick={() => setActiveSectionId(section.id)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 rounded-xl px-3 py-3 text-left transition-all group",
-                    activeSectionId === section.id
-                      ? "bg-blue-50 text-blue-600 shadow-sm"
-                      : "text-gray-600 hover:bg-gray-50"
-                  )}
-                >
-                  <div className="flex items-center gap-3 font-bold text-sm">
-                    <section.icon className={cn("h-4 w-4", activeSectionId === section.id ? "text-blue-600" : "text-gray-400")} />
-                    {section.title}
-                  </div>
-                  <div className={cn("text-[11px] pl-7 leading-relaxed", activeSectionId === section.id ? "text-blue-500/70" : "text-gray-400")}>
-                    {section.description}
-                  </div>
-                </button>
-              ))}
+        <nav className={cn("min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:block lg:max-h-none lg:py-4", mobileNavOpen ? "max-h-[320px]" : "hidden")}>
+          {groupedDocs.length > 0 ? (
+            groupedDocs.map((group) => (
+              <div key={group.category} className="mb-6 last:mb-0">
+                <div className="mb-2 px-2 text-[11px] font-semibold text-gray-400">
+                  {group.category}
+                </div>
+                <div className="space-y-1">
+                  {group.docs.map((doc) => {
+                    const selected = activeDoc?.id === doc.id
+                    return (
+                      <button
+                        key={doc.id}
+                        type="button"
+                        onClick={() => selectDoc(doc.id)}
+                        className={cn(
+                          "w-full rounded-md border-l-4 px-3 py-2.5 text-left transition-colors",
+                          selected
+                            ? "border-blue-600 bg-blue-50 text-blue-700"
+                            : "border-transparent text-gray-600 hover:bg-gray-50",
+                        )}
+                      >
+                        <div className="text-sm font-semibold">{doc.title}</div>
+                        <div className="mt-1 line-clamp-2 text-[11px] leading-5 text-gray-500">
+                          {doc.description}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-4 text-sm text-gray-500">
+              没有找到匹配的指南。
             </div>
-          </div>
-
-          <div>
-            <div className="px-3 mb-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest">系统管理与开发</div>
-            <div className="space-y-1">
-              {filteredSections.filter(s => ['admin-config', 'dev-debug'].includes(s.id)).map((section) => (
-                <button
-                  key={section.id}
-                  onClick={() => setActiveSectionId(section.id)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 rounded-xl px-3 py-3 text-left transition-all group",
-                    activeSectionId === section.id
-                      ? "bg-blue-50 text-blue-600 shadow-sm"
-                      : "text-gray-600 hover:bg-gray-50"
-                  )}
-                >
-                  <div className="flex items-center gap-3 font-bold text-sm">
-                    <section.icon className={cn("h-4 w-4", activeSectionId === section.id ? "text-blue-600" : "text-gray-400")} />
-                    {section.title}
-                  </div>
-                  <div className={cn("text-[11px] pl-7 leading-relaxed", activeSectionId === section.id ? "text-blue-500/70" : "text-gray-400")}>
-                    {section.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="px-3 mb-3 text-[11px] font-bold text-gray-400 uppercase tracking-widest">帮助与参考</div>
-            <div className="space-y-1">
-              {filteredSections.filter(s => ['faq'].includes(s.id)).map((section) => (
-                <button
-                  key={section.id}
-                  onClick={() => setActiveSectionId(section.id)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 rounded-xl px-3 py-3 text-left transition-all group",
-                    activeSectionId === section.id
-                      ? "bg-blue-50 text-blue-600 shadow-sm"
-                      : "text-gray-600 hover:bg-gray-50"
-                  )}
-                >
-                  <div className="flex items-center gap-3 font-bold text-sm">
-                    <section.icon className={cn("h-4 w-4", activeSectionId === section.id ? "text-blue-600" : "text-gray-400")} />
-                    {section.title}
-                  </div>
-                  <div className={cn("text-[11px] pl-7 leading-relaxed", activeSectionId === section.id ? "text-blue-500/70" : "text-gray-400")}>
-                    {section.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </nav>
 
-        <div className="p-6 border-t border-gray-100 bg-gray-50/50">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
-              <HelpCircle className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-gray-900">需要更多帮助？</div>
-              <div className="text-[10px] text-gray-400">专业团队为您解答</div>
-            </div>
-          </div>
-          <Button variant="outline" size="sm" className="w-full text-xs font-bold h-9 bg-white border-gray-200 shadow-sm hover:bg-gray-50">
-            联系技术支持 <ExternalLink className="w-3.5 h-3.5 ml-2" />
+        <div className="hidden border-t border-gray-100 p-4 lg:block">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 w-full justify-center text-xs"
+            onClick={contactSupport}
+          >
+            <HelpCircle className="mr-2 h-3.5 w-3.5" />
+            联系支持
           </Button>
         </div>
-      </div>
+      </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto scroll-smooth bg-white">
-        <div className="max-w-4xl mx-auto px-12 py-16">
-          {/* Document Header */}
-          <div className="mb-12">
-            <div className="flex items-center gap-2 text-[11px] font-bold text-blue-600 uppercase tracking-widest mb-6">
-              <Book className="w-3.5 h-3.5" /> 产品文档中心 / {activeSection.title}
-            </div>
-            <h1 className="text-4xl font-bold text-gray-900 tracking-tight mb-6 leading-tight">{activeSection.title}</h1>
-            <div className="flex flex-wrap items-center gap-6 text-xs text-gray-400 border-b border-gray-100 pb-8">
-              <span className="flex items-center gap-2"><Clock className="w-4 h-4" /> 最后更新：2026-04-01</span>
-              <span className="flex items-center gap-2"><Info className="w-4 h-4" /> 适用版本：v1.2.4+</span>
-              <div className="flex-1" />
-              <div className="flex items-center gap-3">
-                <Button variant="ghost" size="sm" onClick={copyLink} className="h-8 text-xs font-bold text-gray-500 hover:text-blue-600">
-                  <Copy className="w-3.5 h-3.5 mr-2" /> 复制链接
-                </Button>
-                <Button variant="ghost" size="sm" className="h-8 text-xs font-bold text-gray-500 hover:text-blue-600">
-                  反馈建议
-                </Button>
-              </div>
-            </div>
-          </div>
-          
-          <div className="prose prose-slate max-w-none 
-            prose-headings:text-gray-900 prose-headings:tracking-tight prose-headings:font-bold
-            prose-h1:hidden
-            prose-h2:text-2xl prose-h2:mt-16 prose-h2:mb-8 prose-h2:pb-4 prose-h2:border-b prose-h2:border-gray-100
-            prose-h3:text-xl prose-h3:mt-10 prose-h3:mb-6
-            prose-p:text-gray-600 prose-p:leading-8 prose-p:text-[16px] prose-p:mb-6
-            prose-li:text-gray-600 prose-li:leading-8 prose-li:text-[16px] prose-li:mb-2
-            prose-strong:text-gray-900 prose-strong:font-bold
-            prose-code:text-blue-600 prose-code:bg-blue-50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-medium prose-code:before:content-none prose-code:after:content-none
-            prose-pre:bg-slate-900 prose-pre:rounded-2xl prose-pre:p-8 prose-pre:shadow-xl prose-pre:my-8
-            prose-blockquote:border-l-4 prose-blockquote:border-blue-500 prose-blockquote:bg-blue-50/50 prose-blockquote:rounded-r-2xl prose-blockquote:py-2 prose-blockquote:px-8 prose-blockquote:my-8
-          ">
-            <Markdown
-              components={{
-                h2: ({ children }) => {
-                  const text = React.Children.toArray(children).join("")
-                  const id = text.toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, "-")
-                  return <h2 id={id}>{children}</h2>
-                },
-                blockquote: ({ children }) => {
-                  const text = React.Children.toArray(children).map(c => (c as any)?.props?.children?.[0] || "").join("")
-                  
-                  const callouts = [
-                    { key: "[!INFO]", icon: Info, color: "blue", label: "说明 / Info" },
-                    { key: "[!TIP]", icon: Lightbulb, color: "emerald", label: "提示 / Tip" },
-                    { key: "[!WARNING]", icon: AlertTriangle, color: "orange", label: "注意 / Warning" },
-                    { key: "[!IMPORTANT]", icon: Zap, color: "indigo", label: "重要 / Important" },
-                    { key: "[!CAUTION]", icon: ShieldAlert, color: "red", label: "警告 / Caution" },
-                  ]
+      <section ref={contentRef} className="min-w-0 flex-1 overflow-y-auto bg-[#F7F8FA]">
+        <div className="mx-auto flex w-full max-w-[1216px] flex-col justify-center gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:gap-6 lg:px-8 lg:py-8">
+          <article className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white lg:max-w-[860px]">
+            {activeDoc ? (
+              <>
+                <header className="border-b border-gray-100 px-5 py-5 sm:px-8 sm:py-6">
+                  <div className="mb-3 flex items-center gap-2 text-xs font-medium text-blue-600">
+                    <BookOpen className="h-4 w-4" />
+                    使用指南 / {activeDoc.category}
+                  </div>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <h1 className="text-2xl font-semibold text-gray-900">{activeDoc.title}</h1>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
+                        {activeDoc.description}
+                      </p>
+                    </div>
+                    <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
+                      <Button variant="outline" size="sm" className="h-8 flex-1 text-xs sm:flex-none" onClick={copyLink}>
+                        <Copy className="mr-1.5 h-3.5 w-3.5" />
+                        复制链接
+                      </Button>
+                      {activeDoc.relatedPage ? (
+                        <Link
+                          to={activeDoc.relatedPage.href}
+                          className="inline-flex h-8 flex-1 items-center justify-center rounded-md bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 sm:flex-none"
+                        >
+                          {activeDoc.relatedPage.label}
+                          <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                        </Link>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="mt-5 flex flex-wrap items-center gap-4 text-xs text-gray-500">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Info className="h-3.5 w-3.5" />
+                      适用：{activeDoc.role}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5" />
+                      阅读约 {activeDoc.readingMinutes} 分钟
+                    </span>
+                    <span>更新：{activeDoc.updatedAt}</span>
+                  </div>
+                </header>
 
-                  const callout = callouts.find(c => text.includes(c.key))
+                <div className="px-5 py-6 sm:px-8 sm:py-8">
+                  <div
+                    className="max-w-none text-gray-700"
+                  >
+                    <Markdown
+                      components={{
+                        h1: () => null,
+                        h2: ({ children }) => {
+                          const text = React.Children.toArray(children).join("")
+                          return (
+                            <h2
+                              id={`${activeDoc.id}-${slugify(text)}`}
+                              className="mt-10 scroll-mt-8 border-b border-gray-100 pb-3 text-xl font-semibold text-gray-950 first:mt-0"
+                            >
+                              {children}
+                            </h2>
+                          )
+                        },
+                        h3: ({ children }) => (
+                          <h3
+                            id={`${activeDoc.id}-${slugify(React.Children.toArray(children).join(""))}`}
+                            className="mt-7 scroll-mt-8 text-base font-semibold text-gray-900"
+                          >
+                            {children}
+                          </h3>
+                        ),
+                        p: ({ children }) => (
+                          <p className="mt-4 text-[15px] leading-7 text-gray-600">
+                            {children}
+                          </p>
+                        ),
+                        ul: ({ children }) => (
+                          <ul className="my-5 space-y-2 rounded-lg border border-gray-100 bg-gray-50 px-6 py-4 text-[15px] leading-7 text-gray-600 marker:text-blue-500">
+                            {children}
+                          </ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol className="my-5 space-y-3 rounded-lg border border-blue-100 bg-blue-50/40 px-6 py-4 text-[15px] leading-7 text-gray-700 marker:font-semibold marker:text-blue-600">
+                            {children}
+                          </ol>
+                        ),
+                        li: ({ children }) => (
+                          <li className="pl-1 text-[15px] leading-7 text-gray-600">
+                            {children}
+                          </li>
+                        ),
+                        strong: ({ children }) => (
+                          <strong className="font-semibold text-gray-950">{children}</strong>
+                        ),
+                        code: ({ children }) => (
+                          <code className="rounded bg-blue-50 px-1.5 py-0.5 text-[13px] font-medium text-blue-700">
+                            {children}
+                          </code>
+                        ),
+                        a: ({ href, children }) => {
+                          const targetHref = href || "#"
+                          if (targetHref.startsWith("/")) {
+                            return (
+                              <Link
+                                to={targetHref}
+                                className="inline-flex items-center rounded text-blue-600 underline-offset-2 hover:underline"
+                              >
+                                {children}
+                              </Link>
+                            )
+                          }
+                          return (
+                            <a
+                              href={targetHref}
+                              target={targetHref.startsWith("http") ? "_blank" : undefined}
+                              rel="noreferrer"
+                              className="text-blue-600 underline-offset-2 hover:underline"
+                            >
+                              {children}
+                            </a>
+                          )
+                        },
+                        blockquote: ({ children }) => <MarkdownCallout>{children}</MarkdownCallout>,
+                      }}
+                    >
+                      {activeDoc.content}
+                    </Markdown>
+                  </div>
 
-                  if (callout) {
-                    const colorClasses: Record<string, string> = {
-                      blue: "border-blue-200 bg-blue-50/50 text-blue-800",
-                      emerald: "border-emerald-200 bg-emerald-50/50 text-emerald-800",
-                      orange: "border-orange-200 bg-orange-50/50 text-orange-800",
-                      indigo: "border-indigo-200 bg-indigo-50/50 text-indigo-800",
-                      red: "border-red-200 bg-red-50/50 text-red-800",
-                    }
-                    const iconClasses: Record<string, string> = {
-                      blue: "text-blue-500",
-                      emerald: "text-emerald-500",
-                      orange: "text-orange-500",
-                      indigo: "text-indigo-500",
-                      red: "text-red-500",
-                    }
-
-                    return (
-                      <div className={cn("my-10 flex gap-5 rounded-2xl border p-8 shadow-sm transition-all hover:shadow-md", colorClasses[callout.color])}>
-                        <callout.icon className={cn("h-6 w-6 shrink-0", iconClasses[callout.color])} />
-                        <div className="text-[15px] leading-relaxed">
-                          <div className="font-bold mb-2 uppercase tracking-wider text-[11px]">{callout.label}</div>
-                          {React.Children.map(children, child => {
-                             if (typeof child === 'object' && (child as any)?.props?.children) {
-                               return React.cloneElement(child as any, {
-                                 children: (child as any).props.children.map((c: any) => 
-                                   typeof c === 'string' ? c.replace(callout.key, "").trim() : c
-                                 )
-                               })
-                             }
-                             return child
-                          })}
+                  <div className="mt-12 border-t border-gray-100 pt-8">
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 px-5 py-4">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900">本页内容对你有帮助吗？</div>
+                          <div className="mt-1 text-xs text-gray-500">反馈会帮助我们持续优化使用指南。</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant={feedbackValue === "helpful" ? undefined : "outline"}
+                            size="sm"
+                            className="h-8 text-xs"
+                            onClick={() => submitFeedback("helpful")}
+                          >
+                            <ThumbsUp className="mr-1.5 h-3.5 w-3.5" />
+                            有帮助
+                          </Button>
+                          <Button
+                            variant={feedbackValue === "unhelpful" ? undefined : "outline"}
+                            size="sm"
+                            className="h-8 text-xs"
+                            onClick={() => submitFeedback("unhelpful")}
+                          >
+                            <ThumbsDown className="mr-1.5 h-3.5 w-3.5" />
+                            需改进
+                          </Button>
                         </div>
                       </div>
-                    )
-                  }
-                  return <blockquote>{children}</blockquote>
-                }
-              }}
-            >
-              {activeSection.content}
-            </Markdown>
-          </div>
-
-          {/* Helpful Feedback */}
-          <div className="mt-32 pt-16 border-t border-gray-100 flex flex-col items-center text-center">
-            <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-6">
-              <MessageSquare className="w-8 h-8 text-gray-300" />
-            </div>
-            <div className="text-lg font-bold text-gray-900 mb-2">本页内容对您有帮助吗？</div>
-            <p className="text-sm text-gray-400 mb-10 max-w-sm">您的反馈将帮助我们不断改进文档质量，为更多用户提供更好的服务支持</p>
-            <div className="flex gap-4">
-              <Button variant="outline" className="rounded-xl px-8 py-6 border-gray-200 hover:bg-gray-50 hover:text-blue-600 hover:border-blue-200 transition-all font-bold">
-                👍 有帮助
-              </Button>
-              <Button variant="outline" className="rounded-xl px-8 py-6 border-gray-200 hover:bg-gray-50 hover:text-blue-600 hover:border-blue-200 transition-all font-bold">
-                👎 没帮助
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Right TOC - Sticky */}
-      <div className="w-72 shrink-0 border-l border-gray-100 bg-white hidden xl:flex flex-col p-10">
-        <div className="sticky top-10">
-          <div className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-8">本页目录</div>
-          <div className="space-y-0 border-l border-gray-100">
-            {toc.length > 0 ? (
-              toc.map((item) => (
-                <a
-                  key={item.id}
-                  href={`#${item.id}`}
-                  className="block pl-5 py-2.5 text-[13px] text-gray-500 hover:text-blue-600 border-l-2 border-transparent hover:border-blue-600 -ml-[1.5px] transition-all"
-                >
-                  {item.text}
-                </a>
-              ))
+                    </div>
+                  </div>
+                </div>
+              </>
             ) : (
-              <div className="pl-5 text-[13px] text-gray-300 italic">暂无目录</div>
+              <div className="flex min-h-[520px] flex-col items-center justify-center px-8 text-center">
+                <Search className="h-10 w-10 text-gray-300" />
+                <h1 className="mt-4 text-xl font-semibold text-gray-900">没有找到相关指南</h1>
+                <p className="mt-2 max-w-sm text-sm leading-6 text-gray-500">
+                  请尝试更换关键词，或清空搜索后查看全部指南。
+                </p>
+                <Button variant="outline" className="mt-5 h-9 text-xs" onClick={() => setSearchQuery("")}>
+                  清空搜索
+                </Button>
+              </div>
             )}
-          </div>
-          
-          <div className="mt-20 pt-10 border-t border-gray-50">
-            <div className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-6">相关文档</div>
-            <ul className="space-y-4">
-              <li className="text-[12px] text-gray-500 hover:text-blue-600 cursor-pointer flex items-center gap-2 group transition-all">
-                <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover:text-blue-400" /> 
-                <span>路由规则配置进阶</span>
-              </li>
-              <li className="text-[12px] text-gray-500 hover:text-blue-600 cursor-pointer flex items-center gap-2 group transition-all">
-                <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover:text-blue-400" /> 
-                <span>JSSDK 错误码速查</span>
-              </li>
-              <li className="text-[12px] text-gray-500 hover:text-blue-600 cursor-pointer flex items-center gap-2 group transition-all">
-                <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover:text-blue-400" /> 
-                <span>企业微信接入规范</span>
-              </li>
-            </ul>
-          </div>
+          </article>
+
+          <aside className="hidden w-72 shrink-0 xl:block">
+            <div className="sticky top-8 space-y-4">
+              <section className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-3 text-xs font-semibold text-gray-400">本页目录</div>
+                {toc.length > 0 ? (
+                  <div className="space-y-1">
+                    {toc.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => jumpToHeading(item)}
+                        className={cn(
+                          "block w-full rounded-md py-2 text-left text-sm transition-colors hover:bg-blue-50 hover:text-blue-700",
+                          item.level === 3 ? "px-5 text-xs" : "px-2",
+                          activeHeadingID === item.id
+                            ? "bg-blue-50 font-semibold text-blue-700"
+                            : "text-gray-600",
+                        )}
+                      >
+                        {item.text}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-400">暂无目录</div>
+                )}
+              </section>
+
+              {activeDoc ? (
+                <section className="rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="mb-3 text-xs font-semibold text-gray-400">相关指南</div>
+                  <div className="space-y-1">
+                    {relatedDocs.map((doc) => (
+                      <button
+                        key={doc.id}
+                        type="button"
+                        onClick={() => selectDoc(doc.id)}
+                        className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-700"
+                      >
+                        <span>{doc.title}</span>
+                        <ChevronRight className="h-3.5 w-3.5 text-gray-300" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <section className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+                <div className="flex items-start gap-3">
+                  <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                  <div>
+                    <div className="text-sm font-semibold text-blue-900">需要帮助？</div>
+                    <p className="mt-1 text-xs leading-5 text-blue-700">
+                      如果指南没有覆盖你的场景，可以联系企业管理员或项目对接人。
+                    </p>
+                    <button
+                      type="button"
+                      className="mt-3 inline-flex items-center text-xs font-medium text-blue-700 hover:underline"
+                      onClick={contactSupport}
+                    >
+                      联系支持 <Send className="ml-1 h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </aside>
         </div>
-      </div>
+      </section>
     </div>
   )
 }
