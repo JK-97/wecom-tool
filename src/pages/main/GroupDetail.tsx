@@ -271,7 +271,13 @@ export default function GroupDetail() {
     try {
       setIsLoadingGroups(true)
       setGroupError("")
-      const data = await listGroupChats({ page, page_size: pageSize })
+      const data = await listGroupChats({
+        page,
+        page_size: pageSize,
+        query: query.trim(),
+        owner_userid: ownerFilter.trim(),
+        status: statusFilter.trim(),
+      })
       const rows = data?.group_chats || []
       setGroups(rows)
       const total = Number(data?.total || 0)
@@ -286,7 +292,7 @@ export default function GroupDetail() {
       setIsLoadingGroups(false)
       setSyncStatusRefreshKey((value) => value + 1)
     }
-  }, [page, pageSize, showFeedback])
+  }, [ownerFilter, page, pageSize, query, showFeedback, statusFilter])
 
   const fetchDetail = useCallback(
     async (chatID: string) => {
@@ -359,17 +365,7 @@ export default function GroupDetail() {
   }, [groups])
 
   const filteredGroups = useMemo(() => {
-    const keyword = query.trim().toLowerCase()
-    const owner = ownerFilter.trim()
-    const status = statusFilter.trim()
-    const rows = groups.filter((group) => {
-      if (owner && (group.owner_userid || "").trim() !== owner) return false
-      if (status && groupStatusValue(group.status) !== status) return false
-      if (!keyword) return true
-      return [group.name, group.chat_id, group.owner_userid].some((value) =>
-        (value || "").toLowerCase().includes(keyword),
-      )
-    })
+    const rows = groups
     if (memberSort === "member_desc") {
       return [...rows].sort(
         (a, b) =>
@@ -385,7 +381,7 @@ export default function GroupDetail() {
       )
     }
     return rows
-  }, [groups, memberSort, ownerFilter, query, statusFilter])
+  }, [groups, memberSort])
 
   const activeGroup =
     detail?.group_chat || groups.find((group) => (group.chat_id || "").trim() === selectedChatID) || null
@@ -569,6 +565,7 @@ export default function GroupDetail() {
           <div className="flex items-center gap-2">
             <CustomerContactSyncPanel
               compact
+              syncDomain="group_chat"
               refreshKey={syncStatusRefreshKey}
               onRetryDone={refreshPageData}
               onRefreshData={refreshPageData}
@@ -817,6 +814,7 @@ export default function GroupDetail() {
             <div className="flex items-center gap-2">
               <CustomerContactSyncPanel
                 compact
+                syncDomain="group_chat"
                 refreshKey={syncStatusRefreshKey}
                 onRetryDone={refreshPageData}
                 onRefreshData={refreshPageData}

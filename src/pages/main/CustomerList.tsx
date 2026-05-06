@@ -348,6 +348,7 @@ export default function CustomerList() {
         <div className="flex items-center gap-3">
           <CustomerContactSyncPanel
             compact
+            syncDomain="customer"
             refreshKey={syncStatusRefreshKey}
             onRetryDone={loadView}
             onRefreshData={loadView}

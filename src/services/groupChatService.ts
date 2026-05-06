@@ -73,6 +73,9 @@ export async function listGroupChats(params?: {
   limit?: number
   page?: number
   page_size?: number
+  query?: string
+  owner_userid?: string
+  status?: string
 }): Promise<ListGroupChatsData | null> {
   const search = new URLSearchParams()
   const limit = Number(params?.page_size || params?.limit || 0)
@@ -87,6 +90,18 @@ export async function listGroupChats(params?: {
   const cursor = (params?.cursor || "").trim()
   if (cursor) {
     search.set("cursor", cursor)
+  }
+  const query = (params?.query || "").trim()
+  if (query) {
+    search.set("query", query)
+  }
+  const ownerUserID = (params?.owner_userid || "").trim()
+  if (ownerUserID) {
+    search.set("owner_userid", ownerUserID)
+  }
+  const status = (params?.status || "").trim()
+  if (status) {
+    search.set("status", status)
   }
   const suffix = search.toString()
   const payload = await requestJSON<APIReply<ListGroupChatsData>>(`/api/v1/crm/group-chats${suffix ? `?${suffix}` : ""}`)
