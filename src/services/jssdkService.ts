@@ -260,6 +260,25 @@ function mapRuntimeError(
     normalized.includes("not initialized") ||
     normalized.includes("js-sdk not ready");
 
+  const looksLikeReceptionistMismatch =
+    normalized.includes("not in receptionist") ||
+    normalized.includes("kfid not in receptionist") ||
+    normalized.includes("fail_open kfid") ||
+    normalized.includes("open kfid not in receptionist");
+
+  if (looksLikeReceptionistMismatch) {
+    return new JSSDKRuntimeError(
+      "permission_denied",
+      "当前账号不在该客服账号的接待人员中，无法打开该微信客服会话。",
+      {
+        stage,
+        diagnostics,
+        message,
+        raw: error,
+      },
+    );
+  }
+
   if (normalized.includes("permission denied")) {
     return new JSSDKRuntimeError(
       "permission_denied",
@@ -831,7 +850,7 @@ export function toJSSDKErrorMessage(error: unknown): string {
     case "bridge_pending":
       return "企业微信 JS Bridge 正在初始化，请稍后再试";
     case "permission_denied":
-      return "当前账号暂无企业微信会话操作权限";
+      return mapped.message || "当前账号暂无企业微信会话操作权限";
     case "api_unsupported":
       return "当前企业微信客户端版本不支持该能力";
     case "context_unavailable":

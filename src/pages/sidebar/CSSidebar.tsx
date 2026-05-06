@@ -2166,6 +2166,7 @@ export default function CSSidebar() {
       return;
     }
     const nextKey = `${openKFID}\u001f${externalUserID}`;
+    const previousLocator = sessionLocator;
     try {
       setSelectingSessionKey(nextKey);
       setNotice(`正在进入 ${channelLabel}...`);
@@ -2173,11 +2174,6 @@ export default function CSSidebar() {
         open_kfid: openKFID,
         external_userid: externalUserID,
       });
-      setSessionLocator((prev) => ({
-        ...prev,
-        open_kfid: openKFID,
-        external_userid: externalUserID,
-      }));
       await openWecomKfConversation({
         open_kfid: openKFID,
         external_userid: externalUserID,
@@ -2196,6 +2192,7 @@ export default function CSSidebar() {
       setNotice(`已进入 ${channelLabel}，正在载入当前会话...`);
     } catch (error) {
       clearManualSelectionHandoff();
+      setSessionLocator(previousLocator);
       setNotice(toJSSDKErrorMessage(error));
     } finally {
       setSelectingSessionKey("");
