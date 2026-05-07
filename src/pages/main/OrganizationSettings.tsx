@@ -9,7 +9,7 @@ import {
   Settings, Users, Shield, CheckCircle2, RefreshCw,
   Plus, Globe, MessageSquare, User, ShieldAlert,
   AlertTriangle, Zap, Info, ExternalLink, ChevronRight, Loader2,
-  Search, Trash2,
+  Search, Trash2, KeyRound,
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
 import { useEffect, useState } from "react"
@@ -246,6 +246,7 @@ export default function OrganizationSettings() {
   const [isSyncingOrg, setIsSyncingOrg] = useState(false)
   const [updatingDebugKey, setUpdatingDebugKey] = useState("")
   const [isResettingDebug, setIsResettingDebug] = useState(false)
+  const [isSettingDataZoneKey, setIsSettingDataZoneKey] = useState(false)
 
   const showNotice = (_scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
     const text = (message || "").trim()
@@ -265,6 +266,90 @@ export default function OrganizationSettings() {
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "-"
     const millis = value > 1_000_000_000_000 ? value : value * 1000
     return new Date(millis).toLocaleString("zh-CN", { hour12: false })
+  }
+
+  const resolveDataZoneStatus = (kind: "permission" | "scope" | "key", value?: string): { label: string; tone: "green" | "orange" | "red" | "gray" } => {
+    const status = (value || "").trim()
+    if (kind === "permission") {
+      if (status === "authorized") return { label: "已授权", tone: "green" }
+      if (status === "not_authorized") return { label: "未授权", tone: "red" }
+      if (status === "authorization_error") return { label: "授权异常", tone: "orange" }
+      return { label: "待检查", tone: "gray" }
+    }
+    if (kind === "scope") {
+      if (status === "enabled") return { label: "已开启", tone: "green" }
+      if (status === "no_auth_members") return { label: "无授权成员", tone: "orange" }
+      if (status === "error") return { label: "检查异常", tone: "orange" }
+      return { label: "未开启", tone: "red" }
+    }
+    if (status === "configured") return { label: "已配置", tone: "green" }
+    if (status === "pending") return { label: "配置中", tone: "orange" }
+    if (status === "failed") return { label: "配置失败", tone: "red" }
+    if (status === "rotation_required") return { label: "需轮换", tone: "orange" }
+    return { label: "未配置", tone: "red" }
+  }
+
+  const dataZoneBadgeClass = (tone: "green" | "orange" | "red" | "gray"): string => {
+    switch (tone) {
+      case "green":
+        return "bg-green-100 text-green-700 border-none"
+      case "orange":
+        return "bg-orange-100 text-orange-700 border-none"
+      case "red":
+        return "bg-red-100 text-red-700 border-none"
+      default:
+        return "bg-gray-100 text-gray-600 border-none"
+    }
+  }
+
+  const chatDataEditionLabel = (edition?: number): string => {
+    switch (Number(edition || 0)) {
+      case 1:
+        return "内部会话"
+      case 2:
+        return "内外部会话"
+      case 3:
+        return "内外部会话及语音通话"
+      default:
+        return "未知版本"
+    }
+  }
+
+  const chatDataEditionStatus = (status?: number): { label: string; tone: "green" | "orange" | "red" | "gray" } => {
+    switch (Number(status || 0)) {
+      case 1:
+        return { label: "试用中", tone: "green" }
+      case 2:
+        return { label: "试用已到期", tone: "red" }
+      case 3:
+        return { label: "付费使用中", tone: "green" }
+      case 4:
+        return { label: "付费使用已到期", tone: "red" }
+      case 5:
+        return { label: "免费使用中", tone: "green" }
+      case 6:
+        return { label: "免费使用已到期", tone: "red" }
+      case 7:
+        return { label: "付费待生效", tone: "orange" }
+      default:
+        return { label: "未知状态", tone: "gray" }
+    }
+  }
+
+  const formatChatDataEditionList = (items?: number[]): string => {
+    const labels = (items || [])
+      .map((item) => chatDataEditionLabel(item))
+      .filter((item, index, list) => item !== "未知版本" && list.indexOf(item) === index)
+    return labels.length > 0 ? labels.join("、") : "-"
+  }
+
+  const formatChatDataScopeSummary = (
+    scope?: NonNullable<NonNullable<OrganizationSettingsView["data_zone"]>["auth_editions"]>[number]["auth_scope"],
+  ): string => {
+    const userCount = Number(scope?.userid_list?.length || 0)
+    const departmentCount = Number(scope?.department_id_list?.length || 0)
+    const tagCount = Number(scope?.tag_id_list?.length || 0)
+    return `成员 ${userCount} / 部门 ${departmentCount} / 标签 ${tagCount}`
   }
 
   const buildMemberRoleDraft = (data: OrganizationSettingsView | null | undefined): Record<string, string> => {
@@ -386,6 +471,19 @@ export default function OrganizationSettings() {
       showNotice("org", normalizeErrorMessage(error), "error")
     } finally {
       setIsSyncingOrg(false)
+    }
+  }
+
+  const setupDataZonePublicKey = async () => {
+    try {
+      setIsSettingDataZoneKey(true)
+      const message = await executeOrganizationSettingsCommand("setup_data_zone_public_key")
+      showNotice("wecom", message || "已生成并上传数据专区公钥", "success")
+      await loadView()
+    } catch (error) {
+      showNotice("wecom", normalizeErrorMessage(error), "error")
+    } finally {
+      setIsSettingDataZoneKey(false)
     }
   }
 
@@ -682,6 +780,9 @@ export default function OrganizationSettings() {
   }
 
   const integration = view?.integration
+  const dataZone = view?.data_zone
+  const dataZoneAuthEditions = dataZone?.auth_editions || []
+  const dataZoneAuthUserPreview = dataZone?.auth_user_preview || []
   const orgSync = view?.org_sync
   const appVisibility = view?.app_visibility
   const integrationAdmins = view?.integration_admins || []
@@ -714,6 +815,8 @@ export default function OrganizationSettings() {
     const appAdmin = objectRow("app_admin")
     const contactDomain = objectRow("contact_domain")
     const orgDirectory = objectRow("org_directory")
+    const chatDataAuthScope = objectRow("chatdata_auth_scope")
+    const chatDataPublicKey = objectRow("chatdata_public_key")
     switch ((capabilityCode || "").trim()) {
       case "kf_conversation":
         return [
@@ -741,6 +844,12 @@ export default function OrganizationSettings() {
         return [
           { label: "权限：通讯录/组织同步能力", passed: isPermissionGranted(permissionStatusByCode.get("org_sync") || "") },
           { label: "对象：通讯录与组织目录", passed: isObjectPassed(orgDirectory.status), count: orgDirectory.count },
+        ]
+      case "data_zone_chat_archive":
+        return [
+          { label: "权限：数据专区权限", passed: isPermissionGranted(permissionStatusByCode.get("data_zone_permission") || "") },
+          { label: "对象：会话内容授权范围", passed: isObjectPassed(chatDataAuthScope.status), count: chatDataAuthScope.count },
+          { label: "对象：数据专区公钥配置", passed: isObjectPassed(chatDataPublicKey.status), count: chatDataPublicKey.count },
         ]
       default:
         return []
@@ -963,6 +1072,143 @@ export default function OrganizationSettings() {
                 <Input value={(integration?.corp_name || "-").trim() || "-"} disabled className="bg-gray-50 border-gray-200" />
                 <p className="text-[11px] text-gray-400">最近检查时间：{formatDateTime((integration?.last_checked_at || "").trim())}</p>
               </div>
+
+              <Card className="border-gray-200 shadow-sm">
+                <CardHeader className="p-5 border-b border-gray-50">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <CardTitle className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                        <KeyRound className="h-4 w-4 text-blue-600" />
+                        数据与智能专区
+                      </CardTitle>
+                      <div className="mt-1 text-xs text-gray-500">会话存档初始化状态：权限、授权范围与公钥配置需同时就绪。</div>
+                    </div>
+                    <Badge className={dataZone?.data_zone_ready ? "bg-green-100 text-green-700 border-none" : "bg-orange-100 text-orange-700 border-none"}>
+                      {dataZone?.data_zone_ready ? "已就绪" : "待初始化"}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-5 space-y-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {([
+                      {
+                        key: "permission",
+                        title: "数据专区权限",
+                        value: dataZone?.data_zone_permission_status,
+                        meta: "应用是否具备数据与智能专区权限",
+                      },
+                      {
+                        key: "scope",
+                        title: "会话内容授权范围",
+                        value: dataZone?.chatdata_auth_scope_status,
+                        meta: Number(dataZone?.auth_user_count || 0) > 0 ? `授权人数：${Number(dataZone?.auth_user_count || 0)}` : "未检测到授权成员",
+                      },
+                      {
+                        key: "key",
+                        title: "公钥配置",
+                        value: dataZone?.chatdata_public_key_status,
+                        meta: Number(dataZone?.public_key_ver || 0) > 0 ? `版本：${Number(dataZone?.public_key_ver || 0)}` : "版本：-",
+                      },
+                    ] as const).map((item) => {
+                      const resolved = resolveDataZoneStatus(item.key, item.value)
+                      return (
+                        <div key={item.key} className="rounded-lg border border-gray-100 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs font-bold text-gray-900">{item.title}</div>
+                            <Badge className={`${dataZoneBadgeClass(resolved.tone)} text-[10px] px-1.5 py-0`}>{resolved.label}</Badge>
+                          </div>
+                          <div className="mt-1 text-[11px] text-gray-500">{item.meta}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {dataZoneAuthEditions.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="text-xs font-bold text-gray-900">授权版本</div>
+                      <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
+                        {dataZoneAuthEditions.map((edition, index) => {
+                          const status = chatDataEditionStatus(edition.status)
+                          return (
+                            <div key={`${edition.edition || 0}-${index}`} className="rounded-lg border border-gray-100 p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="truncate text-xs font-bold text-gray-900">{chatDataEditionLabel(edition.edition)}</div>
+                                  <div className="mt-1 text-[11px] text-gray-500">{formatChatDataScopeSummary(edition.auth_scope)}</div>
+                                </div>
+                                <Badge className={`${dataZoneBadgeClass(status.tone)} shrink-0 text-[10px] px-1.5 py-0`}>{status.label}</Badge>
+                              </div>
+                              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
+                                <div>去重人数：{Number(edition.auth_user_count || 0)}</div>
+                                <div>存档周期：{Number(edition.msg_duration_days || 0) || "-"} 天</div>
+                                <div className="col-span-2">有效期：{formatUnix(edition.begin_time)} 至 {formatUnix(edition.end_time)}</div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {dataZoneAuthUserPreview.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs font-bold text-gray-900">生效授权成员预览</div>
+                        <div className="text-[11px] text-gray-400">前 {dataZoneAuthUserPreview.length} 人</div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {dataZoneAuthUserPreview.map((user) => {
+                          const userID = (user.userid || "").trim()
+                          if (!userID) return null
+                          return (
+                            <div key={userID} className="min-w-0 rounded-lg border border-gray-100 p-3">
+                              <WecomOpenDataName
+                                userid={userID}
+                                corpId={view?.integration?.corp_id}
+                                fallback={userID}
+                                className="block truncate text-xs font-bold text-gray-900"
+                                hintClassName="text-[10px] text-gray-400"
+                              />
+                              <div className="mt-1 truncate font-mono text-[10px] text-gray-400">{userID}</div>
+                              <div className="mt-1 text-[11px] text-gray-500">{formatChatDataEditionList(user.edition_list)}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ) : Number(dataZone?.auth_user_count || 0) > 0 ? (
+                    <div className="rounded-lg border border-orange-100 bg-orange-50 p-3 text-xs text-orange-800">
+                      授权范围存在，但实际生效成员预览为空。请结合购买席位与成员授权范围继续确认。
+                    </div>
+                  ) : null}
+
+                  {!dataZone?.public_key_ready && dataZone?.data_zone_permission_status === "authorized" ? (
+                    <div className="rounded-lg border border-orange-100 bg-orange-50 p-3 text-xs text-orange-800">
+                      已授权数据专区，但尚未设置公钥。设置后新消息才会开始存档，设置前的消息不会自动补齐。
+                    </div>
+                  ) : null}
+                  {(dataZone?.last_check_error || "").trim() ? (
+                    <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs text-red-700">{(dataZone?.last_check_error || "").trim()}</div>
+                  ) : null}
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-50 pt-4">
+                    <div className="text-[11px] text-gray-500">
+                      公钥指纹：{(dataZone?.public_key_fingerprint || "-").trim() || "-"}
+                      <span className="mx-2 text-gray-300">|</span>
+                      设置时间：{formatUnix(dataZone?.public_key_set_at)}
+                    </div>
+                    <Button
+                      size="sm"
+                      className="bg-blue-600 hover:bg-blue-700 font-semibold"
+                      onClick={() => void setupDataZonePublicKey()}
+                      disabled={isSettingDataZoneKey || dataZone?.public_key_ready || dataZone?.data_zone_permission_status !== "authorized"}
+                    >
+                      {isSettingDataZoneKey ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />}
+                      生成并上传公钥
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
 
               <Card className="border-gray-200 shadow-sm">
                 <CardHeader className="p-5 border-b border-gray-50">

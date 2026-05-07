@@ -135,6 +135,37 @@ export type OrganizationSettingsView = {
     expire_time?: number
     active_time?: number
   }>
+  data_zone?: {
+    corp_id?: string
+    data_zone_permission_status?: string
+    chatdata_auth_scope_status?: string
+    chatdata_public_key_status?: string
+    data_zone_ready?: boolean
+    public_key_ready?: boolean
+    auth_user_count?: number
+    public_key_ver?: number
+    public_key_fingerprint?: string
+    public_key_set_at?: number
+    last_check_at?: number
+    last_check_error?: string
+    auth_editions?: Array<{
+      edition?: number
+      auth_scope?: {
+        userid_list?: string[]
+        department_id_list?: number[]
+        tag_id_list?: number[]
+      }
+      status?: number
+      begin_time?: number
+      end_time?: number
+      msg_duration_days?: number
+      auth_user_count?: number
+    }>
+    auth_user_preview?: Array<{
+      userid?: string
+      edition_list?: number[]
+    }>
+  }
 }
 
 export async function getOrganizationSettingsView(): Promise<OrganizationSettingsView | null> {
@@ -307,6 +338,44 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
       expire_time: readNumber(row.expire_time, row.ExpireTime),
       active_time: readNumber(row.active_time, row.ActiveTime),
     })),
+    data_zone: (() => {
+      const row = asRecord(view.data_zone ?? view.DataZone)
+      if (!row) return undefined
+      return {
+        corp_id: readString(row.corp_id, row.CorpID),
+        data_zone_permission_status: readString(row.data_zone_permission_status, row.DataZonePermissionStatus),
+        chatdata_auth_scope_status: readString(row.chatdata_auth_scope_status, row.ChatDataAuthScopeStatus),
+        chatdata_public_key_status: readString(row.chatdata_public_key_status, row.ChatDataPublicKeyStatus),
+        data_zone_ready: readBool(row.data_zone_ready, row.DataZoneReady),
+        public_key_ready: readBool(row.public_key_ready, row.PublicKeyReady),
+        auth_user_count: readNumber(row.auth_user_count, row.AuthUserCount),
+        public_key_ver: readNumber(row.public_key_ver, row.PublicKeyVer),
+        public_key_fingerprint: readString(row.public_key_fingerprint, row.PublicKeyFingerprint),
+        public_key_set_at: readNumber(row.public_key_set_at, row.PublicKeySetAt),
+        last_check_at: readNumber(row.last_check_at, row.LastCheckAt),
+        last_check_error: readString(row.last_check_error, row.LastCheckError),
+        auth_editions: readArray(row.auth_editions ?? row.AuthEditions).map((edition) => {
+          const scope = asRecord(edition.auth_scope ?? edition.AuthScope)
+          return {
+            edition: readNumber(edition.edition, edition.Edition),
+            auth_scope: {
+              userid_list: readStringArray(scope.userid_list, scope.UseridList, scope.UserIDList),
+              department_id_list: readNumberArray(scope.department_id_list, scope.DepartmentIdList, scope.DepartmentIDList),
+              tag_id_list: readNumberArray(scope.tag_id_list, scope.TagIdList, scope.TagIDList),
+            },
+            status: readNumber(edition.status, edition.Status),
+            begin_time: readNumber(edition.begin_time, edition.BeginTime),
+            end_time: readNumber(edition.end_time, edition.EndTime),
+            msg_duration_days: readNumber(edition.msg_duration_days, edition.MsgDurationDays),
+            auth_user_count: readNumber(edition.auth_user_count, edition.AuthUserCount),
+          }
+        }),
+        auth_user_preview: readArray(row.auth_user_preview ?? row.AuthUserPreview).map((user) => ({
+          userid: readString(user.userid, user.Userid, user.UserID),
+          edition_list: readNumberArray(user.edition_list, user.EditionList),
+        })),
+      }
+    })(),
   }
 }
 
@@ -345,6 +414,18 @@ function readStringArray(...values: unknown[]): string[] {
   for (const value of values) {
     if (!Array.isArray(value)) continue
     const out = value.filter((item) => typeof item === "string").map((item) => `${item}`)
+    if (out.length > 0) return out
+    if (value.length === 0) return []
+  }
+  return []
+}
+
+function readNumberArray(...values: unknown[]): number[] {
+  for (const value of values) {
+    if (!Array.isArray(value)) continue
+    const out = value
+      .map((item) => (typeof item === "number" && Number.isFinite(item) ? item : Number.NaN))
+      .filter((item) => Number.isFinite(item))
     if (out.length > 0) return out
     if (value.length === 0) return []
   }
