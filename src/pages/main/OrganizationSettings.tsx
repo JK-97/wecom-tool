@@ -9,7 +9,7 @@ import {
   Settings, Users, Shield, CheckCircle2, RefreshCw,
   Plus, Globe, MessageSquare, User, ShieldAlert,
   AlertTriangle, Zap, Info, ExternalLink, ChevronRight, Loader2,
-  Search, Trash2, KeyRound,
+  Search, Trash2, KeyRound, Webhook,
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
 import { useEffect, useState } from "react"
@@ -227,6 +227,8 @@ export default function OrganizationSettings() {
   const [testingConnectorKey, setTestingConnectorKey] = useState("")
   const [refreshingConnectorKey, setRefreshingConnectorKey] = useState("")
   const [connectingConnectorKey, setConnectingConnectorKey] = useState("")
+  const [isSettingDataZoneCallback, setIsSettingDataZoneCallback] = useState(false)
+  const [dataZoneCallbackProgramID, setDataZoneCallbackProgramID] = useState("")
 
   const [isRoleEditorOpen, setIsRoleEditorOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<NonNullable<OrganizationSettingsView["roles"]>[number] | null>(null)
@@ -268,7 +270,7 @@ export default function OrganizationSettings() {
     return new Date(millis).toLocaleString("zh-CN", { hour12: false })
   }
 
-  const resolveDataZoneStatus = (kind: "permission" | "scope" | "key", value?: string): { label: string; tone: "green" | "orange" | "red" | "gray" } => {
+  const resolveDataZoneStatus = (kind: "permission" | "scope" | "key" | "callback", value?: string): { label: string; tone: "green" | "orange" | "red" | "gray" } => {
     const status = (value || "").trim()
     if (kind === "permission") {
       if (status === "authorized") return { label: "已授权", tone: "green" }
@@ -282,7 +284,7 @@ export default function OrganizationSettings() {
       if (status === "error") return { label: "检查异常", tone: "orange" }
       return { label: "未开启", tone: "red" }
     }
-    if (status === "configured") return { label: "已配置", tone: "green" }
+    if (status === "configured") return { label: kind === "callback" ? "已设置" : "已配置", tone: "green" }
     if (status === "pending") return { label: "配置中", tone: "orange" }
     if (status === "failed") return { label: "配置失败", tone: "red" }
     if (status === "rotation_required") return { label: "需轮换", tone: "orange" }
@@ -381,6 +383,7 @@ export default function OrganizationSettings() {
       setIsLoading(true)
       const data = await getOrganizationSettingsView()
       setView(data || null)
+      setDataZoneCallbackProgramID((data?.data_zone?.receive_callback_program_id || "").trim())
       const nextDraft = buildMemberRoleDraft(data)
       if (options.preserveMemberDraft) {
         setMemberRoleDraft((prev) => {
@@ -484,6 +487,24 @@ export default function OrganizationSettings() {
       showNotice("wecom", normalizeErrorMessage(error), "error")
     } finally {
       setIsSettingDataZoneKey(false)
+    }
+  }
+
+  const setupDataZoneReceiveCallback = async () => {
+    const programID = dataZoneCallbackProgramID.trim()
+    if (!programID) {
+      showNotice("wecom", "请输入专区程序 program_id", "warning")
+      return
+    }
+    try {
+      setIsSettingDataZoneCallback(true)
+      const message = await executeOrganizationSettingsCommand("setup_data_zone_receive_callback", JSON.stringify({ program_id: programID }))
+      showNotice("wecom", message || "已设置数据专区回调接收程序", "success")
+      await loadView()
+    } catch (error) {
+      showNotice("wecom", normalizeErrorMessage(error), "error")
+    } finally {
+      setIsSettingDataZoneCallback(false)
     }
   }
 
@@ -781,6 +802,7 @@ export default function OrganizationSettings() {
 
   const integration = view?.integration
   const dataZone = view?.data_zone
+  const currentDataZoneCallbackProgramID = (dataZone?.receive_callback_program_id || "").trim()
   const dataZoneAuthEditions = dataZone?.auth_editions || []
   const dataZoneAuthUserPreview = dataZone?.auth_user_preview || []
   const orgSync = view?.org_sync
@@ -817,6 +839,7 @@ export default function OrganizationSettings() {
     const orgDirectory = objectRow("org_directory")
     const chatDataAuthScope = objectRow("chatdata_auth_scope")
     const chatDataPublicKey = objectRow("chatdata_public_key")
+    const chatDataReceiveCallback = objectRow("chatdata_receive_callback")
     switch ((capabilityCode || "").trim()) {
       case "kf_conversation":
         return [
@@ -850,6 +873,7 @@ export default function OrganizationSettings() {
           { label: "权限：数据专区权限", passed: isPermissionGranted(permissionStatusByCode.get("data_zone_permission") || "") },
           { label: "对象：会话内容授权范围", passed: isObjectPassed(chatDataAuthScope.status), count: chatDataAuthScope.count },
           { label: "对象：数据专区公钥配置", passed: isObjectPassed(chatDataPublicKey.status), count: chatDataPublicKey.count },
+          { label: "对象：回调接收程序", passed: isObjectPassed(chatDataReceiveCallback.status), count: chatDataReceiveCallback.count },
         ]
       default:
         return []
@@ -1081,7 +1105,7 @@ export default function OrganizationSettings() {
                         <KeyRound className="h-4 w-4 text-blue-600" />
                         数据与智能专区
                       </CardTitle>
-                      <div className="mt-1 text-xs text-gray-500">会话存档初始化状态：权限、授权范围与公钥配置需同时就绪。</div>
+                      <div className="mt-1 text-xs text-gray-500">会话存档初始化状态：权限、授权范围、公钥配置与回调接收程序需同时就绪。</div>
                     </div>
                     <Badge className={dataZone?.data_zone_ready ? "bg-green-100 text-green-700 border-none" : "bg-orange-100 text-orange-700 border-none"}>
                       {dataZone?.data_zone_ready ? "已就绪" : "待初始化"}
@@ -1089,7 +1113,7 @@ export default function OrganizationSettings() {
                   </div>
                 </CardHeader>
                 <CardContent className="p-5 space-y-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     {([
                       {
                         key: "permission",
@@ -1108,6 +1132,12 @@ export default function OrganizationSettings() {
                         title: "公钥配置",
                         value: dataZone?.chatdata_public_key_status,
                         meta: Number(dataZone?.public_key_ver || 0) > 0 ? `版本：${Number(dataZone?.public_key_ver || 0)}` : "版本：-",
+                      },
+                      {
+                        key: "callback",
+                        title: "回调接收程序",
+                        value: dataZone?.chatdata_receive_callback_status,
+                        meta: currentDataZoneCallbackProgramID ? `program_id：${currentDataZoneCallbackProgramID}` : "program_id：-",
                       },
                     ] as const).map((item) => {
                       const resolved = resolveDataZoneStatus(item.key, item.value)
@@ -1205,6 +1235,36 @@ export default function OrganizationSettings() {
                     >
                       {isSettingDataZoneKey ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />}
                       生成并上传公钥
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 border-t border-gray-50 pt-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-gray-900">专区程序 program_id</label>
+                      <Input
+                        value={dataZoneCallbackProgramID}
+                        onChange={(event) => setDataZoneCallbackProgramID(event.target.value)}
+                        placeholder="输入企业微信数据专区程序 ID"
+                        className="font-mono"
+                        disabled={isSettingDataZoneCallback}
+                      />
+                      <div className="text-[11px] text-gray-500">
+                        回调设置时间：{formatUnix(dataZone?.receive_callback_set_at)}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="bg-blue-600 hover:bg-blue-700 font-semibold"
+                      onClick={() => void setupDataZoneReceiveCallback()}
+                      disabled={
+                        isSettingDataZoneCallback ||
+                        !dataZone?.public_key_ready ||
+                        (dataZone?.receive_callback_ready && dataZoneCallbackProgramID.trim() === currentDataZoneCallbackProgramID) ||
+                        dataZone?.data_zone_permission_status !== "authorized" ||
+                        !dataZoneCallbackProgramID.trim()
+                      }
+                    >
+                      {isSettingDataZoneCallback ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Webhook className="w-4 h-4 mr-2" />}
+                      设置回调接收程序
                     </Button>
                   </div>
                 </CardContent>

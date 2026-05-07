@@ -140,12 +140,16 @@ export type OrganizationSettingsView = {
     data_zone_permission_status?: string
     chatdata_auth_scope_status?: string
     chatdata_public_key_status?: string
+    chatdata_receive_callback_status?: string
     data_zone_ready?: boolean
     public_key_ready?: boolean
+    receive_callback_ready?: boolean
     auth_user_count?: number
     public_key_ver?: number
     public_key_fingerprint?: string
     public_key_set_at?: number
+    receive_callback_program_id?: string
+    receive_callback_set_at?: number
     last_check_at?: number
     last_check_error?: string
     auth_editions?: Array<{
@@ -346,12 +350,16 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
         data_zone_permission_status: readString(row.data_zone_permission_status, row.DataZonePermissionStatus),
         chatdata_auth_scope_status: readString(row.chatdata_auth_scope_status, row.ChatDataAuthScopeStatus),
         chatdata_public_key_status: readString(row.chatdata_public_key_status, row.ChatDataPublicKeyStatus),
+        chatdata_receive_callback_status: readString(row.chatdata_receive_callback_status, row.ChatDataReceiveCallbackStatus),
         data_zone_ready: readBool(row.data_zone_ready, row.DataZoneReady),
         public_key_ready: readBool(row.public_key_ready, row.PublicKeyReady),
+        receive_callback_ready: readBool(row.receive_callback_ready, row.ReceiveCallbackReady),
         auth_user_count: readNumber(row.auth_user_count, row.AuthUserCount),
         public_key_ver: readNumber(row.public_key_ver, row.PublicKeyVer),
         public_key_fingerprint: readString(row.public_key_fingerprint, row.PublicKeyFingerprint),
         public_key_set_at: readNumber(row.public_key_set_at, row.PublicKeySetAt),
+        receive_callback_program_id: readString(row.receive_callback_program_id, row.ReceiveCallbackProgramID, row.ReceiveCallbackProgramId),
+        receive_callback_set_at: readNumber(row.receive_callback_set_at, row.ReceiveCallbackSetAt),
         last_check_at: readNumber(row.last_check_at, row.LastCheckAt),
         last_check_error: readString(row.last_check_error, row.LastCheckError),
         auth_editions: readArray(row.auth_editions ?? row.AuthEditions).map((edition) => {
