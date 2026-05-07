@@ -1237,35 +1237,37 @@ export default function OrganizationSettings() {
                       生成并上传公钥
                     </Button>
                   </div>
-                  <div className="grid grid-cols-1 gap-3 border-t border-gray-50 pt-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                  <div className="space-y-1 border-t border-gray-50 pt-4">
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-gray-900">专区程序 program_id</label>
-                      <Input
-                        value={dataZoneCallbackProgramID}
-                        onChange={(event) => setDataZoneCallbackProgramID(event.target.value)}
-                        placeholder="输入企业微信数据专区程序 ID"
-                        className="font-mono"
-                        disabled={isSettingDataZoneCallback}
-                      />
+                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                        <Input
+                          value={dataZoneCallbackProgramID}
+                          onChange={(event) => setDataZoneCallbackProgramID(event.target.value)}
+                          placeholder="输入企业微信数据专区程序 ID"
+                          className="font-mono"
+                          disabled={isSettingDataZoneCallback}
+                        />
+                        <Button
+                          size="sm"
+                          className="h-10 bg-blue-600 px-4 font-semibold hover:bg-blue-700"
+                          onClick={() => void setupDataZoneReceiveCallback()}
+                          disabled={
+                            isSettingDataZoneCallback ||
+                            !dataZone?.public_key_ready ||
+                            (dataZone?.receive_callback_ready && dataZoneCallbackProgramID.trim() === currentDataZoneCallbackProgramID) ||
+                            dataZone?.data_zone_permission_status !== "authorized" ||
+                            !dataZoneCallbackProgramID.trim()
+                          }
+                        >
+                          {isSettingDataZoneCallback ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Webhook className="w-4 h-4 mr-2" />}
+                          设置回调接收程序
+                        </Button>
+                      </div>
                       <div className="text-[11px] text-gray-500">
                         回调设置时间：{formatUnix(dataZone?.receive_callback_set_at)}
                       </div>
                     </div>
-                    <Button
-                      size="sm"
-                      className="bg-blue-600 hover:bg-blue-700 font-semibold"
-                      onClick={() => void setupDataZoneReceiveCallback()}
-                      disabled={
-                        isSettingDataZoneCallback ||
-                        !dataZone?.public_key_ready ||
-                        (dataZone?.receive_callback_ready && dataZoneCallbackProgramID.trim() === currentDataZoneCallbackProgramID) ||
-                        dataZone?.data_zone_permission_status !== "authorized" ||
-                        !dataZoneCallbackProgramID.trim()
-                      }
-                    >
-                      {isSettingDataZoneCallback ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Webhook className="w-4 h-4 mr-2" />}
-                      设置回调接收程序
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
