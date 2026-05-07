@@ -161,16 +161,16 @@ export default function Home() {
                   </CardContent>
                 </Card>
               </Link>
-              <Link to="/main/group-detail">
+              <Link to="/main/groups">
                 <Card className="hover:border-blue-300 hover:shadow-md transition-all cursor-pointer">
                   <CardHeader className="p-4">
                     <CardTitle className="text-base flex items-center gap-2">
                       <UsersRound className="h-4 w-4 text-pink-500" />
-                      11. 群运营
+                      11. 群聊列表
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-4 pb-4 text-sm text-gray-500">
-                    查看客户群、成员、SOP 和风险处理入口。
+                    查看客户群、成员和风险处理入口。
                   </CardContent>
                 </Card>
               </Link>

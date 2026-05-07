@@ -20,6 +20,7 @@ const Customer360 = lazy(() => import("./pages/main/Customer360"))
 const TaskCenter = lazy(() => import("./pages/main/TaskCenter"))
 const CSCommandCenter = lazy(() => import("./pages/main/CSCommandCenter"))
 const CustomerList = lazy(() => import("./pages/main/CustomerList"))
+const GroupOperations = lazy(() => import("./pages/main/GroupOperations"))
 const GroupDetail = lazy(() => import("./pages/main/GroupDetail"))
 const StrategyCenter = lazy(() => import("./pages/main/StrategyCenter"))
 const Dashboard = lazy(() => import("./pages/main/Dashboard"))
@@ -96,7 +97,8 @@ export default function App() {
                 <Route path="task-detail" element={<TaskDetailPage onBack={() => window.history.back()} />} />
                 <Route path="cs-center" element={<CSCommandCenter />} />
                 <Route path="customers" element={<CustomerList />} />
-                <Route path="group-detail" element={<GroupDetail />} />
+                <Route path="groups" element={<GroupOperations />} />
+                <Route path="groups/:chatId" element={<GroupDetail />} />
                 <Route path="strategy" element={<StrategyCenter />} />
                 <Route path="dashboard" element={<Dashboard onBack={() => window.history.back()} />} />
                 <Route path="settings" element={<OrganizationSettings />} />

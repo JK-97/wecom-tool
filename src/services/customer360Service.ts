@@ -44,13 +44,6 @@ export type Customer360ViewModel = {
   ai_summary?: string
 }
 
-export type Customer360CommandResult = {
-  success?: boolean
-  stubbed?: boolean
-  status?: string
-  message?: string
-}
-
 export async function getCustomer360View(params: {
   external_userid: string
   timeline_tab?: string
@@ -59,21 +52,5 @@ export async function getCustomer360View(params: {
   search.set("external_userid", params.external_userid)
   if (params.timeline_tab) search.set("timeline_tab", params.timeline_tab)
   const payload = await requestJSON<APIReply<Customer360ViewModel>>(`/api/v1/main/customer-360/view?${search.toString()}`)
-  return payload?.data || null
-}
-
-export async function executeCustomer360Command(input: {
-  command: string
-  external_userid: string
-  payload?: Record<string, unknown>
-}): Promise<Customer360CommandResult | null> {
-  const payload = await requestJSON<APIReply<Customer360CommandResult>>("/api/v1/main/customer-360/commands", {
-    method: "POST",
-    body: JSON.stringify({
-      command: input.command,
-      external_userid: input.external_userid,
-      payload_json: JSON.stringify(input.payload || {}),
-    }),
-  })
   return payload?.data || null
 }

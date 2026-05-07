@@ -53,7 +53,7 @@ export type CustomerListViewModel = {
   }
 }
 
-export type CustomerListCommandResult = {
+export type CustomerListActionResult = {
   success?: boolean
   status?: string
   message?: string
@@ -77,23 +77,38 @@ export async function getCustomerListView(params?: {
   if (params?.owner_userid) search.set("owner_userid", params.owner_userid)
   if (params?.page && params.page > 0) search.set("page", String(params.page))
   if (params?.page_size && params.page_size > 0) search.set("page_size", String(params.page_size))
-  const payload = await requestJSON<APIReply<CustomerListViewModel>>(`/api/v1/main/customers/view?${search.toString()}`)
+  const suffix = search.toString()
+  const payload = await requestJSON<APIReply<CustomerListViewModel>>(`/api/v1/main/customers/page${suffix ? `?${suffix}` : ""}`)
   return payload?.data || null
 }
 
-export async function executeCustomerListCommand(input: {
-  command: string
-  external_userid?: string
-  external_userids?: string[]
-  payload?: Record<string, unknown>
-}): Promise<CustomerListCommandResult | null> {
-  const payload = await requestJSON<APIReply<CustomerListCommandResult>>("/api/v1/main/customers/commands", {
+export async function batchAssignCustomers(input: {
+  external_userids: string[]
+  owner_userid: string
+}): Promise<CustomerListActionResult | null> {
+  const payload = await requestJSON<APIReply<CustomerListActionResult>>("/api/v1/main/customers/batch-assign", {
     method: "POST",
     body: JSON.stringify({
-      command: input.command,
-      external_userid: input.external_userid || "",
-      external_userids: input.external_userids || [],
-      payload_json: JSON.stringify(input.payload || {}),
+      external_userids: input.external_userids,
+      owner_userid: input.owner_userid,
+    }),
+  })
+  return payload?.data || null
+}
+
+export async function updateCustomerProfile(input: {
+  external_userid: string
+  owner_userid?: string
+  stage?: string
+  tags?: string[]
+}): Promise<CustomerListActionResult | null> {
+  const payload = await requestJSON<APIReply<CustomerListActionResult>>("/api/v1/main/customers/profile", {
+    method: "POST",
+    body: JSON.stringify({
+      external_userid: input.external_userid,
+      owner_userid: input.owner_userid || "",
+      stage: input.stage || "",
+      tags: input.tags || [],
     }),
   })
   return payload?.data || null

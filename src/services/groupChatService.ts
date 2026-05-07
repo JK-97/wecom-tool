@@ -6,6 +6,47 @@ type APIReply<T> = {
   data?: T
 }
 
+export type GroupOperationSummary = {
+  total_count?: number
+  synced_count?: number
+  healthy_count?: number
+  attention_count?: number
+  last_synced_at?: string
+  headline?: string
+  description?: string
+}
+
+export type GroupOperationRow = {
+  chat_id?: string
+  name?: string
+  owner_userid?: string
+  owner_name?: string
+  member_count?: number
+  admin_count?: number
+  status_label?: string
+  status_tone?: string
+  needs_attention?: boolean
+  last_synced_at?: string
+  notice_preview?: string
+}
+
+export type GroupOperationListPage = {
+  summary?: GroupOperationSummary
+  owner_options?: Array<{ value?: string; label?: string; count?: number }>
+  rows?: GroupOperationRow[]
+  pagination?: {
+    page?: number
+    page_size?: number
+    total?: number
+    total_pages?: number
+  }
+  active_filters?: {
+    query?: string
+    owner_userid?: string
+    status?: string
+  }
+}
+
 export type CustomerGroupChat = {
   chat_id?: string
   name?: string
@@ -18,7 +59,6 @@ export type CustomerGroupChat = {
   notice?: string
   admin_count?: number
   member_version?: string
-  raw_json?: string
   last_synced_at?: string
 }
 
@@ -38,129 +78,51 @@ export type CustomerGroupChatAdmin = {
   userid?: string
 }
 
-export type ListGroupChatsData = {
-  group_chats?: CustomerGroupChat[]
-  next_cursor?: string
-  total?: number
-}
-
-export type GetGroupChatData = {
+export type GroupOperationDetail = {
   group_chat?: CustomerGroupChat
+  sync_status?: {
+    status?: string
+    status_label?: string
+    description?: string
+    last_synced_at?: string
+    latest_run_id?: string
+    open_issue_count?: number
+  }
+  member_stat?: {
+    total?: number
+    internal_count?: number
+    external_count?: number
+    admin_count?: number
+  }
+  notices?: Array<{ title?: string; description?: string }>
+  risk_signals?: Array<{ level?: string; title?: string; description?: string }>
   members?: CustomerGroupChatMember[]
   admins?: CustomerGroupChatAdmin[]
 }
 
-type RawGroupChatMember = {
-  userid?: string
-  type?: number
-  join_time?: number
-  join_scene?: number
-  unionid?: string
-  name?: string
-  group_nickname?: string
-  invitor?: {
-    userid?: string
-    entity_type?: number
-  }
-}
-
-type RawGroupChatAdmin = {
-  userid?: string
-}
-
-export async function listGroupChats(params?: {
-  cursor?: string
-  limit?: number
-  page?: number
-  page_size?: number
+export async function getGroupOperationListPage(params?: {
   query?: string
   owner_userid?: string
   status?: string
-}): Promise<ListGroupChatsData | null> {
+  page?: number
+  page_size?: number
+}): Promise<GroupOperationListPage | null> {
   const search = new URLSearchParams()
-  const limit = Number(params?.page_size || params?.limit || 0)
-  if (Number.isFinite(limit) && limit > 0) {
-    search.set("limit", String(limit))
-    search.set("page_size", String(limit))
-  }
-  const page = Number(params?.page || 0)
-  if (Number.isFinite(page) && page > 0) {
-    search.set("page", String(page))
-  }
-  const cursor = (params?.cursor || "").trim()
-  if (cursor) {
-    search.set("cursor", cursor)
-  }
-  const query = (params?.query || "").trim()
-  if (query) {
-    search.set("query", query)
-  }
-  const ownerUserID = (params?.owner_userid || "").trim()
-  if (ownerUserID) {
-    search.set("owner_userid", ownerUserID)
-  }
-  const status = (params?.status || "").trim()
-  if (status) {
-    search.set("status", status)
-  }
+  if (params?.query) search.set("query", params.query)
+  if (params?.owner_userid) search.set("owner_userid", params.owner_userid)
+  if (params?.status) search.set("status", params.status)
+  if (params?.page && params.page > 0) search.set("page", String(params.page))
+  if (params?.page_size && params.page_size > 0) search.set("page_size", String(params.page_size))
   const suffix = search.toString()
-  const payload = await requestJSON<APIReply<ListGroupChatsData>>(`/api/v1/crm/group-chats${suffix ? `?${suffix}` : ""}`)
+  const payload = await requestJSON<APIReply<GroupOperationListPage>>(`/api/v1/main/group-ops/page${suffix ? `?${suffix}` : ""}`)
   return payload?.data || null
 }
 
-export async function getGroupChat(chatID: string): Promise<GetGroupChatData | null> {
+export async function getGroupOperationDetail(chatID: string): Promise<GroupOperationDetail | null> {
   const safeChatID = (chatID || "").trim()
   if (!safeChatID) {
     return null
   }
-  const payload = await requestJSON<APIReply<GetGroupChatData>>(`/api/v1/crm/group-chats/${encodeURIComponent(safeChatID)}`)
+  const payload = await requestJSON<APIReply<GroupOperationDetail>>(`/api/v1/main/group-ops/${encodeURIComponent(safeChatID)}`)
   return payload?.data || null
-}
-
-export function buildGroupChatDetailFromListRow(group?: CustomerGroupChat | null): GetGroupChatData | null {
-  if (!group) return null
-  const rawText = (group.raw_json || "").trim()
-  if (!rawText) {
-    return { group_chat: group, members: [], admins: [] }
-  }
-  try {
-    const raw = JSON.parse(rawText) as {
-      member_list?: RawGroupChatMember[]
-      admin_list?: Array<string | RawGroupChatAdmin>
-    }
-    const members = Array.isArray(raw.member_list)
-      ? raw.member_list.map((member) => ({
-          userid: (member.userid || "").trim(),
-          type: Number(member.type || 0),
-          join_time: Number(member.join_time || 0),
-          join_scene: Number(member.join_scene || 0),
-          unionid: (member.unionid || "").trim(),
-          name: (member.name || "").trim(),
-          group_nickname: (member.group_nickname || "").trim(),
-          invitor_userid: (member.invitor?.userid || "").trim(),
-          invitor_entity_type: Number(member.invitor?.entity_type || 0),
-        }))
-      : []
-    const admins = Array.isArray(raw.admin_list)
-      ? raw.admin_list
-          .map((admin) => {
-            if (typeof admin === "string") {
-              return { userid: admin.trim() }
-            }
-            return { userid: (admin?.userid || "").trim() }
-          })
-          .filter((admin) => admin.userid !== "")
-      : []
-    return {
-      group_chat: {
-        ...group,
-        admin_count: Number(group.admin_count || admins.length || 0),
-        member_count: Number(group.member_count || members.length || 0),
-      },
-      members,
-      admins,
-    }
-  } catch {
-    return { group_chat: group, members: [], admins: [] }
-  }
 }
