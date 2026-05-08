@@ -1,10 +1,9 @@
-import { AlertCircle, Clock3, Loader2, RefreshCw, Sparkles } from "lucide-react"
-import { Badge } from "@/components/ui/Badge"
+import { AlertCircle, Info, Loader2, RefreshCw } from "lucide-react"
+import { Avatar } from "@/components/ui/Avatar"
 import { Button } from "@/components/ui/Button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
-import { EmptyState } from "@/components/ui/EmptyState"
+import { cn } from "@/lib/utils"
 import { ChatDataMessageFrame } from "@/components/chatdata/ChatDataMessageFrame"
-import { type ChatDataPanelView } from "@/services/chatdataService"
+import { type ChatDataMessageSummary, type ChatDataPanelView } from "@/services/chatdataService"
 
 function formatUnixSeconds(value?: number): string {
   const raw = Number(value || 0)
@@ -12,60 +11,64 @@ function formatUnixSeconds(value?: number): string {
   return new Date(raw * 1000).toLocaleString("zh-CN", { hour12: false })
 }
 
-function formatDateTime(value?: string): string {
+function formatHeaderTime(value?: string): string {
   const text = (value || "").trim()
   if (!text) return "-"
   const parsed = Date.parse(text)
   if (Number.isNaN(parsed)) return text
-  return new Date(parsed).toLocaleString("zh-CN", { hour12: false })
+  const date = new Date(parsed)
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  if (sameDay) {
+    return `今天 ${date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}`
+  }
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
 
-function syncStateMeta(panel: ChatDataPanelView | null, bootstrapping?: boolean) {
-  const state = (panel?.init_state || "").trim()
+function orderedMessages(messages: ChatDataMessageSummary[]): ChatDataMessageSummary[] {
+  return [...messages].sort((left, right) => Number(left.send_time || 0) - Number(right.send_time || 0))
+}
+
+function isExternalSender(message: ChatDataMessageSummary): boolean {
+  return Number(message.sender_type || 0) === 2
+}
+
+function senderFallbackLabel(panel: ChatDataPanelView | null, message: ChatDataMessageSummary): string {
+  if (isExternalSender(message)) {
+    return panel?.target_type === "chat_id" ? "客户成员" : "客户"
+  }
+  return panel?.target_type === "chat_id" ? "群成员" : "服务成员"
+}
+
+function senderDisplayName(panel: ChatDataPanelView | null, message: ChatDataMessageSummary): string {
+  const senderID = (message.sender_id || "").trim()
+  if (!senderID) return senderFallbackLabel(panel, message)
+  const looksLikeHumanName = /[\u4e00-\u9fa5]/.test(senderID)
+  if (looksLikeHumanName || senderID.length <= 12) return senderID
+  return senderFallbackLabel(panel, message)
+}
+
+function emptyReason(panel: ChatDataPanelView | null, error?: string): "not-synced" | "paused" {
+  if (error) return "paused"
+  if (panel?.recovery_blocking) return "paused"
   const capability = (panel?.capability_status || "").trim()
-  if (bootstrapping || state === "queued" || state === "running") {
-    return {
-      label: "同步中",
-      tone: "border-blue-200 bg-blue-50 text-blue-700",
-      title: "会话内容正在准备中",
-      description: "首次进入会自动初始化，新的企业微信消息同步后也会自动回到这里。",
-    }
-  }
-  if (state === "failed") {
-    return {
-      label: "需重试",
-      tone: "border-amber-200 bg-amber-50 text-amber-700",
-      title: "最近一次同步没有完成",
-      description: "可以重新检查一次同步状态，恢复后这里会继续展示最近会话内容。",
-    }
-  }
-  if ((panel?.has_messages || false) && capability === "ready") {
-    return {
-      label: "已就绪",
-      tone: "border-green-200 bg-green-50 text-green-700",
-      title: "最近会话内容已就绪",
-      description: "这里展示的是专区内已同步的会话回显，页面会继续自动刷新。",
-    }
-  }
-  if (capability === "ready") {
-    return {
-      label: "待同步",
-      tone: "border-slate-200 bg-slate-50 text-slate-700",
-      title: "正在等待可展示的会话内容",
-      description: "进入详情后会自动准备同步结果，稍后新的消息同步完成后会直接出现在这里。",
-    }
-  }
-  return {
-    label: "待配置",
-    tone: "border-slate-200 bg-slate-50 text-slate-700",
-    title: "会话回显还没有完全可用",
-    description: "完成数据专区相关配置后，页面会自动开始准备会话内容。",
-  }
+  if (capability && capability !== "ready") return "paused"
+  return "not-synced"
 }
 
-function latestMessageTime(messages: Array<{ send_time?: number }>): string {
-  if (messages.length === 0) return "-"
-  return formatUnixSeconds(messages[0]?.send_time)
+function showPendingState(panel: ChatDataPanelView | null, loading?: boolean, bootstrapping?: boolean): boolean {
+  const state = (panel?.init_state || "").trim()
+  if (loading || bootstrapping) return true
+  return state === "queued" || state === "running"
 }
 
 export function ChatDataPanel(props: {
@@ -77,120 +80,144 @@ export function ChatDataPanel(props: {
   onBootstrap?: () => void
 }) {
   const panel = props.panel
-  const messages = panel?.messages || []
-  const meta = syncStateMeta(panel, props.bootstrapping)
-  const latestSyncTime = formatDateTime(panel?.last_sync_time)
-  const autoRefreshHint =
-    meta.label === "同步中" ? "正在持续更新" : (panel?.has_messages || false) ? "自动刷新中" : "等待新消息"
+  const messages = orderedMessages(panel?.messages || [])
+  const lastSyncTime = formatHeaderTime(panel?.last_sync_time)
+  const statusIsHealthy = !props.error && !panel?.last_error && (panel?.capability_status || "").trim() === "ready"
+  const needsRetryAction = Boolean(props.onBootstrap && panel?.can_retry_init && (props.error || panel?.last_error))
+  const isPending = showPendingState(panel, props.loading, props.bootstrapping) && messages.length === 0
 
   return (
-    <Card className="overflow-hidden border-gray-200 shadow-sm">
-      <CardHeader className="gap-4 border-b border-gray-100 bg-white p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-3">
-            <Badge variant="outline" className="w-fit border-blue-200 bg-blue-50 text-blue-700">
-              数据专区会话回显
-            </Badge>
-            <div>
-              <CardTitle className="text-base font-semibold text-gray-900">{meta.title}</CardTitle>
-              <p className="mt-1 text-sm leading-6 text-gray-500">{meta.description}</p>
+    <div className="flex h-full min-h-[480px] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+      <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-4 py-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-gray-700">
+              <span className="relative flex h-2 w-2">
+                <span
+                  className={cn(
+                    "absolute inline-flex h-full w-full rounded-full opacity-75",
+                    statusIsHealthy ? "animate-ping bg-green-400" : "bg-amber-300"
+                  )}
+                />
+                <span className={cn("relative inline-flex h-2 w-2 rounded-full", statusIsHealthy ? "bg-green-500" : "bg-amber-500")} />
+              </span>
+              自动同步中
             </div>
+            <span className="hidden text-gray-300 sm:inline">|</span>
+            <span className="text-xs text-gray-500">上次同步时间: {lastSyncTime}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className={meta.tone}>
-              {meta.label}
-            </Badge>
-            <Button variant="outline" size="sm" onClick={props.onReload} disabled={props.loading}>
-              {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              刷新
-            </Button>
-            {panel?.can_retry_init ? (
-              <Button variant="outline" size="sm" onClick={props.onBootstrap} disabled={props.bootstrapping}>
-                {props.bootstrapping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                重新检查同步
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 bg-white text-xs text-gray-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+            onClick={props.onReload}
+            disabled={props.loading || props.bootstrapping}
+          >
+            {props.loading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+            手动刷新
+          </Button>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-b border-blue-100 bg-blue-50/50 px-4 py-2.5">
+        <div className="flex items-start gap-2">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
+          <div className="text-xs leading-relaxed text-blue-800">
+            <span className="font-semibold">提示：</span>
+            受接口限制，只能追回近 5 天内的历史聊天记录（超过 5 天的历史消息无法再补拉）。新产生的消息将自动持续同步至此处。
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto bg-[#f5f6f7] p-4">
+        {props.error ? (
+          <div className="mb-4 rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{props.error}</div>
+        ) : null}
+
+        {panel?.last_error ? (
+          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+            <span>最近一次同步未完成：{(panel.last_error || "").trim()}</span>
+            {needsRetryAction ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 border-amber-200 bg-white text-xs text-amber-800 hover:bg-amber-100"
+                onClick={props.onBootstrap}
+                disabled={props.bootstrapping}
+              >
+                {props.bootstrapping ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                重新尝试
               </Button>
             ) : null}
           </div>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-            <div className="text-xs text-gray-500">最新同步时间</div>
-            <div className="mt-1 text-sm font-semibold text-gray-900">{latestSyncTime}</div>
-          </div>
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <div className="text-xs text-amber-700">展示范围</div>
-            <div className="mt-1 text-sm font-semibold text-amber-900">仅支持近 5 天会话内容</div>
-          </div>
-          <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-            <div className="text-xs text-gray-500">自动同步状态</div>
-            <div className="mt-1 text-sm font-semibold text-gray-900">{autoRefreshHint}</div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
-          <div className="flex items-start gap-2">
-            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-            <div>
-              <div>进入客户或群详情后会自动准备会话回显；企业微信里产生的新消息同步完成后，也会自动出现在这里。</div>
-              <div className="mt-1 text-xs text-blue-700">{(panel?.open_data_hint || "请先完成数据专区相关配置。").trim()}</div>
-            </div>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="bg-[#F7F8FA] p-0">
-        {props.error ? (
-          <div className="border-b border-red-100 bg-red-50 px-5 py-3 text-sm text-red-700">{props.error}</div>
-        ) : null}
-        {panel?.last_error ? (
-          <div className="border-b border-amber-100 bg-amber-50 px-5 py-3 text-sm text-amber-800">
-            最近一次同步提示：{(panel.last_error || "").trim()}
-          </div>
         ) : null}
 
-        {props.loading && !panel ? (
-          <div className="flex min-h-[220px] items-center justify-center text-sm text-gray-500">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            正在读取会话回显...
+        {isPending ? (
+          <div className="flex h-full min-h-[320px] flex-col items-center justify-center text-center">
+            <Loader2 className="mb-3 h-7 w-7 animate-spin text-gray-400" />
+            <div className="text-sm font-medium text-gray-700">正在同步最近消息</div>
+            <div className="mt-1 text-xs text-gray-500">新产生的消息同步完成后，会自动持续出现在这里。</div>
           </div>
-        ) : messages.length === 0 ? (
-          <div className="px-6 py-10">
-            <EmptyState
-              icon={AlertCircle}
-              title="这里还没有可展示的聊天内容"
-              description={
-                meta.label === "待配置"
-                  ? "先完成数据专区配置，页面会在能力就绪后自动开始准备会话回显。"
-                  : "消息同步完成后，这里会以聊天记录的形式展示最近 5 天内的会话内容。"
-              }
-            />
-          </div>
-        ) : (
-          <div className="px-4 py-5 md:px-6">
-            <div className="mx-auto max-w-3xl space-y-5">
-              <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
-                <Clock3 className="h-3.5 w-3.5" />
-                最近一条消息时间：{latestMessageTime(messages)}
-              </div>
-              {messages.map((item) => (
-                <div key={item.msg_id} className="space-y-2">
-                  <div className="flex justify-center">
-                    <span className="rounded-full bg-white px-3 py-1 text-[11px] text-gray-400 shadow-sm">
-                      {formatUnixSeconds(item.send_time)}
-                    </span>
-                  </div>
-                  <div className="flex">
-                    <div className="max-w-full rounded-2xl rounded-tl-md border border-gray-200 bg-white px-4 py-3 shadow-sm md:max-w-[92%]">
-                      <ChatDataMessageFrame message={item} />
+        ) : messages.length > 0 ? (
+          <div className="space-y-6">
+            {messages.map((item, index) => {
+              const label = senderDisplayName(panel, item)
+              const external = isExternalSender(item)
+              const prevTime = index > 0 ? formatUnixSeconds(messages[index - 1]?.send_time) : ""
+              const nextTime = formatUnixSeconds(item.send_time)
+              const showTimeChip = index === 0 || prevTime !== nextTime
+
+              return (
+                <div key={item.msg_id || `${item.send_time || 0}-${index}`} className="space-y-3">
+                  {showTimeChip ? (
+                    <div className="flex items-center justify-center">
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-400">{nextTime}</span>
                     </div>
+                  ) : null}
+
+                  <div className={cn("flex gap-3", external ? "justify-start" : "justify-end")}>
+                    {external ? <Avatar fallback={label.slice(0, 1)} size="sm" /> : null}
+
+                    <div className={cn("flex max-w-[78%] flex-col gap-1", external ? "items-start" : "items-end")}>
+                      <span className={cn("text-[11px] text-gray-500", external ? "ml-1" : "mr-1")}>{label}</span>
+                      <div
+                        className={cn(
+                          "rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm",
+                          external
+                            ? "rounded-tl-sm border border-gray-100 bg-white text-gray-900"
+                            : "rounded-tr-sm border border-[#cce7f8] bg-[#dff3ff] text-gray-900"
+                        )}
+                      >
+                        <ChatDataMessageFrame message={item} />
+                      </div>
+                    </div>
+
+                    {external ? null : <Avatar fallback={label.slice(0, 1)} size="sm" />}
                   </div>
                 </div>
-              ))}
+              )
+            })}
+          </div>
+        ) : (
+          <div className="flex h-full min-h-[320px] flex-col items-center justify-center px-4 text-center">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gray-100">
+              <AlertCircle className="h-8 w-8 text-gray-400" />
             </div>
+            {emptyReason(panel, props.error) === "not-synced" ? (
+              <>
+                <h3 className="mb-1 text-sm font-semibold text-gray-900">过去 5 天内无聊天记录</h3>
+                <p className="max-w-[240px] text-xs text-gray-500">5 天之外的历史消息由于微信接口限制无法再追回。</p>
+              </>
+            ) : (
+              <>
+                <h3 className="mb-1 text-sm font-semibold text-gray-900">数据同步已暂停</h3>
+                <p className="max-w-[240px] text-xs text-gray-500">请前往「组织与设置 - 业务数据同步」中恢复群聊同步任务。</p>
+              </>
+            )}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }

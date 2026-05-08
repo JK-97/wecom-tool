@@ -32,7 +32,7 @@ import {
   type CRMSyncScopeCard,
 } from "@/services/crmSyncService"
 
-type DetailTab = "overview" | "members" | "risk" | "chatdata"
+type DetailTab = "overview" | "members" | "risk" | "chat-history"
 
 function formatDateTime(value?: string): string {
   const text = (value || "").trim()
@@ -303,7 +303,7 @@ export default function GroupDetail() {
               风险监控
             </TabsTrigger>
             <TabsTrigger
-              value="chatdata"
+              value="chat-history"
               className="rounded-none border-b-2 border-transparent px-0 py-2 font-medium data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600"
             >
               会话回显
@@ -313,266 +313,270 @@ export default function GroupDetail() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <Card className="border-gray-200 shadow-sm">
-            <CardContent className="p-4">
-              <div className="mb-1 text-xs font-medium text-gray-500">成员总数</div>
-              <span className="text-2xl font-bold text-gray-900">{Number(detail.member_stat?.total || 0)}</span>
-            </CardContent>
-          </Card>
-          <Card className="border-gray-200 shadow-sm">
-            <CardContent className="p-4">
-              <div className="mb-1 text-xs font-medium text-gray-500">企业成员</div>
-              <span className="text-2xl font-bold text-gray-900">{Number(detail.member_stat?.internal_count || 0)}</span>
-            </CardContent>
-          </Card>
-          <Card className="border-gray-200 shadow-sm">
-            <CardContent className="p-4">
-              <div className="mb-1 text-xs font-medium text-gray-500">外部联系人</div>
-              <span className="text-2xl font-bold text-gray-900">{Number(detail.member_stat?.external_count || 0)}</span>
-            </CardContent>
-          </Card>
-          <Card className="border-gray-200 shadow-sm">
-            <CardContent className="p-4">
-              <div className="mb-1 text-xs font-medium text-gray-500">待处理预警</div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-red-600">{Number(detail.sync_status?.open_issue_count || risks.length || 0)}</span>
-                {Number(detail.sync_status?.open_issue_count || 0) > 0 || risks.length > 0 ? (
-                  <Badge variant="destructive" className="py-0 text-[10px]">
-                    需关注
-                  </Badge>
-                ) : (
-                  <Badge variant="success" className="py-0 text-[10px]">
-                    稳定
-                  </Badge>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        {activeTab === "chat-history" ? (
+          <div className="mx-auto h-full max-w-4xl">
+            <ChatDataPanel
+              panel={chatdata.panel}
+              loading={chatdata.loading}
+              bootstrapping={chatdata.bootstrapping}
+              error={chatdata.error}
+              onReload={() => void chatdata.reload()}
+              onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+              <Card className="border-gray-200 shadow-sm">
+                <CardContent className="p-4">
+                  <div className="mb-1 text-xs font-medium text-gray-500">成员总数</div>
+                  <span className="text-2xl font-bold text-gray-900">{Number(detail.member_stat?.total || 0)}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-gray-200 shadow-sm">
+                <CardContent className="p-4">
+                  <div className="mb-1 text-xs font-medium text-gray-500">企业成员</div>
+                  <span className="text-2xl font-bold text-gray-900">{Number(detail.member_stat?.internal_count || 0)}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-gray-200 shadow-sm">
+                <CardContent className="p-4">
+                  <div className="mb-1 text-xs font-medium text-gray-500">外部联系人</div>
+                  <span className="text-2xl font-bold text-gray-900">{Number(detail.member_stat?.external_count || 0)}</span>
+                </CardContent>
+              </Card>
+              <Card className="border-gray-200 shadow-sm">
+                <CardContent className="p-4">
+                  <div className="mb-1 text-xs font-medium text-gray-500">待处理预警</div>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-2xl font-bold text-red-600">{Number(detail.sync_status?.open_issue_count || risks.length || 0)}</span>
+                    {Number(detail.sync_status?.open_issue_count || 0) > 0 || risks.length > 0 ? (
+                      <Badge variant="destructive" className="py-0 text-[10px]">
+                        需关注
+                      </Badge>
+                    ) : (
+                      <Badge variant="success" className="py-0 text-[10px]">
+                        稳定
+                      </Badge>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-2">
-            {activeTab === "overview" ? (
-              <>
-                <Card className="border-gray-200 shadow-sm">
-                  <CardHeader className="border-b border-gray-100 p-4">
-                    <CardTitle className="text-sm font-semibold text-gray-800">群动态摘要</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-4">
-                    <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-4">
-                      <p className="text-sm leading-relaxed text-blue-900">{summaryText(detail)}</p>
-                    </div>
-                    <div className="space-y-4">
-                      <div className="flex gap-3">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100">
-                          <RefreshCw className="h-4 w-4 text-gray-400" />
+            <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div className="space-y-6 lg:col-span-2">
+                {activeTab === "overview" ? (
+                  <>
+                    <Card className="border-gray-200 shadow-sm">
+                      <CardHeader className="border-b border-gray-100 p-4">
+                        <CardTitle className="text-sm font-semibold text-gray-800">群动态摘要</CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-4">
+                        <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-4">
+                          <p className="text-sm leading-relaxed text-blue-900">{summaryText(detail)}</p>
                         </div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">最近一次资料同步</div>
-                          <div className="mt-0.5 text-xs text-gray-500">{formatDateTime(detail.sync_status?.last_synced_at || detail.group_chat.last_synced_at)}</div>
-                        </div>
-                      </div>
-                      {risks.slice(0, 2).map((risk, index) => (
-                        <div key={`${risk.title}-${index}`} className="flex gap-3">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100">
-                            <ShieldAlert className="h-4 w-4 text-red-600" />
+                        <div className="space-y-4">
+                          <div className="flex gap-3">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100">
+                              <RefreshCw className="h-4 w-4 text-gray-400" />
+                            </div>
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">最近一次资料同步</div>
+                              <div className="mt-0.5 text-xs text-gray-500">{formatDateTime(detail.sync_status?.last_synced_at || detail.group_chat.last_synced_at)}</div>
+                            </div>
                           </div>
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">{(risk.title || "同步提示").trim()}</div>
-                            <div className="mt-0.5 text-xs text-gray-500">{(risk.description || "暂无说明").trim()}</div>
+                          {risks.slice(0, 2).map((risk, index) => (
+                            <div key={`${risk.title}-${index}`} className="flex gap-3">
+                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100">
+                                <ShieldAlert className="h-4 w-4 text-red-600" />
+                              </div>
+                              <div>
+                                <div className="text-sm font-medium text-gray-900">{(risk.title || "同步提示").trim()}</div>
+                                <div className="mt-0.5 text-xs text-gray-500">{(risk.description || "暂无说明").trim()}</div>
+                              </div>
+                            </div>
+                          ))}
+                          {risks.length === 0 ? (
+                            <div className="flex gap-3">
+                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100">
+                                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                              </div>
+                              <div>
+                                <div className="text-sm font-medium text-gray-900">当前没有异常项</div>
+                                <div className="mt-0.5 text-xs text-gray-500">群主、管理员和成员资料没有发现需要立即处理的问题。</div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-gray-200 shadow-sm">
+                      <CardHeader className="border-b border-gray-100 p-4">
+                        <CardTitle className="text-sm font-semibold text-gray-800">群公告与补充说明</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4 p-4">
+                        <div className="rounded-lg border border-gray-200 bg-white p-4">
+                          <div className="mb-1 text-sm font-medium text-gray-900">群公告</div>
+                          <div className="text-sm leading-relaxed text-gray-600">
+                            {(detail.group_chat.notice || "").trim() || "当前还没有可展示的群公告内容。"}
                           </div>
                         </div>
-                      ))}
+                        {notices.length > 0 ? (
+                          notices.map((notice, index) => (
+                            <div key={`${notice.title}-${index}`} className="rounded-lg border border-gray-200 bg-white p-4">
+                              <div className="text-sm font-medium text-gray-900">{(notice.title || "补充说明").trim()}</div>
+                              <div className="mt-1 text-sm leading-relaxed text-gray-600">{(notice.description || "暂无信息").trim()}</div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-gray-200 bg-white p-4 text-sm text-gray-500">
+                            当前没有额外的补充说明。
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </>
+                ) : null}
+
+                {activeTab === "members" ? (
+                  <Card className="border-gray-200 shadow-sm">
+                    <CardHeader className="border-b border-gray-100 p-4">
+                      <CardTitle className="text-sm font-semibold text-gray-800">成员列表</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      {members.length === 0 ? (
+                        <div className="p-6">
+                          <EmptyState
+                            icon={Users}
+                            title="当前还没有客户群数据"
+                            description="完成首次同步后，这里会展示群主、成员和风险状态。"
+                          />
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead className="bg-gray-50/80">
+                              <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
+                                <th className="px-4 py-3 font-medium">成员</th>
+                                <th className="px-4 py-3 font-medium">类型</th>
+                                <th className="px-4 py-3 font-medium">入群时间</th>
+                                <th className="px-4 py-3 font-medium">邀请人</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 bg-white">
+                              {members.map((member) => {
+                                const displayName = memberName(member)
+                                return (
+                                  <tr key={`${member.userid}-${member.join_time}`} className="hover:bg-gray-50/80">
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-3">
+                                        <Avatar fallback={displayName.slice(0, 1)} size="sm" />
+                                        <div>
+                                          <div className="font-medium text-gray-900">{displayName}</div>
+                                          <div className="text-xs text-gray-500">{(member.userid || "").trim() || "-"}</div>
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-600">{memberTypeLabel(member.type)}</td>
+                                    <td className="px-4 py-3 text-gray-600">{formatUnixSeconds(member.join_time)}</td>
+                                    <td className="px-4 py-3 text-gray-600">{(member.invitor_userid || "").trim() || "-"}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : null}
+
+                {activeTab === "risk" ? (
+                  <Card className="border-gray-200 shadow-sm">
+                    <CardHeader className="border-b border-gray-100 p-4">
+                      <CardTitle className="text-sm font-semibold text-gray-800">风险监控</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 p-4">
                       {risks.length === 0 ? (
-                        <div className="flex gap-3">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100">
-                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                        <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+                          当前没有需要优先处理的群资料异常。
+                        </div>
+                      ) : (
+                        risks.map((risk, index) => (
+                          <div key={`${risk.title}-${index}`} className={`rounded-lg border px-4 py-3 ${riskTone(risk.level)}`}>
+                            <div className="font-medium">{(risk.title || "提示").trim()}</div>
+                            <div className="mt-1 text-sm leading-6">{(risk.description || "暂无说明").trim()}</div>
                           </div>
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">当前没有异常项</div>
-                            <div className="mt-0.5 text-xs text-gray-500">群主、管理员和成员资料没有发现需要立即处理的问题。</div>
+                        ))
+                      )}
+                      {notices.length > 0 ? (
+                        <div className="pt-2">
+                          <div className="mb-2 text-sm font-medium text-gray-900">补充说明</div>
+                          <div className="space-y-2">
+                            {notices.map((notice, index) => (
+                              <div key={`${notice.title}-${index}`} className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                                <div className="font-medium text-gray-900">{(notice.title || "说明").trim()}</div>
+                                <div className="mt-1 text-sm leading-6 text-gray-600">{(notice.description || "暂无信息").trim()}</div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       ) : null}
+                    </CardContent>
+                  </Card>
+                ) : null}
+              </div>
+
+              <div className="space-y-6">
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-100 p-4">
+                    <CardTitle className="text-sm font-semibold text-gray-800">同步状态</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4 p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">当前状态</span>
+                      <Badge variant="outline" className={statusToneClass(syncToneValue)}>
+                        {syncStatusLabel}
+                      </Badge>
                     </div>
+                    <SidebarField label="最近更新时间" value={formatDateTime(detail.sync_status?.last_synced_at || syncOverview?.group_chats?.last_synced_at)} />
+                    <SidebarField label="状态说明" value={(detail.sync_status?.description || "这里会展示客户群最近一次同步结果和当前异常数量。").trim()} />
                   </CardContent>
                 </Card>
 
                 <Card className="border-gray-200 shadow-sm">
                   <CardHeader className="border-b border-gray-100 p-4">
-                    <CardTitle className="text-sm font-semibold text-gray-800">群公告与补充说明</CardTitle>
+                    <CardTitle className="text-sm font-semibold text-gray-800">群基本信息</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4 p-4">
-                    <div className="rounded-lg border border-gray-200 bg-white p-4">
-                      <div className="mb-1 text-sm font-medium text-gray-900">群公告</div>
-                      <div className="text-sm leading-relaxed text-gray-600">
-                        {(detail.group_chat.notice || "").trim() || "当前还没有可展示的群公告内容。"}
-                      </div>
-                    </div>
-                    {notices.length > 0 ? (
-                      notices.map((notice, index) => (
-                        <div key={`${notice.title}-${index}`} className="rounded-lg border border-gray-200 bg-white p-4">
-                          <div className="text-sm font-medium text-gray-900">{(notice.title || "补充说明").trim()}</div>
-                          <div className="mt-1 text-sm leading-relaxed text-gray-600">{(notice.description || "暂无信息").trim()}</div>
-                        </div>
-                      ))
+                    <SidebarField label="群主" value={(detail.group_chat.owner_userid || "").trim() || "未同步"} />
+                    <SidebarField label="群公告" value={(detail.group_chat.notice || "").trim() || "暂无群公告"} />
+                    <SidebarField label="成员结构" value={`企业成员 ${Number(detail.member_stat?.internal_count || 0)} · 外部联系人 ${Number(detail.member_stat?.external_count || 0)}`} />
+                  </CardContent>
+                </Card>
+
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-100 p-4">
+                    <CardTitle className="text-sm font-semibold text-gray-800">管理员名单</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4">
+                    {admins.length === 0 ? (
+                      <div className="text-sm text-gray-500">当前没有同步到管理员资料。</div>
                     ) : (
-                      <div className="rounded-lg border border-dashed border-gray-200 bg-white p-4 text-sm text-gray-500">
-                        当前没有额外的补充说明。
+                      <div className="flex flex-wrap gap-2">
+                        {admins.map((admin, index) => (
+                          <div key={`${admin.userid || "admin"}-${index}`}>{renderAdminChip(admin)}</div>
+                        ))}
                       </div>
                     )}
                   </CardContent>
                 </Card>
-              </>
-            ) : null}
-
-            {activeTab === "members" ? (
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="border-b border-gray-100 p-4">
-                  <CardTitle className="text-sm font-semibold text-gray-800">成员列表</CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  {members.length === 0 ? (
-                    <div className="p-6">
-                      <EmptyState
-                        icon={Users}
-                        title="当前还没有客户群数据"
-                        description="完成首次同步后，这里会展示群主、成员和风险状态。"
-                      />
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead className="bg-gray-50/80">
-                          <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
-                            <th className="px-4 py-3 font-medium">成员</th>
-                            <th className="px-4 py-3 font-medium">类型</th>
-                            <th className="px-4 py-3 font-medium">入群时间</th>
-                            <th className="px-4 py-3 font-medium">邀请人</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 bg-white">
-                          {members.map((member) => {
-                            const displayName = memberName(member)
-                            return (
-                              <tr key={`${member.userid}-${member.join_time}`} className="hover:bg-gray-50/80">
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-3">
-                                    <Avatar fallback={displayName.slice(0, 1)} size="sm" />
-                                    <div>
-                                      <div className="font-medium text-gray-900">{displayName}</div>
-                                      <div className="text-xs text-gray-500">{(member.userid || "").trim() || "-"}</div>
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-gray-600">{memberTypeLabel(member.type)}</td>
-                                <td className="px-4 py-3 text-gray-600">{formatUnixSeconds(member.join_time)}</td>
-                                <td className="px-4 py-3 text-gray-600">{(member.invitor_userid || "").trim() || "-"}</td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {activeTab === "risk" ? (
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="border-b border-gray-100 p-4">
-                  <CardTitle className="text-sm font-semibold text-gray-800">风险监控</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 p-4">
-                  {risks.length === 0 ? (
-                    <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-700">
-                      当前没有需要优先处理的群资料异常。
-                    </div>
-                  ) : (
-                    risks.map((risk, index) => (
-                      <div key={`${risk.title}-${index}`} className={`rounded-lg border px-4 py-3 ${riskTone(risk.level)}`}>
-                        <div className="font-medium">{(risk.title || "提示").trim()}</div>
-                        <div className="mt-1 text-sm leading-6">{(risk.description || "暂无说明").trim()}</div>
-                      </div>
-                    ))
-                  )}
-                  {notices.length > 0 ? (
-                    <div className="pt-2">
-                      <div className="mb-2 text-sm font-medium text-gray-900">补充说明</div>
-                      <div className="space-y-2">
-                        {notices.map((notice, index) => (
-                          <div key={`${notice.title}-${index}`} className="rounded-lg border border-gray-200 bg-white px-4 py-3">
-                            <div className="font-medium text-gray-900">{(notice.title || "说明").trim()}</div>
-                            <div className="mt-1 text-sm leading-6 text-gray-600">{(notice.description || "暂无信息").trim()}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {activeTab === "chatdata" ? (
-              <ChatDataPanel
-                panel={chatdata.panel}
-                loading={chatdata.loading}
-                bootstrapping={chatdata.bootstrapping}
-                error={chatdata.error}
-                onReload={() => void chatdata.reload()}
-                onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
-              />
-            ) : null}
-          </div>
-
-          <div className="space-y-6">
-            <Card className="border-gray-200 shadow-sm">
-              <CardHeader className="border-b border-gray-100 p-4">
-                <CardTitle className="text-sm font-semibold text-gray-800">同步状态</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4 p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">当前状态</span>
-                  <Badge variant="outline" className={statusToneClass(syncToneValue)}>
-                    {syncStatusLabel}
-                  </Badge>
-                </div>
-                <SidebarField label="最近更新时间" value={formatDateTime(detail.sync_status?.last_synced_at || syncOverview?.group_chats?.last_synced_at)} />
-                <SidebarField label="状态说明" value={(detail.sync_status?.description || "这里会展示客户群最近一次同步结果和当前异常数量。").trim()} />
-              </CardContent>
-            </Card>
-
-            <Card className="border-gray-200 shadow-sm">
-              <CardHeader className="border-b border-gray-100 p-4">
-                <CardTitle className="text-sm font-semibold text-gray-800">群基本信息</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4 p-4">
-                <SidebarField label="群主" value={(detail.group_chat.owner_userid || "").trim() || "未同步"} />
-                <SidebarField label="群公告" value={(detail.group_chat.notice || "").trim() || "暂无群公告"} />
-                <SidebarField label="成员结构" value={`企业成员 ${Number(detail.member_stat?.internal_count || 0)} · 外部联系人 ${Number(detail.member_stat?.external_count || 0)}`} />
-              </CardContent>
-            </Card>
-
-            <Card className="border-gray-200 shadow-sm">
-              <CardHeader className="border-b border-gray-100 p-4">
-                <CardTitle className="text-sm font-semibold text-gray-800">管理员名单</CardTitle>
-              </CardHeader>
-              <CardContent className="p-4">
-                {admins.length === 0 ? (
-                  <div className="text-sm text-gray-500">当前没有同步到管理员资料。</div>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {admins.map((admin, index) => (
-                      <div key={`${admin.userid || "admin"}-${index}`}>{renderAdminChip(admin)}</div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

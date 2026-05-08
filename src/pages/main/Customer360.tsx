@@ -27,7 +27,7 @@ import { updateCustomerProfile } from "@/services/customerListService"
 import { getCustomer360View, type Customer360ViewModel } from "@/services/customer360Service"
 import { normalizeErrorMessage } from "@/services/http"
 
-type TimelineTab = "all" | "cs" | "sales" | "order"
+type TimelineTab = "all" | "chat-history" | "cs" | "sales" | "order"
 
 const STAGE_OPTIONS = ["意向沟通中", "已报价待签", "已成交", "流失"]
 
@@ -37,6 +37,10 @@ function formatDateTime(value?: string): string {
   const parsed = Date.parse(text)
   if (Number.isNaN(parsed)) return text
   return new Date(parsed).toLocaleString("zh-CN", { hour12: false })
+}
+
+function resolveTimelineTab(tab: TimelineTab): string | undefined {
+  return tab === "chat-history" ? undefined : tab
 }
 
 function trackIcon(category?: string) {
@@ -77,7 +81,7 @@ export default function Customer360() {
     }
     const data = await getCustomer360View({
       external_userid: externalUserID,
-      timeline_tab: timelineTab,
+      timeline_tab: resolveTimelineTab(timelineTab),
     })
     setView(data)
   }
@@ -90,7 +94,7 @@ export default function Customer360() {
     }
     void getCustomer360View({
       external_userid: externalUserID,
-      timeline_tab: activeTab,
+      timeline_tab: resolveTimelineTab(activeTab),
     })
       .then((data) => {
         if (!alive) return
@@ -256,6 +260,7 @@ export default function Customer360() {
               <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TimelineTab)}>
                 <TabsList>
                   <TabsTrigger value="all">全部轨迹</TabsTrigger>
+                  <TabsTrigger value="chat-history">会话回显</TabsTrigger>
                   <TabsTrigger value="cs">客服记录</TabsTrigger>
                   <TabsTrigger value="sales">跟进记录</TabsTrigger>
                   <TabsTrigger value="order">订单记录</TabsTrigger>
@@ -264,7 +269,18 @@ export default function Customer360() {
             </div>
 
             <div className="flex-1 overflow-y-auto bg-gray-50/50 p-6">
-              {timeline.length === 0 ? (
+              {activeTab === "chat-history" ? (
+                <div className="h-full">
+                  <ChatDataPanel
+                    panel={chatdata.panel}
+                    loading={chatdata.loading}
+                    bootstrapping={chatdata.bootstrapping}
+                    error={chatdata.error}
+                    onReload={() => void chatdata.reload()}
+                    onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
+                  />
+                </div>
+              ) : timeline.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
                   <EmptyState icon={ShoppingCart} title="暂无轨迹数据" description="当前筛选下没有可展示的轨迹记录。" />
                 </div>
@@ -292,16 +308,6 @@ export default function Customer360() {
               )}
             </div>
           </Card>
-          <div className="mt-4">
-            <ChatDataPanel
-              panel={chatdata.panel}
-              loading={chatdata.loading}
-              bootstrapping={chatdata.bootstrapping}
-              error={chatdata.error}
-              onReload={() => void chatdata.reload()}
-              onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
-            />
-          </div>
         </div>
 
         <div className="w-[320px] shrink-0 space-y-6">
