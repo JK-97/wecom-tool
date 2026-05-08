@@ -46,10 +46,15 @@ type WWOpenDataGlobal = {
   checkSession?: (params: { success?: () => void; fail?: () => void }) => void
 }
 
+type WWAppInvoker = {
+  invokeJsApiByCallInfo?: (payload: Record<string, unknown>) => Promise<unknown> | unknown
+}
+
 const JWEIXIN_SDK_URL = "https://res.wx.qq.com/open/js/jweixin-1.2.0.js"
 const JWXWORK_SDK_URL = "https://open.work.weixin.qq.com/wwopen/js/jwxwork-1.0.0.js"
-const OPEN_DATA_REGISTER_API_LIST = ["checkJsApi"]
+const OPEN_DATA_REGISTER_API_LIST = ["checkJsApi", "wwapp.invokeJsApiByCallInfo"]
 const SIGNATURE_CACHE_TTL_MS = 30 * 1000
+const OPEN_DATA_DEBUG_PREFIX = "[chatdata/open-data]"
 
 let openDataReadyPromise: Promise<OpenDataRuntime> | null = null
 const signatureCache = new Map<string, SignatureCacheEntry>()
@@ -59,6 +64,7 @@ declare global {
   interface Window {
     WWOpenData?: WWOpenDataGlobal
     wx?: unknown
+    wwapp?: WWAppInvoker
   }
 }
 
@@ -89,6 +95,18 @@ function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message || "open-data 初始化失败"
   if (typeof error === "string") return error
   return "open-data 初始化失败"
+}
+
+function debugOpenData(label: string, payload?: unknown): void {
+  try {
+    if (payload === undefined) {
+      console.info(OPEN_DATA_DEBUG_PREFIX, label)
+      return
+    }
+    console.info(OPEN_DATA_DEBUG_PREFIX, label, payload)
+  } catch {
+    console.info(OPEN_DATA_DEBUG_PREFIX, label)
+  }
 }
 
 function createRuntime(
@@ -142,6 +160,7 @@ async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle>
   const cacheKey = targetURL.trim()
   const cached = signatureCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) {
+    debugOpenData("signature cache hit", { url: cacheKey })
     return cached.bundle
   }
 
@@ -156,6 +175,7 @@ async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle>
     skipAuthRedirect: true,
   })
     .then((payload) => {
+      debugOpenData("signature response", { url: cacheKey, hasData: Boolean(payload?.data) })
       const data = payload?.data
       if (!data) {
         throw new Error("签名接口返回为空")
@@ -194,6 +214,13 @@ async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle>
         bundle,
         expiresAt: Date.now() + SIGNATURE_CACHE_TTL_MS,
       })
+      debugOpenData("signature bundle ready", {
+        url: cacheKey,
+        corpId: bundle.corp_id,
+        agentId: bundle.agent_id,
+        hasConfigSignature: Boolean(bundle.config_signature.signature),
+        hasAgentConfigSignature: Boolean(bundle.agent_config_signature.signature),
+      })
       return bundle
     })
     .finally(() => {
@@ -206,6 +233,12 @@ async function fetchSignatureBundle(targetURL: string): Promise<SignatureBundle>
 
 async function registerOpenDataIdentity(pageURL: string): Promise<void> {
   const bundle = await fetchSignatureBundle(pageURL)
+  debugOpenData("register start", {
+    pageURL,
+    corpId: bundle.corp_id,
+    agentId: bundle.agent_id,
+    jsApiList: [...OPEN_DATA_REGISTER_API_LIST],
+  })
   ww.register({
     corpId: bundle.corp_id,
     suiteId: bundle.suite_id || undefined,
@@ -229,19 +262,24 @@ async function registerOpenDataIdentity(pageURL: string): Promise<void> {
     },
   })
   if (isWeComWebView() && typeof ww.ensureConfigReady === "function") {
+    debugOpenData("ensureConfigReady start")
     await ww.ensureConfigReady()
+    debugOpenData("ensureConfigReady done")
   }
 }
 
 function ensureOpenDataSession(): Promise<void> {
   const runtime = window.WWOpenData
   if (!runtime?.checkSession) return Promise.resolve()
+  debugOpenData("checkSession start")
   return new Promise((resolve, reject) => {
     runtime.checkSession?.({
       success() {
+        debugOpenData("checkSession success")
         resolve()
       },
       fail() {
+        debugOpenData("checkSession fail")
         reject(new Error(openDataLoginHint()))
       },
     })
@@ -260,16 +298,35 @@ export async function ensureOpenDataReady(): Promise<OpenDataRuntime> {
       if (!pageURL) {
         return createRuntime("unsupported", "当前页面地址不可用，无法初始化通讯录展示组件。")
       }
+      debugOpenData("ensureOpenDataReady begin", {
+        pageURL,
+        isWeComWebView: isWeComWebView(),
+      })
       await ensureOpenDataScripts()
       await registerOpenDataIdentity(pageURL)
       await ww.initOpenData()
+      debugOpenData("initOpenData done", {
+        hasWWOpenData: Boolean(window.WWOpenData),
+        hasBind: Boolean(window.WWOpenData?.bind),
+        hasCheckSession: Boolean(window.WWOpenData?.checkSession),
+        hasWWApp: typeof window.wwapp !== "undefined",
+        hasInvokeJsApiByCallInfo: typeof window.wwapp?.invokeJsApiByCallInfo === "function",
+      })
       if (!window.WWOpenData?.bind) {
         return createRuntime("unsupported", "当前环境未注入企业微信通讯录展示组件。")
       }
       await ensureOpenDataSession()
+      debugOpenData("ensureOpenDataReady success")
       return createRuntime("ready")
     } catch (error) {
       const message = normalizeErrorMessage(error)
+      debugOpenData("ensureOpenDataReady failed", {
+        message,
+        error,
+        hasWWOpenData: Boolean(window.WWOpenData),
+        hasWWApp: typeof window.wwapp !== "undefined",
+        hasInvokeJsApiByCallInfo: typeof window.wwapp?.invokeJsApiByCallInfo === "function",
+      })
       if (message.includes("登录态") || message.includes("403") || message.includes("跳转进入") || message.includes("同域页面")) {
         return createRuntime("login_required", openDataLoginHint())
       }
@@ -287,4 +344,20 @@ export async function ensureOpenDataReady(): Promise<OpenDataRuntime> {
 export function bindOpenDataElement(element: Element | null): void {
   if (!element || !window.WWOpenData?.bind) return
   window.WWOpenData.bind(element)
+}
+
+export async function invokeOpenDataCallInfo(payload: Record<string, unknown>): Promise<unknown> {
+  const runtime = await ensureOpenDataReady()
+  if (!runtime.canUseOpenData) {
+    throw new Error(runtime.reason || "当前环境暂不支持会话展示组件。")
+  }
+  const fn = window.wwapp?.invokeJsApiByCallInfo
+  if (typeof fn !== "function") {
+    throw new Error("当前环境未注入 wwapp.invokeJsApiByCallInfo。")
+  }
+  debugOpenData("invokeOpenDataCallInfo", {
+    keys: Object.keys(payload || {}),
+    hasWWApp: Boolean(window.wwapp),
+  })
+  return await fn(payload)
 }

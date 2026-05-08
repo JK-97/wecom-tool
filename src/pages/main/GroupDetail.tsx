@@ -16,6 +16,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
+import { ChatDataPanel } from "@/components/chatdata/ChatDataPanel"
+import { useChatDataPanel } from "@/hooks/useChatDataPanel"
 import { normalizeErrorMessage } from "@/services/http"
 import {
   getGroupOperationDetail,
@@ -30,7 +32,7 @@ import {
   type CRMSyncScopeCard,
 } from "@/services/crmSyncService"
 
-type DetailTab = "overview" | "members" | "risk"
+type DetailTab = "overview" | "members" | "risk" | "chatdata"
 
 function formatDateTime(value?: string): string {
   const text = (value || "").trim()
@@ -148,6 +150,11 @@ export default function GroupDetail() {
   const [detail, setDetail] = useState<GroupOperationDetail | null>(null)
   const [syncOverview, setSyncOverview] = useState<CRMSyncOverview | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const chatdata = useChatDataPanel({
+    target_type: "chat_id",
+    target_id: safeChatID,
+    surface: "group_detail",
+  })
 
   const loadDetail = useCallback(async () => {
     if (!safeChatID) {
@@ -294,6 +301,12 @@ export default function GroupDetail() {
               className="rounded-none border-b-2 border-transparent px-0 py-2 font-medium data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600"
             >
               风险监控
+            </TabsTrigger>
+            <TabsTrigger
+              value="chatdata"
+              className="rounded-none border-b-2 border-transparent px-0 py-2 font-medium data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600"
+            >
+              会话回显
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -500,6 +513,17 @@ export default function GroupDetail() {
                   ) : null}
                 </CardContent>
               </Card>
+            ) : null}
+
+            {activeTab === "chatdata" ? (
+              <ChatDataPanel
+                panel={chatdata.panel}
+                loading={chatdata.loading}
+                bootstrapping={chatdata.bootstrapping}
+                error={chatdata.error}
+                onReload={() => void chatdata.reload()}
+                onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
+              />
             ) : null}
           </div>
 

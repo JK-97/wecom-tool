@@ -21,6 +21,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
 import { Dialog } from "@/components/ui/Dialog"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
+import { ChatDataPanel } from "@/components/chatdata/ChatDataPanel"
+import { useChatDataPanel } from "@/hooks/useChatDataPanel"
 import { updateCustomerProfile } from "@/services/customerListService"
 import { getCustomer360View, type Customer360ViewModel } from "@/services/customer360Service"
 import { normalizeErrorMessage } from "@/services/http"
@@ -116,6 +118,19 @@ export default function Customer360() {
   const timeline = useMemo(() => view?.timeline || [], [view?.timeline])
   const tasks = view?.tasks || []
   const lastSyncedAt = formatDateTime(view?.last_synced_at || view?.contact?.last_synced_at || view?.updated_at || view?.contact?.updated_at)
+  const chatdata = useChatDataPanel({
+    target_type: "external_userid",
+    target_id: externalUserID,
+    surface: "customer_360",
+  })
+
+  useEffect(() => {
+    const capability = (chatdata.panel?.capability_status || "").trim()
+    const initState = (chatdata.panel?.init_state || "").trim()
+    if (capability === "ready" && initState === "not_started" && !chatdata.panel?.has_cursor) {
+      void chatdata.bootstrap("detail_opened", true)
+    }
+  }, [chatdata.panel?.capability_status, chatdata.panel?.has_cursor, chatdata.panel?.init_state])
 
   const handleSaveProfile = async () => {
     if (!externalUserID) return
@@ -285,6 +300,16 @@ export default function Customer360() {
               )}
             </div>
           </Card>
+          <div className="mt-4">
+            <ChatDataPanel
+              panel={chatdata.panel}
+              loading={chatdata.loading}
+              bootstrapping={chatdata.bootstrapping}
+              error={chatdata.error}
+              onReload={() => void chatdata.reload()}
+              onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
+            />
+          </div>
         </div>
 
         <div className="w-[320px] shrink-0 space-y-6">
