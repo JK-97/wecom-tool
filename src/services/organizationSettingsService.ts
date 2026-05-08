@@ -158,6 +158,9 @@ export type OrganizationSettingsView = {
     public_key_fingerprint?: string
     public_key_set_at?: number
     receive_callback_program_id?: string
+    sync_msg_ability_id?: string
+    callback_fetch_ability_id?: string
+    log_level?: number
     receive_callback_set_at?: number
     last_check_at?: number
     last_check_error?: string
@@ -381,6 +384,9 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
         public_key_fingerprint: readString(row.public_key_fingerprint, row.PublicKeyFingerprint),
         public_key_set_at: readNumber(row.public_key_set_at, row.PublicKeySetAt),
         receive_callback_program_id: readString(row.receive_callback_program_id, row.ReceiveCallbackProgramID, row.ReceiveCallbackProgramId),
+        sync_msg_ability_id: readString(row.sync_msg_ability_id, row.SyncMsgAbilityID, row.SyncMsgAbilityId),
+        callback_fetch_ability_id: readString(row.callback_fetch_ability_id, row.CallbackFetchAbilityID, row.CallbackFetchAbilityId),
+        log_level: readNumber(row.log_level, row.LogLevel),
         receive_callback_set_at: readNumber(row.receive_callback_set_at, row.ReceiveCallbackSetAt),
         last_check_at: readNumber(row.last_check_at, row.LastCheckAt),
         last_check_error: readString(row.last_check_error, row.LastCheckError),

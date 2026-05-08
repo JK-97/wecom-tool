@@ -229,6 +229,10 @@ export default function OrganizationSettings() {
   const [connectingConnectorKey, setConnectingConnectorKey] = useState("")
   const [isSettingDataZoneCallback, setIsSettingDataZoneCallback] = useState(false)
   const [dataZoneCallbackProgramID, setDataZoneCallbackProgramID] = useState("")
+  const [dataZoneSyncMsgAbilityID, setDataZoneSyncMsgAbilityID] = useState("sync_msg")
+  const [dataZoneCallbackFetchAbilityID, setDataZoneCallbackFetchAbilityID] = useState("do_async_job")
+  const [dataZoneLogLevel, setDataZoneLogLevel] = useState("2")
+  const [isConfiguringDataZoneProgram, setIsConfiguringDataZoneProgram] = useState(false)
 
   const [isRoleEditorOpen, setIsRoleEditorOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<NonNullable<OrganizationSettingsView["roles"]>[number] | null>(null)
@@ -393,6 +397,9 @@ export default function OrganizationSettings() {
       const data = await getOrganizationSettingsView()
       setView(data || null)
       setDataZoneCallbackProgramID((data?.data_zone?.receive_callback_program_id || "").trim())
+      setDataZoneSyncMsgAbilityID((data?.data_zone?.sync_msg_ability_id || "sync_msg").trim() || "sync_msg")
+      setDataZoneCallbackFetchAbilityID((data?.data_zone?.callback_fetch_ability_id || "do_async_job").trim() || "do_async_job")
+      setDataZoneLogLevel(`${data?.data_zone?.log_level || 2}`.trim() || "2")
       setDataZoneDebugProgramID((data?.data_zone_debug_mode?.program_id || "").trim())
       const nextDraft = buildMemberRoleDraft(data)
       if (options.preserveMemberDraft) {
@@ -515,6 +522,32 @@ export default function OrganizationSettings() {
       showNotice("wecom", normalizeErrorMessage(error), "error")
     } finally {
       setIsSettingDataZoneCallback(false)
+    }
+  }
+
+  const configureDataZoneProgram = async () => {
+    const programID = dataZoneCallbackProgramID.trim()
+    const syncMsgAbilityID = dataZoneSyncMsgAbilityID.trim() || "sync_msg"
+    const callbackFetchAbilityID = dataZoneCallbackFetchAbilityID.trim() || "do_async_job"
+    const logLevel = Number.parseInt(dataZoneLogLevel.trim() || "2", 10)
+    if (!programID) {
+      showNotice("wecom", "请输入专区程序 program_id", "warning")
+      return
+    }
+    try {
+      setIsConfiguringDataZoneProgram(true)
+      const message = await executeOrganizationSettingsCommand("configure_data_zone_program", JSON.stringify({
+        program_id: programID,
+        sync_msg_ability_id: syncMsgAbilityID,
+        callback_fetch_ability_id: callbackFetchAbilityID,
+        log_level: Number.isFinite(logLevel) ? logLevel : 2,
+      }))
+      showNotice("wecom", message || "已保存数据专区程序能力配置", "success")
+      await loadView()
+    } catch (error) {
+      showNotice("wecom", normalizeErrorMessage(error), "error")
+    } finally {
+      setIsConfiguringDataZoneProgram(false)
     }
   }
 
@@ -1316,6 +1349,60 @@ export default function OrganizationSettings() {
                       <div className="text-[11px] text-gray-500">
                         回调设置时间：{formatUnix(dataZone?.receive_callback_set_at)}
                       </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3 md:items-end">
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-gray-900">sync_msg ability_id</label>
+                        <Input
+                          value={dataZoneSyncMsgAbilityID}
+                          onChange={(event) => setDataZoneSyncMsgAbilityID(event.target.value)}
+                          placeholder="sync_msg"
+                          className="font-mono"
+                          disabled={isConfiguringDataZoneProgram}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-gray-900">回调读取 ability_id</label>
+                        <Input
+                          value={dataZoneCallbackFetchAbilityID}
+                          onChange={(event) => setDataZoneCallbackFetchAbilityID(event.target.value)}
+                          placeholder="do_async_job"
+                          className="font-mono"
+                          disabled={isConfiguringDataZoneProgram}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-bold text-gray-900">日志级别</label>
+                        <select
+                          value={dataZoneLogLevel}
+                          onChange={(event) => setDataZoneLogLevel(event.target.value)}
+                          className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          disabled={isConfiguringDataZoneProgram}
+                        >
+                          <option value="1">ERR</option>
+                          <option value="2">INFO</option>
+                          <option value="3">DBG</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      <div className="text-[11px] text-gray-500">
+                        当前能力：sync_msg = {(dataZone?.sync_msg_ability_id || "sync_msg").trim() || "sync_msg"}
+                        <span className="mx-2 text-gray-300">|</span>
+                        回调读取 = {(dataZone?.callback_fetch_ability_id || "do_async_job").trim() || "do_async_job"}
+                        <span className="mx-2 text-gray-300">|</span>
+                        日志级别：{Number(dataZone?.log_level || 2) === 1 ? "ERR" : Number(dataZone?.log_level || 2) === 3 ? "DBG" : "INFO"}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-10 px-4 font-semibold"
+                        onClick={() => void configureDataZoneProgram()}
+                        disabled={isConfiguringDataZoneProgram || !dataZoneCallbackProgramID.trim()}
+                      >
+                        {isConfiguringDataZoneProgram ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+                        保存程序能力配置
+                      </Button>
                     </div>
                   </div>
                 </CardContent>
