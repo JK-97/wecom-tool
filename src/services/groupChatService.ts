@@ -28,6 +28,7 @@ export type GroupOperationRow = {
   needs_attention?: boolean
   last_synced_at?: string
   notice_preview?: string
+  has_chatdata?: boolean
 }
 
 export type GroupOperationListPage = {
@@ -44,6 +45,7 @@ export type GroupOperationListPage = {
     query?: string
     owner_userid?: string
     status?: string
+    chatdata_sync?: string
   }
 }
 
@@ -104,6 +106,7 @@ export async function getGroupOperationListPage(params?: {
   query?: string
   owner_userid?: string
   status?: string
+  chatdata_sync?: string
   page?: number
   page_size?: number
 }): Promise<GroupOperationListPage | null> {
@@ -111,6 +114,7 @@ export async function getGroupOperationListPage(params?: {
   if (params?.query) search.set("query", params.query)
   if (params?.owner_userid) search.set("owner_userid", params.owner_userid)
   if (params?.status) search.set("status", params.status)
+  if (params?.chatdata_sync) search.set("chatdata_sync", params.chatdata_sync)
   if (params?.page && params.page > 0) search.set("page", String(params.page))
   if (params?.page_size && params.page_size > 0) search.set("page_size", String(params.page_size))
   const suffix = search.toString()

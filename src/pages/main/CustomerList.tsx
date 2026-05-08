@@ -51,7 +51,7 @@ function formatDateTime(value?: string): string {
 
 function readInitialFilters() {
   if (typeof window === "undefined") {
-    return { tab: "all" as CustomerTab, query: "", stage: "", tag: "", owner: "", page: 1, pageSize: DEFAULT_PAGE_SIZE }
+    return { tab: "all" as CustomerTab, query: "", stage: "", tag: "", owner: "", chatDataSync: "", page: 1, pageSize: DEFAULT_PAGE_SIZE }
   }
   const search = new URLSearchParams(window.location.search)
   const tab = (search.get("tab") || "all").trim()
@@ -63,6 +63,7 @@ function readInitialFilters() {
     stage: (search.get("stage") || "").trim(),
     tag: (search.get("tag") || "").trim(),
     owner: (search.get("owner_userid") || "").trim(),
+    chatDataSync: (search.get("chatdata_sync") || "").trim(),
     page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
     pageSize: PAGE_SIZE_OPTIONS.includes(pageSize) ? pageSize : DEFAULT_PAGE_SIZE,
   }
@@ -74,6 +75,7 @@ function replaceURL(input: {
   stage: string
   tag: string
   owner: string
+  chatDataSync: string
   page: number
   pageSize: number
 }) {
@@ -84,6 +86,7 @@ function replaceURL(input: {
   if (input.stage.trim()) search.set("stage", input.stage.trim())
   if (input.tag.trim()) search.set("tag", input.tag.trim())
   if (input.owner.trim()) search.set("owner_userid", input.owner.trim())
+  if (input.chatDataSync.trim()) search.set("chatdata_sync", input.chatDataSync.trim())
   if (input.page > 1) search.set("page", String(input.page))
   if (input.pageSize !== DEFAULT_PAGE_SIZE) search.set("page_size", String(input.pageSize))
   const nextURL = `${window.location.pathname}${search.toString() ? `?${search.toString()}` : ""}${window.location.hash}`
@@ -157,6 +160,7 @@ export default function CustomerList() {
   const [stage, setStage] = useState(initial.stage)
   const [tag, setTag] = useState(initial.tag)
   const [owner, setOwner] = useState(initial.owner)
+  const [chatDataSync, setChatDataSync] = useState(initial.chatDataSync)
   const [page, setPage] = useState(initial.page)
   const [pageSize, setPageSize] = useState(initial.pageSize)
   const [selectedIDs, setSelectedIDs] = useState<string[]>([])
@@ -178,8 +182,8 @@ export default function CustomerList() {
   }, [queryInput])
 
   useEffect(() => {
-    replaceURL({ tab: activeTab, query, stage, tag, owner, page, pageSize })
-  }, [activeTab, owner, page, pageSize, query, stage, tag])
+    replaceURL({ tab: activeTab, query, stage, tag, owner, chatDataSync, page, pageSize })
+  }, [activeTab, chatDataSync, owner, page, pageSize, query, stage, tag])
 
   const loadPage = useCallback(async () => {
     try {
@@ -191,6 +195,7 @@ export default function CustomerList() {
           stage,
           tag,
           owner_userid: owner,
+          chatdata_sync: chatDataSync,
           page,
           page_size: pageSize,
         }),
@@ -207,7 +212,7 @@ export default function CustomerList() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeTab, owner, page, pageSize, query, showFeedback, stage, tag])
+  }, [activeTab, chatDataSync, owner, page, pageSize, query, showFeedback, stage, tag])
 
   useEffect(() => {
     void loadPage()
@@ -248,7 +253,7 @@ export default function CustomerList() {
   const endIndex = total === 0 ? 0 : Math.min(total, (currentPage - 1) * pageSize + rows.length)
   const allVisibleChecked =
     rows.length > 0 && rows.every((row) => selectedIDs.includes((row.external_userid || "").trim()))
-  const hasActiveFilters = !!query.trim() || !!stage.trim() || !!tag.trim() || !!owner.trim()
+  const hasActiveFilters = !!query.trim() || !!stage.trim() || !!tag.trim() || !!owner.trim() || !!chatDataSync.trim()
   const pageItems = buildPageItems(currentPage, totalPages)
 
   const resetFilters = () => {
@@ -257,6 +262,7 @@ export default function CustomerList() {
     setStage("")
     setTag("")
     setOwner("")
+    setChatDataSync("")
     setPage(1)
   }
 
@@ -414,6 +420,18 @@ export default function CustomerList() {
                 {displayOptionLabel(option)}
               </option>
             ))}
+          </select>
+          <select
+            value={chatDataSync}
+            onChange={(event) => {
+              setChatDataSync(event.target.value)
+              setPage(1)
+            }}
+            className="h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">聊天回显</option>
+            <option value="synced">已同步聊天内容</option>
+            <option value="unsynced">未同步聊天内容</option>
           </select>
           <div className="ml-auto flex items-center gap-2">
             {hasActiveFilters ? (
@@ -595,9 +613,22 @@ export default function CustomerList() {
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap gap-1.5">
                         {rowTags.length === 0 ? (
-                          <span className="text-xs text-gray-400">暂无标签</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {row.has_chatdata ? (
+                              <Badge variant="secondary" className="border-transparent bg-emerald-50 px-1.5 py-0 text-[10px] font-medium text-emerald-700">
+                                已同步聊天内容
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-gray-400">暂无标签</span>
+                            )}
+                          </div>
                         ) : (
                           <>
+                            {row.has_chatdata ? (
+                              <Badge variant="secondary" className="border-transparent bg-emerald-50 px-1.5 py-0 text-[10px] font-medium text-emerald-700">
+                                已同步聊天内容
+                              </Badge>
+                            ) : null}
                             {rowTags.slice(0, 2).map((item) => (
                               <Badge key={item} variant="secondary" className="border-transparent bg-gray-100 px-1.5 py-0 text-[10px] font-medium text-gray-600">
                                 {item}

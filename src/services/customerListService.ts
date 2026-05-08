@@ -25,6 +25,7 @@ export type CustomerListRow = {
   owner_userid?: string
   owner_name?: string
   owner_avatar?: string
+  has_chatdata?: boolean
 }
 
 export type CustomerListViewModel = {
@@ -50,6 +51,7 @@ export type CustomerListViewModel = {
     stage?: string
     tag?: string
     owner_userid?: string
+    chatdata_sync?: string
   }
 }
 
@@ -66,6 +68,7 @@ export async function getCustomerListView(params?: {
   stage?: string
   tag?: string
   owner_userid?: string
+  chatdata_sync?: string
   page?: number
   page_size?: number
 }): Promise<CustomerListViewModel | null> {
@@ -75,6 +78,7 @@ export async function getCustomerListView(params?: {
   if (params?.stage) search.set("stage", params.stage)
   if (params?.tag) search.set("tag", params.tag)
   if (params?.owner_userid) search.set("owner_userid", params.owner_userid)
+  if (params?.chatdata_sync) search.set("chatdata_sync", params.chatdata_sync)
   if (params?.page && params.page > 0) search.set("page", String(params.page))
   if (params?.page_size && params.page_size > 0) search.set("page_size", String(params.page_size))
   const suffix = search.toString()

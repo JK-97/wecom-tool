@@ -68,6 +68,7 @@ function replaceSearchParams(
     query: string
     owner: string
     status: string
+    chatDataSync: string
     page: number
     pageSize: number
   },
@@ -77,6 +78,7 @@ function replaceSearchParams(
   if (input.query.trim()) next.set("query", input.query.trim())
   if (input.owner.trim()) next.set("owner_userid", input.owner.trim())
   if (input.status.trim()) next.set("status", input.status.trim())
+  if (input.chatDataSync.trim()) next.set("chatdata_sync", input.chatDataSync.trim())
   if (input.page > 1) next.set("page", String(input.page))
   if (input.pageSize !== DEFAULT_PAGE_SIZE) next.set("page_size", String(input.pageSize))
   setSearchParams(next, { replace: true })
@@ -111,6 +113,7 @@ function rowStageTone(row: GroupOperationRow): string {
 
 function buildRowTags(row: GroupOperationRow): string[] {
   const tags: string[] = []
+  if (row.has_chatdata) tags.push("已同步聊天内容")
   if (row.needs_attention) tags.push("待运营处理")
   if (Number(row.admin_count || 0) > 0) tags.push("已配置管理员")
   if ((row.last_synced_at || "").trim()) tags.push("资料已同步")
@@ -157,6 +160,7 @@ export default function GroupOperations() {
   const [query, setQuery] = useState((searchParams.get("query") || "").trim())
   const [owner, setOwner] = useState((searchParams.get("owner_userid") || "").trim())
   const [status, setStatus] = useState((searchParams.get("status") || "").trim())
+  const [chatDataSync, setChatDataSync] = useState((searchParams.get("chatdata_sync") || "").trim())
   const [page, setPage] = useState(readPositive(searchParams.get("page"), 1))
   const [pageSize, setPageSize] = useState(() => {
     const parsed = readPositive(searchParams.get("page_size"), DEFAULT_PAGE_SIZE)
@@ -175,14 +179,14 @@ export default function GroupOperations() {
   }, [queryInput])
 
   useEffect(() => {
-    replaceSearchParams(setSearchParams, { tab: activeTab, query, owner, status, page, pageSize })
-  }, [activeTab, owner, page, pageSize, query, setSearchParams, status])
+    replaceSearchParams(setSearchParams, { tab: activeTab, query, owner, status, chatDataSync, page, pageSize })
+  }, [activeTab, chatDataSync, owner, page, pageSize, query, setSearchParams, status])
 
   const loadPage = useCallback(async () => {
     try {
       setIsLoading(true)
       const [groups, sync] = await Promise.all([
-        getGroupOperationListPage({ query, owner_userid: owner, status, page, page_size: pageSize }),
+        getGroupOperationListPage({ query, owner_userid: owner, status, chatdata_sync: chatDataSync, page, page_size: pageSize }),
         getCRMSyncOverview(),
       ])
       setPageData(groups)
@@ -194,7 +198,7 @@ export default function GroupOperations() {
     } finally {
       setIsLoading(false)
     }
-  }, [owner, page, pageSize, query, showFeedback, status])
+  }, [chatDataSync, owner, page, pageSize, query, showFeedback, status])
 
   useEffect(() => {
     void loadPage()
@@ -236,7 +240,7 @@ export default function GroupOperations() {
   const totalPages = Math.max(1, Number(pageData?.pagination?.total_pages || 1))
   const startIndex = activeTab === "all" && tabTotal > 0 ? (currentPage - 1) * pageSize + 1 : tabbedRows.length > 0 ? 1 : 0
   const endIndex = activeTab === "all" && tabTotal > 0 ? Math.min(tabTotal, (currentPage - 1) * pageSize + rows.length) : tabbedRows.length
-  const hasActiveFilters = !!query.trim() || !!owner.trim() || !!status.trim()
+  const hasActiveFilters = !!query.trim() || !!owner.trim() || !!status.trim() || !!chatDataSync.trim()
   const pageItems = buildPageItems(currentPage, totalPages)
 
   const resetFilters = () => {
@@ -244,6 +248,7 @@ export default function GroupOperations() {
     setQuery("")
     setOwner("")
     setStatus("")
+    setChatDataSync("")
     setActiveTab("all")
     setPage(1)
   }
@@ -326,6 +331,18 @@ export default function GroupOperations() {
                 {(option.label || "").trim() || (option.value || "").trim() || "-"}
               </option>
             ))}
+          </select>
+          <select
+            value={chatDataSync}
+            onChange={(event) => {
+              setChatDataSync(event.target.value)
+              setPage(1)
+            }}
+            className="h-9 rounded-md border border-gray-200 bg-white px-3 py-1 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">聊天回显</option>
+            <option value="synced">已同步聊天内容</option>
+            <option value="unsynced">未同步聊天内容</option>
           </select>
           <div className="ml-auto flex items-center gap-2">
             {hasActiveFilters ? (
@@ -451,7 +468,13 @@ export default function GroupOperations() {
                           <Badge
                             key={tag}
                             variant="secondary"
-                            className={`border-transparent px-1.5 py-0 text-[10px] font-medium ${tag.includes("待") ? "bg-orange-50 text-orange-700" : "bg-gray-100 text-gray-600"}`}
+                            className={`border-transparent px-1.5 py-0 text-[10px] font-medium ${
+                              tag.includes("待")
+                                ? "bg-orange-50 text-orange-700"
+                                : tag.includes("聊天")
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-gray-100 text-gray-600"
+                            }`}
                           >
                             {tag}
                           </Badge>

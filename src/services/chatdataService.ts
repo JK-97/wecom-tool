@@ -51,6 +51,7 @@ export type ChatDataPanelView = {
   sync_mode?: string
   sync_reason?: string
   recovery_blocking?: boolean
+  last_sync_time?: string
 }
 
 export async function getChatDataPanel(params: {

@@ -124,14 +124,6 @@ export default function Customer360() {
     surface: "customer_360",
   })
 
-  useEffect(() => {
-    const capability = (chatdata.panel?.capability_status || "").trim()
-    const initState = (chatdata.panel?.init_state || "").trim()
-    if (capability === "ready" && initState === "not_started" && !chatdata.panel?.has_cursor) {
-      void chatdata.bootstrap("detail_opened", true)
-    }
-  }, [chatdata.panel?.capability_status, chatdata.panel?.has_cursor, chatdata.panel?.init_state])
-
   const handleSaveProfile = async () => {
     if (!externalUserID) return
     try {
