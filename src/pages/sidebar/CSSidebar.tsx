@@ -1936,7 +1936,7 @@ export default function CSSidebar() {
       : "仅在人工接待状态下显示建议回复。";
   const hasStableToolbarContext = Boolean(
     (bootstrap?.open_kfid || "").trim() &&
-    (bootstrap?.external_userid || "").trim(),
+      (bootstrap?.external_userid || "").trim(),
   );
   const canOpenDebugView =
     !isResolvingContext &&

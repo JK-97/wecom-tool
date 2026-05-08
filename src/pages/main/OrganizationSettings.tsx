@@ -8,7 +8,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs"
 import {
   Settings, Users, Shield, CheckCircle2, RefreshCw,
   Plus, Globe, MessageSquare, User, ShieldAlert,
-  AlertTriangle, Zap, Info, ExternalLink, ChevronRight, Loader2,
+  AlertTriangle, Zap, ExternalLink, Loader2,
   Search, Trash2, KeyRound, Webhook,
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
@@ -246,9 +246,12 @@ export default function OrganizationSettings() {
   const [createRoleError, setCreateRoleError] = useState("")
   const [isCreatingRole, setIsCreatingRole] = useState(false)
   const [isSyncingOrg, setIsSyncingOrg] = useState(false)
-  const [updatingDebugKey, setUpdatingDebugKey] = useState("")
-  const [isResettingDebug, setIsResettingDebug] = useState(false)
   const [isSettingDataZoneKey, setIsSettingDataZoneKey] = useState(false)
+  const [updatingDebugKey, setUpdatingDebugKey] = useState("")
+  const [isOpeningDataZoneDebugMode, setIsOpeningDataZoneDebugMode] = useState(false)
+  const [isClosingDataZoneDebugMode, setIsClosingDataZoneDebugMode] = useState(false)
+  const [dataZoneDebugProgramID, setDataZoneDebugProgramID] = useState("")
+  const [dataZoneDebugToken, setDataZoneDebugToken] = useState("")
 
   const showNotice = (_scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
     const text = (message || "").trim()
@@ -289,6 +292,12 @@ export default function OrganizationSettings() {
     if (status === "failed") return { label: "配置失败", tone: "red" }
     if (status === "rotation_required") return { label: "需轮换", tone: "orange" }
     return { label: "未配置", tone: "red" }
+  }
+
+  const resolveDataZoneDebugModeStatus = (value?: number): { label: string; tone: "green" | "orange" | "gray" } => {
+    if (value === 2) return { label: "已开启", tone: "green" }
+    if (value === 1) return { label: "已关闭", tone: "gray" }
+    return { label: "待检查", tone: "orange" }
   }
 
   const dataZoneBadgeClass = (tone: "green" | "orange" | "red" | "gray"): string => {
@@ -384,6 +393,7 @@ export default function OrganizationSettings() {
       const data = await getOrganizationSettingsView()
       setView(data || null)
       setDataZoneCallbackProgramID((data?.data_zone?.receive_callback_program_id || "").trim())
+      setDataZoneDebugProgramID((data?.data_zone_debug_mode?.program_id || "").trim())
       const nextDraft = buildMemberRoleDraft(data)
       if (options.preserveMemberDraft) {
         setMemberRoleDraft((prev) => {
@@ -508,31 +518,64 @@ export default function OrganizationSettings() {
     }
   }
 
-  const updateDebugSwitch = async (key: string, enabled: boolean) => {
-    try {
-      setUpdatingDebugKey(key)
-      const payload = JSON.stringify({ key, enabled })
-      const message = await executeOrganizationSettingsCommand("update_debug_switch", payload)
-      showNotice(key === "enable_toolbar_debug_entry" ? "toolbar" : "debug", message || "调试开关已更新", "success")
-      await loadView()
-    } catch (error) {
-      showNotice(key === "enable_toolbar_debug_entry" ? "toolbar" : "debug", normalizeErrorMessage(error), "error")
-    } finally {
-      setUpdatingDebugKey("")
+  const openDataZoneDebugMode = async () => {
+    const programID = dataZoneDebugProgramID.trim()
+    const debugToken = dataZoneDebugToken.trim()
+    if (!programID) {
+      showNotice("debug", "请输入数据与智能专区 program_id", "warning")
+      return
     }
-  }
-
-  const resetDebugSwitches = async () => {
-    if (!window.confirm("确定要重置所有调试项吗？该操作会写入后端并立即生效。")) return
+    if (!debugToken) {
+      showNotice("debug", "请输入 debug_token", "warning")
+      return
+    }
     try {
-      setIsResettingDebug(true)
-      const message = await executeOrganizationSettingsCommand("reset_debug_switches")
-      showNotice("debug", message || "调试开关已重置", "success")
+      setIsOpeningDataZoneDebugMode(true)
+      const message = await executeOrganizationSettingsCommand("open_data_zone_debug_mode", JSON.stringify({
+        program_id: programID,
+        debug_token: debugToken,
+      }))
+      setDataZoneDebugToken("")
+      showNotice("debug", message || "已开启数据专区调试模式", "success")
       await loadView()
     } catch (error) {
       showNotice("debug", normalizeErrorMessage(error), "error")
     } finally {
-      setIsResettingDebug(false)
+      setIsOpeningDataZoneDebugMode(false)
+    }
+  }
+
+  const closeDataZoneDebugMode = async () => {
+    const programID = dataZoneDebugProgramID.trim() || (view?.data_zone_debug_mode?.program_id || "").trim()
+    if (!programID) {
+      showNotice("debug", "缺少 program_id，无法关闭数据专区调试模式", "warning")
+      return
+    }
+    try {
+      setIsClosingDataZoneDebugMode(true)
+      const message = await executeOrganizationSettingsCommand("close_data_zone_debug_mode", JSON.stringify({
+        program_id: programID,
+      }))
+      setDataZoneDebugToken("")
+      showNotice("debug", message || "已关闭数据专区调试模式", "success")
+      await loadView()
+    } catch (error) {
+      showNotice("debug", normalizeErrorMessage(error), "error")
+    } finally {
+      setIsClosingDataZoneDebugMode(false)
+    }
+  }
+
+  const updateDebugSwitch = async (key: string, enabled: boolean) => {
+    try {
+      setUpdatingDebugKey(key)
+      const message = await executeOrganizationSettingsCommand("update_debug_switch", JSON.stringify({ key, enabled }))
+      showNotice("debug", message || "内部调试入口已更新", "success")
+      await loadView()
+    } catch (error) {
+      showNotice("debug", normalizeErrorMessage(error), "error")
+    } finally {
+      setUpdatingDebugKey("")
     }
   }
 
@@ -967,6 +1010,12 @@ export default function OrganizationSettings() {
         return { label: "不可用", className: "bg-orange-50 text-orange-700 border-orange-200" }
     }
   }
+  const dataZoneDebugMode = view?.data_zone_debug_mode
+  const dataZoneDebugStatus = resolveDataZoneDebugModeStatus(dataZoneDebugMode?.debug_mode_status)
+  const isDataZoneDebugLocked = Boolean(dataZoneDebugMode?.enabled)
+  const dataZoneDebugTokenPlaceholder = isDataZoneDebugLocked
+    ? "********（已提交，关闭后可修改）"
+    : "输入企业微信下发的 debug_token"
   const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
   const memberRoleOptions = (() => {
     const roles = view?.roles || []
@@ -1753,31 +1802,6 @@ export default function OrganizationSettings() {
                 })}
               </div>
 
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-6 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-blue-600" /> 工具栏调试入口
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between rounded-xl border border-gray-100 bg-white p-4">
-                    <div className="space-y-1">
-                      <div className="text-xs font-bold text-gray-900">在工具栏开启调试窗入口</div>
-                      <div className="text-[10px] text-gray-500">
-                        开启后会在工具栏页面显示调试入口（用于客户端联调），关闭后隐藏。
-                      </div>
-                    </div>
-                    <Switch
-                      name="enable_toolbar_debug_entry"
-                      checked={Boolean(toolbarDebugSwitch?.enabled)}
-                      disabled={updatingDebugKey === "enable_toolbar_debug_entry"}
-                      onCheckedChange={(checked) => {
-                        void updateDebugSwitch("enable_toolbar_debug_entry", Boolean(checked))
-                      }}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           </TabsContent>
 
@@ -1886,84 +1910,143 @@ export default function OrganizationSettings() {
           </TabsContent>
 
           <TabsContent value="debug" className="mt-0">
-            <div className="max-w-4xl space-y-8">
-              <div className="p-5 bg-orange-50 border border-orange-100 rounded-xl flex items-start gap-4">
-                <AlertTriangle className="w-6 h-6 text-orange-500 shrink-0 mt-0.5" />
-                <div>
-                  <div className="text-sm font-bold text-orange-900">调试模式说明</div>
-                  <p className="text-xs text-orange-700 mt-1 leading-relaxed">
-                    调试开关属于平台运行时配置，所有开关变更都会写入后端并持久化。
-                  </p>
+            <div className="max-w-4xl space-y-6">
+              <div className="rounded-xl border border-orange-100 bg-orange-50 p-5">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-orange-500" />
+                  <div className="space-y-1">
+                    <div className="text-sm font-bold text-orange-900">数据与智能专区调试模式</div>
+                    <p className="text-xs leading-relaxed text-orange-700">
+                      按企业微信官方专区调试链路开启。需要填写 `program_id` 和 `debug_token`；开启成功后会展示当前企业 `access_token`，供专区程序本地联调用。
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-6">
-                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-blue-600" /> 实验室功能 (Lab Features)
-                  </h4>
-                  <div className="space-y-4">
-                    {(view?.debug_switches || []).map((item) => (
-                      <div key={(item.key || item.label || "").trim()} className="flex items-start justify-between p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
-                        <div className="space-y-1">
-                          <div className="text-xs font-bold text-gray-900">{(item.label || item.key || "未命名开关").trim()}</div>
-                          <div className="text-[10px] text-gray-500">{(item.description || "-").trim()}</div>
-                        </div>
-                        <Switch name={`debug-switch-${(item.key || "").trim()}`} checked={Boolean(item.enabled)} onCheckedChange={(checked) => {
-                          const key = (item.key || "").trim()
-                          if (!key) return
-                          void updateDebugSwitch(key, Boolean(checked))
-                        }} disabled={updatingDebugKey === (item.key || "").trim()} />
-                      </div>
-                    ))}
+              <Card className="border-gray-200 shadow-sm">
+                <CardHeader className="border-b border-gray-50 p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                      <Zap className="h-4 w-4 text-blue-600" /> 调试与开发
+                    </CardTitle>
+                    <Badge className={`${dataZoneBadgeClass(dataZoneDebugStatus.tone)} px-2.5 py-1 text-[10px] font-bold`}>
+                      {dataZoneDebugStatus.label}
+                    </Badge>
                   </div>
-                </div>
-
-                <div className="space-y-6">
-                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                    <Info className="w-4 h-4 text-blue-600" /> 联调辅助与 FAQ
-                  </h4>
-                  <div className="bg-gray-50 rounded-xl border border-gray-100 p-5 space-y-5">
+                </CardHeader>
+                <CardContent className="space-y-5 p-6">
+                  <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <div className="text-xs font-bold text-gray-800">当前环境标识</div>
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-blue-100 text-blue-700 border-none text-[10px]">{((integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</Badge>
-                        <span className="text-[10px] text-gray-400 font-mono">last-check: {formatDateTime((integration?.last_checked_at || "").trim())}</span>
-                      </div>
+                      <div className="text-xs font-bold text-gray-900">专区程序 `program_id`</div>
+                      <Input
+                        value={dataZoneDebugProgramID}
+                        onChange={(event) => setDataZoneDebugProgramID(event.target.value)}
+                        placeholder="输入数据与智能专区 program_id"
+                        disabled={isDataZoneDebugLocked}
+                      />
                     </div>
-                    <div className="space-y-3">
-                      <div className="text-xs font-bold text-gray-800">快速联调入口</div>
-                      <div className="space-y-2">
-                        <a href="/sidebar/kf" target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md border border-gray-200 bg-white px-3 text-[10px] font-bold text-gray-700 hover:bg-gray-100">
-                          打开客服工具栏入口 <ExternalLink className="w-3 h-3 ml-1.5" />
-                        </a>
-                        <div className="rounded-md border border-gray-100 bg-white px-3 py-2 text-[10px] leading-relaxed text-gray-500">
-                          JSSDK 日志请在浏览器开发者工具控制台查看，页面内不再用提示条模拟入口。
-                        </div>
-                      </div>
-                    </div>
-                    <div className="pt-4 border-t border-gray-200 space-y-3">
-                      <div className="text-xs font-bold text-gray-800">常见问题</div>
-                      <ul className="space-y-2">
-                        {(view?.recommendations || []).slice(0, 3).map((item) => (
-                          <li key={item} className="text-[10px] text-blue-600 flex items-center gap-1.5">
-                            <ChevronRight className="w-3 h-3" /> {item}
-                          </li>
-                        ))}
-                      </ul>
+                    <div className="space-y-2">
+                      <div className="text-xs font-bold text-gray-900">调试 `debug_token`</div>
+                      <Input
+                        type="password"
+                        value={dataZoneDebugToken}
+                        onChange={(event) => setDataZoneDebugToken(event.target.value)}
+                        placeholder={dataZoneDebugTokenPlaceholder}
+                        disabled={isDataZoneDebugLocked}
+                        autoComplete="off"
+                      />
                     </div>
                   </div>
-                </div>
-              </div>
 
-              <div className="pt-6 border-t border-gray-100 flex justify-end gap-3">
-                <Button variant="outline" className="text-xs font-bold h-9" onClick={() => void resetDebugSwitches()} disabled={isResettingDebug}>
-                  {isResettingDebug ? "重置中..." : "重置所有调试项"}
-                </Button>
-                <Button className="bg-blue-600 hover:bg-blue-700 px-8 text-xs font-bold h-9 shadow-sm" onClick={() => void loadView()} disabled={isLoading}>
-                  {isLoading ? "刷新中..." : "刷新环境视图"}
-                </Button>
-              </div>
+                  <div className="grid gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 md:grid-cols-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">调试状态</div>
+                      <div className="mt-1 text-xs font-semibold text-gray-900">{dataZoneDebugStatus.label}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">最近检查</div>
+                      <div className="mt-1 text-xs font-semibold text-gray-900">{formatUnix(dataZoneDebugMode?.last_checked_at)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">环境模式</div>
+                      <div className="mt-1 text-xs font-semibold text-gray-900">{((integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</div>
+                    </div>
+                  </div>
+
+                  {dataZoneDebugMode?.last_check_error ? (
+                    <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-700">
+                      {dataZoneDebugMode.last_check_error}
+                    </div>
+                  ) : null}
+
+                  {dataZoneDebugMode?.enabled && dataZoneDebugMode?.corp_access_token ? (
+                    <div className="space-y-2 rounded-xl border border-green-100 bg-green-50 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs font-bold text-green-900">企业 `access_token`</div>
+                        <div className="text-[10px] text-green-700">
+                          过期时间：{formatUnix(dataZoneDebugMode.corp_access_token_expires_at)}
+                        </div>
+                      </div>
+                      <div className="break-all rounded-lg border border-green-100 bg-white px-3 py-2 font-mono text-[11px] text-gray-700">
+                        {dataZoneDebugMode.corp_access_token}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap justify-end gap-3 border-t border-gray-100 pt-4">
+                    <Button variant="outline" className="bg-white text-xs font-bold" onClick={() => void loadView()} disabled={isLoading}>
+                      {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                      刷新状态
+                    </Button>
+                    <div className="w-full text-[11px] leading-relaxed text-gray-500 md:order-first md:w-auto md:flex-1">
+                      刷新状态会重新检查调试模式，并拉取当前企业最新的 `access_token`。
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="bg-white text-xs font-bold"
+                      onClick={() => void closeDataZoneDebugMode()}
+                      disabled={isClosingDataZoneDebugMode || !dataZoneDebugProgramID.trim()}
+                    >
+                      {isClosingDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      关闭调试模式
+                    </Button>
+                    <Button
+                      className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700"
+                      onClick={() => void openDataZoneDebugMode()}
+                      disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked}
+                    >
+                      {isOpeningDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      开启调试模式
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-gray-200 shadow-sm">
+                <CardHeader className="border-b border-gray-50 p-6">
+                  <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                    <Settings className="h-4 w-4 text-gray-700" /> 内部诊断入口
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between gap-4 rounded-xl border border-gray-100 bg-white p-4">
+                    <div className="space-y-1">
+                      <div className="text-xs font-bold text-gray-900">{(toolbarDebugSwitch?.label || "显示工具栏调试入口").trim()}</div>
+                      <div className="text-[11px] leading-relaxed text-gray-500">
+                        {((toolbarDebugSwitch?.description || "").trim() || "仅控制平台内部工具栏诊断面板入口，不影响企业微信真实能力或数据专区官方调试模式。")}
+                      </div>
+                    </div>
+                    <Switch
+                      name="enable_toolbar_debug_entry"
+                      checked={Boolean(toolbarDebugSwitch?.enabled)}
+                      disabled={updatingDebugKey === "enable_toolbar_debug_entry"}
+                      onCheckedChange={(checked) => {
+                        void updateDebugSwitch("enable_toolbar_debug_entry", Boolean(checked))
+                      }}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
           </>

@@ -113,6 +113,15 @@ export type OrganizationSettingsView = {
     description?: string
     enabled?: boolean
   }>
+  data_zone_debug_mode?: {
+    program_id?: string
+    debug_mode_status?: number
+    enabled?: boolean
+    corp_access_token?: string
+    corp_access_token_expires_at?: number
+    last_checked_at?: number
+    last_check_error?: string
+  }
   integration_permissions?: Array<{
     code?: string
     path?: string
@@ -316,6 +325,19 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
       description: readString(row.description, row.Description),
       enabled: readBool(row.enabled, row.Enabled),
     })),
+    data_zone_debug_mode: (() => {
+      const row = asRecord(view.data_zone_debug_mode ?? view.DataZoneDebugMode)
+      if (!row) return undefined
+      return {
+        program_id: readString(row.program_id, row.ProgramID, row.ProgramId),
+        debug_mode_status: readNumber(row.debug_mode_status, row.DebugModeStatus),
+        enabled: readBool(row.enabled, row.Enabled),
+        corp_access_token: readString(row.corp_access_token, row.CorpAccessToken),
+        corp_access_token_expires_at: readNumber(row.corp_access_token_expires_at, row.CorpAccessTokenExpiresAt),
+        last_checked_at: readNumber(row.last_checked_at, row.LastCheckedAt),
+        last_check_error: readString(row.last_check_error, row.LastCheckError),
+      }
+    })(),
     integration_permissions: readArray(view.integration_permissions).map((row) => ({
       code: readString(row.code, row.Code),
       path: readString(row.path, row.Path),
