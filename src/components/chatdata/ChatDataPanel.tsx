@@ -1,5 +1,5 @@
 import { AlertCircle, Info, Loader2, RefreshCw } from "lucide-react"
-import { Avatar } from "@/components/ui/Avatar"
+import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/Button"
 import { cn } from "@/lib/utils"
 import { ChatDataMessageFrame } from "@/components/chatdata/ChatDataMessageFrame"
@@ -57,6 +57,33 @@ function senderDisplayName(panel: ChatDataPanelView | null, message: ChatDataMes
   return senderFallbackLabel(panel, message)
 }
 
+function senderIdentity(
+  panel: ChatDataPanelView | null,
+  message: ChatDataMessageSummary,
+  currentUserID: string,
+  currentOpenUserID: string,
+) {
+  const senderID = (message.sender_id || "").trim()
+  const external = isExternalSender(message)
+  const chatID = (message.chat_id || panel?.target_id || "").trim()
+  let openid = ""
+
+  if (senderID) {
+    if (external) {
+      openid = panel?.target_type === "chat_id" && chatID ? `${chatID}/${senderID}` : senderID
+    } else if (currentUserID && currentOpenUserID && senderID === currentUserID) {
+      openid = currentOpenUserID
+    }
+  }
+
+  return {
+    openid,
+    nameType: external ? "externalUserName" : "userName",
+    avatarType: external ? "externalUserAvatar" : "userAvatar",
+    fallbackName: senderDisplayName(panel, message),
+  } as const
+}
+
 function emptyReason(panel: ChatDataPanelView | null, error?: string): "not-synced" | "paused" {
   if (error) return "paused"
   if (panel?.recovery_blocking) return "paused"
@@ -79,12 +106,15 @@ export function ChatDataPanel(props: {
   onReload?: () => void
   onBootstrap?: () => void
 }) {
+  const auth = useAuth()
   const panel = props.panel
   const messages = orderedMessages(panel?.messages || [])
   const lastSyncTime = formatHeaderTime(panel?.last_sync_time)
   const statusIsHealthy = !props.error && !panel?.last_error && (panel?.capability_status || "").trim() === "ready"
   const needsRetryAction = Boolean(props.onBootstrap && panel?.can_retry_init && (props.error || panel?.last_error))
   const isPending = showPendingState(panel, props.loading, props.bootstrapping) && messages.length === 0
+  const currentUserID = (auth.user?.userid || "").trim()
+  const currentOpenUserID = (auth.user?.openUserID || "").trim()
 
   return (
     <div className="flex h-full min-h-[480px] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
@@ -162,7 +192,8 @@ export function ChatDataPanel(props: {
         ) : messages.length > 0 ? (
           <div className="space-y-6">
             {messages.map((item, index) => {
-              const label = senderDisplayName(panel, item)
+              const sender = senderIdentity(panel, item, currentUserID, currentOpenUserID)
+              const label = sender.fallbackName
               const external = isExternalSender(item)
               const prevTime = index > 0 ? formatUnixSeconds(messages[index - 1]?.send_time) : ""
               const nextTime = formatUnixSeconds(item.send_time)
@@ -177,23 +208,14 @@ export function ChatDataPanel(props: {
                   ) : null}
 
                   <div className={cn("flex gap-3", external ? "justify-start" : "justify-end")}>
-                    {external ? <Avatar fallback={label.slice(0, 1)} size="sm" /> : null}
-
-                    <div className={cn("flex max-w-[78%] flex-col gap-1", external ? "items-start" : "items-end")}>
-                      <span className={cn("text-[11px] text-gray-500", external ? "ml-1" : "mr-1")}>{label}</span>
-                      <div
-                        className={cn(
-                          "rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm",
-                          external
-                            ? "rounded-tl-sm border border-gray-100 bg-white text-gray-900"
-                            : "rounded-tr-sm border border-[#cce7f8] bg-[#dff3ff] text-gray-900"
-                        )}
-                      >
-                        <ChatDataMessageFrame message={item} />
-                      </div>
-                    </div>
-
-                    {external ? null : <Avatar fallback={label.slice(0, 1)} size="sm" />}
+                    <ChatDataMessageFrame
+                      message={item}
+                      tone={external ? "incoming" : "outgoing"}
+                      senderOpenID={sender.openid}
+                      senderNameType={sender.nameType}
+                      senderAvatarType={sender.avatarType}
+                      senderFallbackName={label}
+                    />
                   </div>
                 </div>
               )
