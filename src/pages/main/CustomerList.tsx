@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link } from "react-router-dom"
 import {
   ChevronLeft,
   ChevronRight,
-  Edit2,
   Filter,
   Loader2,
-  MessageSquare,
   Search,
   UserPlus,
 } from "lucide-react"
-import { Avatar } from "@/components/ui/Avatar"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
 import { Dialog } from "@/components/ui/Dialog"
@@ -19,6 +15,11 @@ import { Input } from "@/components/ui/Input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { CRMSyncStatusBanner } from "@/components/crm/CRMSyncStatusBanner"
 import { CRMSyncToolbarAction } from "@/components/crm/CRMSyncToolbarAction"
+import {
+  CustomerListOpenDataFrame,
+  type CustomerListOpenDataRow,
+} from "@/components/wecom/CustomerListOpenDataFrame"
+import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { normalizeErrorMessage } from "@/services/http"
 import {
@@ -97,22 +98,17 @@ function displayOptionLabel(option: CustomerListFilterOption): string {
   return ((option.label || "").trim() || (option.value || "").trim()) || "-"
 }
 
-function stageTone(stage?: string): string {
+function stageToneKind(stage?: string): CustomerListOpenDataRow["stageTone"] {
   switch ((stage || "").trim()) {
     case "已成交":
-      return "bg-green-50 text-green-700 border-green-200"
+      return "success"
     case "已报价待签":
-      return "bg-amber-50 text-amber-700 border-amber-200"
+      return "warning"
     case "流失":
-      return "bg-gray-100 text-gray-700 border-gray-200"
+      return "neutral"
     default:
-      return "bg-blue-50 text-blue-700 border-blue-100"
+      return "default"
   }
-}
-
-function sourceTone(label?: string): string {
-  if ((label || "").includes("升级")) return "bg-orange-50 text-orange-700"
-  return "bg-blue-50 text-blue-500"
 }
 
 function buildPageItems(currentPage: number, totalPages: number): Array<number | string> {
@@ -255,6 +251,37 @@ export default function CustomerList() {
     rows.length > 0 && rows.every((row) => selectedIDs.includes((row.external_userid || "").trim()))
   const hasActiveFilters = !!query.trim() || !!stage.trim() || !!tag.trim() || !!owner.trim() || !!chatDataSync.trim()
   const pageItems = buildPageItems(currentPage, totalPages)
+  const frameRows = useMemo<CustomerListOpenDataRow[]>(
+    () =>
+      rows.map((row) => {
+        const externalUserID = (row.external_userid || "").trim()
+        const previewName = (row.name || "").trim() || "未命名客户"
+        const previewMobile = (row.mobile_masked || "").trim() || externalUserID || "-"
+        const ownerName = (row.owner_name || row.owner_userid || "待分配").trim()
+        const ownerOpenID = (row.owner_open_userid || "").trim()
+        const hasChatdata = row.has_chatdata === true
+        const rawTags = (row.tags || []).map((item) => (item || "").trim()).filter(Boolean)
+        const rowTags = (rawTags.length === 0 && !hasChatdata ? ["暂无标签"] : rawTags).slice(0, 2)
+        return {
+          externalUserID,
+          customerName: previewName,
+          customerInitial: previewName.slice(0, 1) || "客",
+          mobileMasked: previewMobile,
+          sourceChannel: (row.source_channel || "").trim() || "微信客服",
+          stage: (row.stage || "").trim() || "意向沟通中",
+          stageTone: stageToneKind(row.stage),
+          tags: rowTags,
+          hasChatdata,
+          lastInteractionAt: formatDateTime(row.last_interaction_at),
+          lastInteractionLabel: previewLabel(row),
+          ownerOpenID,
+          ownerName,
+          ownerInitial: ownerName.slice(0, 1) || "人",
+          selected: selectedIDs.includes(externalUserID),
+        }
+      }),
+    [rows, selectedIDs],
+  )
 
   const resetFilters = () => {
     setQueryInput("")
@@ -476,209 +503,51 @@ export default function CustomerList() {
       ) : null}
 
       <div className="flex-1 overflow-auto bg-white">
-        <table className="w-full border-separate border-spacing-0 text-left text-sm text-gray-600">
-          <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50 text-[11px] uppercase tracking-wider text-gray-500">
-            <tr>
-              <th className="w-12 border-b border-gray-200 px-6 py-3 font-semibold">
-                <input
-                  type="checkbox"
-                  checked={allVisibleChecked}
-                  onChange={(event) => {
-                    if (event.target.checked) {
-                      const next = rows
-                        .map((row) => (row.external_userid || "").trim())
-                        .filter(Boolean)
-                      setSelectedIDs(next)
-                      return
-                    }
-                    setSelectedIDs([])
-                  }}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-              </th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">客户信息</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">来源渠道</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">当前阶段</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">核心标签</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">最新互动时间</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">负责人</th>
-              <th className="border-b border-gray-200 px-6 py-3 text-right font-semibold">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {isLoading && rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-6 py-16">
-                  <div className="flex items-center justify-center text-sm text-gray-500">
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    正在读取客户数据...
-                  </div>
-                </td>
-              </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-6 py-16">
-                  <EmptyState
-                    icon={UserPlus}
-                    title={hasActiveFilters ? "没有匹配的客户" : "当前还没有客户数据"}
-                    description={
-                      hasActiveFilters
-                        ? "请调整筛选条件后再试。"
-                        : "完成首次同步后，这里会展示客户信息、负责人和跟进状态。"
-                    }
-                  />
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => {
-                const externalUserID = (row.external_userid || "").trim()
-                const isChecked = selectedIDs.includes(externalUserID)
-                const rowTags = (row.tags || []).filter(Boolean)
-                const previewName = (row.name || "").trim() || "未命名客户"
-                const previewMobile = (row.mobile_masked || "").trim() || externalUserID || "-"
-                return (
-                  <tr key={externalUserID || previewName} className="group hover:bg-blue-50/40 transition-colors">
-                    <td className="px-6 py-4">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(event) => {
-                          if (!externalUserID) return
-                          setSelectedIDs((previous) => {
-                            if (event.target.checked) {
-                              return previous.includes(externalUserID) ? previous : [...previous, externalUserID]
-                            }
-                            return previous.filter((item) => item !== externalUserID)
-                          })
-                        }}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <Avatar
-                          src={(row.avatar || "").trim()}
-                          fallback={previewName.slice(0, 1)}
-                          size="sm"
-                          className="border border-gray-100"
-                        />
-                        <div className="relative flex flex-col group/name">
-                          <Link to={customerLink(externalUserID)} className="font-semibold text-gray-900 hover:text-blue-600 transition-colors">
-                            {previewName}
-                          </Link>
-                          <div className="font-mono text-[11px] text-gray-400">{previewMobile}</div>
-                          <div className="invisible absolute left-0 top-full z-[60] mt-2 w-64 rounded-lg border border-gray-200 bg-white p-4 shadow-xl opacity-0 transition-all group-hover/name:visible group-hover/name:opacity-100">
-                            <div className="mb-3 flex items-center gap-3 border-b border-gray-100 pb-3">
-                              <Avatar src={(row.avatar || "").trim()} fallback={previewName.slice(0, 1)} size="sm" />
-                              <div>
-                                <div className="font-medium text-gray-900">{previewName}</div>
-                                <div className="text-xs text-gray-500">{previewMobile}</div>
-                              </div>
-                            </div>
-                            <div className="space-y-2 text-sm text-gray-600">
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">当前阶段:</span>
-                                <span>{(row.stage || "").trim() || "意向沟通中"}</span>
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">客户来源:</span>
-                                <span>{(row.source_channel || "").trim() || "微信客服"}</span>
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">负责人:</span>
-                                <span>{(row.owner_name || row.owner_userid || "待分配").trim()}</span>
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">最新跟进:</span>
-                                <span>{formatDateTime(row.last_interaction_at)}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-1.5">
-                        <div className={`flex h-5 w-5 items-center justify-center rounded ${sourceTone(row.source_channel)}`}>
-                          <MessageSquare className="h-3 w-3" />
-                        </div>
-                        <span className="text-xs font-medium text-gray-700">{(row.source_channel || "").trim() || "微信客服"}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <Badge variant="outline" className={`font-medium text-[10px] px-2 py-0.5 ${stageTone(row.stage)}`}>
-                        {(row.stage || "").trim() || "意向沟通中"}
-                      </Badge>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-1.5">
-                        {rowTags.length === 0 ? (
-                          <div className="flex flex-wrap gap-1.5">
-                            {row.has_chatdata ? (
-                              <Badge variant="secondary" className="border-transparent bg-emerald-50 px-1.5 py-0 text-[10px] font-medium text-emerald-700">
-                                已同步聊天内容
-                              </Badge>
-                            ) : (
-                              <span className="text-xs text-gray-400">暂无标签</span>
-                            )}
-                          </div>
-                        ) : (
-                          <>
-                            {row.has_chatdata ? (
-                              <Badge variant="secondary" className="border-transparent bg-emerald-50 px-1.5 py-0 text-[10px] font-medium text-emerald-700">
-                                已同步聊天内容
-                              </Badge>
-                            ) : null}
-                            {rowTags.slice(0, 2).map((item) => (
-                              <Badge key={item} variant="secondary" className="border-transparent bg-gray-100 px-1.5 py-0 text-[10px] font-medium text-gray-600">
-                                {item}
-                              </Badge>
-                            ))}
-                            {rowTags.length > 2 ? (
-                              <Badge variant="secondary" className="border-transparent bg-blue-50 px-1.5 py-0 text-[10px] font-medium text-blue-600">
-                                +{rowTags.length - 2}
-                              </Badge>
-                            ) : null}
-                          </>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm font-medium text-gray-900">{formatDateTime(row.last_interaction_at)}</div>
-                      <div className="mt-0.5 flex items-center text-[11px] text-gray-400">
-                        <UserPlus className="mr-1 h-3 w-3" />
-                        {previewLabel(row)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <Avatar src={(row.owner_avatar || "").trim()} fallback={(row.owner_name || row.owner_userid || "待").trim().slice(0, 1)} size="xs" />
-                        <span className="text-sm text-gray-700">{(row.owner_name || row.owner_userid || "待分配").trim()}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1 opacity-0 transition-all group-hover:opacity-100">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 text-gray-400 hover:bg-blue-50 hover:text-blue-600"
-                          onClick={() => openEditDialog(row)}
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                        </Button>
-                        <Link to={customerLink(externalUserID)}>
-                          <Button variant="ghost" size="sm" className="px-2 text-xs font-semibold text-blue-600 hover:bg-blue-50">
-                            详情
-                          </Button>
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
+        {rows.length === 0 && !isLoading ? (
+          <div className="px-6 py-16">
+            <EmptyState
+              icon={UserPlus}
+              title={hasActiveFilters ? "没有匹配的客户" : "当前还没有客户数据"}
+              description={
+                hasActiveFilters
+                  ? "请调整筛选条件后再试。"
+                  : "完成首次同步后，这里会展示客户信息、负责人和跟进状态。"
+              }
+            />
+          </div>
+        ) : (
+          <CustomerListOpenDataFrame
+            rows={frameRows}
+            loading={isLoading}
+            allSelected={allVisibleChecked}
+            onToggleAll={() => {
+              if (allVisibleChecked) {
+                setSelectedIDs([])
+                return
+              }
+              setSelectedIDs(
+                rows
+                  .map((row) => (row.external_userid || "").trim())
+                  .filter(Boolean),
+              )
+            }}
+            onToggleRow={(externalUserID) => {
+              setSelectedIDs((previous) =>
+                previous.includes(externalUserID)
+                  ? previous.filter((item) => item !== externalUserID)
+                  : [...previous, externalUserID],
+              )
+            }}
+            onOpenEdit={(externalUserID) => {
+              const row = rows.find((item) => (item.external_userid || "").trim() === externalUserID)
+              if (!row) return
+              openEditDialog(row)
+            }}
+            onOpenDetail={(externalUserID) => {
+              window.location.assign(customerLink(externalUserID))
+            }}
+          />
+        )}
       </div>
 
       <div className="shrink-0 border-t border-gray-200 bg-white p-4">
@@ -759,9 +628,11 @@ export default function CustomerList() {
       >
         <div className="space-y-4">
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
-            <Avatar
-              src={(editingRow?.avatar || "").trim()}
-              fallback={((editingRow?.name || "").trim() || "客").slice(0, 1)}
+            <WecomOpenDataAvatar
+              openid={(editingRow?.external_userid || "").trim()}
+              type="externalUserAvatar"
+              fallback={(editingRow?.name || "").trim() || "客"}
+              fallbackSrc={(editingRow?.avatar || "").trim()}
               size="sm"
             />
             <div>

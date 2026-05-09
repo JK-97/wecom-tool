@@ -23,6 +23,7 @@ export type CustomerListRow = {
   last_interaction_at?: string
   last_interaction_label?: string
   owner_userid?: string
+  owner_open_userid?: string
   owner_name?: string
   owner_avatar?: string
   has_chatdata?: boolean

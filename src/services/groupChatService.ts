@@ -20,6 +20,7 @@ export type GroupOperationRow = {
   chat_id?: string
   name?: string
   owner_userid?: string
+  owner_open_userid?: string
   owner_name?: string
   member_count?: number
   admin_count?: number
@@ -53,6 +54,7 @@ export type CustomerGroupChat = {
   chat_id?: string
   name?: string
   owner_userid?: string
+  owner_open_userid?: string
   member_count?: number
   corp_id?: string
   updated_at?: string
@@ -66,6 +68,7 @@ export type CustomerGroupChat = {
 
 export type CustomerGroupChatMember = {
   userid?: string
+  open_userid?: string
   type?: number
   join_time?: number
   join_scene?: number
@@ -78,6 +81,7 @@ export type CustomerGroupChatMember = {
 
 export type CustomerGroupChatAdmin = {
   userid?: string
+  open_userid?: string
 }
 
 export type GroupOperationDetail = {

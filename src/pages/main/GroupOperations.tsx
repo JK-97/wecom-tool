@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link, useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router-dom"
 import {
   ChevronLeft,
   ChevronRight,
   Filter,
   Loader2,
-  MessageSquare,
   Search,
   Users,
 } from "lucide-react"
-import { Avatar } from "@/components/ui/Avatar"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
 import { EmptyState } from "@/components/ui/EmptyState"
@@ -17,6 +15,10 @@ import { Input } from "@/components/ui/Input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { CRMSyncStatusBanner } from "@/components/crm/CRMSyncStatusBanner"
 import { CRMSyncToolbarAction } from "@/components/crm/CRMSyncToolbarAction"
+import {
+  GroupOperationsListOpenDataFrame,
+  type GroupOperationsListOpenDataRow,
+} from "@/components/wecom/GroupOperationsListOpenDataFrame"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { normalizeErrorMessage } from "@/services/http"
 import {
@@ -105,12 +107,6 @@ function buildPageItems(currentPage: number, totalPages: number): Array<number |
   return [1, "ellipsis-left", currentPage - 1, currentPage, currentPage + 1, "ellipsis-right", totalPages]
 }
 
-function rowStageTone(row: GroupOperationRow): string {
-  if (row.needs_attention) return "bg-amber-50 text-amber-700 border-amber-200"
-  if ((row.status_tone || "").trim() === "success") return "bg-green-50 text-green-700 border-green-200"
-  return "bg-blue-50 text-blue-700 border-blue-100"
-}
-
 function buildRowTags(row: GroupOperationRow): string[] {
   const tags: string[] = []
   if (row.has_chatdata) tags.push("已同步聊天内容")
@@ -142,10 +138,6 @@ function paginationText(tab: GroupTab, startIndex: number, endIndex: number, tot
 function groupDetailLink(chatID?: string): string {
   const safeID = (chatID || "").trim()
   return safeID ? `/main/groups/${encodeURIComponent(safeID)}` : "/main/groups"
-}
-
-function buildAvatarFallback(value?: string, fallback = "群"): string {
-  return ((value || "").trim() || fallback).slice(0, 1)
 }
 
 export default function GroupOperations() {
@@ -242,6 +234,33 @@ export default function GroupOperations() {
   const endIndex = activeTab === "all" && tabTotal > 0 ? Math.min(tabTotal, (currentPage - 1) * pageSize + rows.length) : tabbedRows.length
   const hasActiveFilters = !!query.trim() || !!owner.trim() || !!status.trim() || !!chatDataSync.trim()
   const pageItems = buildPageItems(currentPage, totalPages)
+  const frameRows = useMemo<GroupOperationsListOpenDataRow[]>(
+    () =>
+      tabbedRows.map((row) => {
+        const chatID = (row.chat_id || "").trim()
+        const ownerOpenID = (row.owner_open_userid || "").trim()
+        const ownerName = (row.owner_name || row.owner_userid || "待分配").trim()
+        return {
+          chatID,
+          name: (row.name || "未命名客户群").trim(),
+          nameInitial: ((row.name || "群").trim() || "群").slice(0, 1),
+          ownerOpenID,
+          ownerName,
+          ownerInitial: (ownerName || "人").slice(0, 1),
+          memberCount: Number(row.member_count || 0),
+          statusLabel: (row.status_label || "").trim() || "状态正常",
+          statusTone: row.needs_attention
+            ? "warning"
+            : (row.status_tone || "").trim() === "success"
+              ? "success"
+              : "neutral",
+          tags: buildRowTags(row),
+          lastSyncedAt: formatDateTime(row.last_synced_at),
+          noticePreview: (row.notice_preview || "客户群资料更新").trim(),
+        }
+      }),
+    [tabbedRows],
+  )
 
   const resetFilters = () => {
     setQueryInput("")
@@ -357,158 +376,39 @@ export default function GroupOperations() {
       </div>
 
       <div className="flex-1 overflow-auto bg-white">
-        <table className="w-full border-separate border-spacing-0 text-left text-sm text-gray-600">
-          <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50 text-[11px] uppercase tracking-wider text-gray-500">
-            <tr>
-              <th className="w-12 border-b border-gray-200 px-6 py-3 font-semibold">
-                <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-              </th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">群聊信息</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">群人数</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">群状态</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">核心标签</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">最近更新时间</th>
-              <th className="border-b border-gray-200 px-6 py-3 font-semibold">群主</th>
-              <th className="border-b border-gray-200 px-6 py-3 text-right font-semibold">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {isLoading && rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-6 py-16">
-                  <div className="flex items-center justify-center text-sm text-gray-500">
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    正在读取群聊数据...
-                  </div>
-                </td>
-              </tr>
-            ) : tabbedRows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-6 py-16">
-                  <EmptyState
-                    icon={Users}
-                    title={hasActiveFilters || activeTab !== "all" ? "没有匹配的客户群" : "当前还没有客户群数据"}
-                    description={
-                      hasActiveFilters || activeTab !== "all"
-                        ? "请调整搜索条件后再试。"
-                        : "完成首次同步后，这里会展示群主、成员和风险状态。"
-                    }
-                  />
-                </td>
-              </tr>
-            ) : (
-              tabbedRows.map((row) => {
-                const chatID = (row.chat_id || "").trim()
-                const ownerName = (row.owner_name || row.owner_userid || "待分配").trim()
-                const tags = buildRowTags(row)
-                return (
-                  <tr key={chatID || row.name} className="group hover:bg-blue-50/40 transition-colors">
-                    <td className="px-6 py-4">
-                      <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="relative flex -space-x-2 group/name cursor-pointer">
-                          <Avatar fallback={buildAvatarFallback(row.name, "群")} size="sm" className="border-2 border-white" />
-                          <Avatar fallback={buildAvatarFallback(ownerName, "主")} size="sm" className="border-2 border-white" />
-                          <Avatar fallback="群" size="sm" className="border-2 border-white" />
-                        </div>
-                        <div className="relative flex flex-col group/name">
-                          <Link to={groupDetailLink(chatID)} className="font-semibold text-gray-900 hover:text-blue-600 transition-colors">
-                            {(row.name || "未命名客户群").trim()}
-                          </Link>
-                          <div className="font-mono text-[11px] text-gray-400">{chatID || "-"}</div>
-                          <div className="invisible absolute left-0 top-full z-[60] mt-2 w-64 rounded-lg border border-gray-200 bg-white p-4 shadow-xl opacity-0 transition-all group-hover/name:visible group-hover/name:opacity-100">
-                            <div className="mb-3 flex items-center gap-3 border-b border-gray-100 pb-3">
-                              <div className="flex -space-x-1 shrink-0">
-                                <Avatar fallback={buildAvatarFallback(row.name, "群")} size="sm" className="border-2 border-white" />
-                                <Avatar fallback={buildAvatarFallback(ownerName, "主")} size="sm" className="border-2 border-white" />
-                              </div>
-                              <div>
-                                <div className="font-medium text-gray-900">{(row.name || "未命名客户群").trim()}</div>
-                                <div className="text-xs text-gray-500">群 ID: {chatID || "-"}</div>
-                              </div>
-                            </div>
-                            <div className="space-y-2 text-sm text-gray-600">
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">当前状态:</span>
-                                <span>{(row.status_label || "").trim() || "状态正常"}</span>
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">群人数:</span>
-                                <span>{Number(row.member_count || 0)} 人</span>
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">群主:</span>
-                                <span>{ownerName}</span>
-                              </div>
-                              <div className="flex justify-between gap-3">
-                                <span className="text-gray-400">最近更新:</span>
-                                <span>{formatDateTime(row.last_synced_at)}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-1.5">
-                        <Users className="h-4 w-4 text-gray-400" />
-                        <span className="text-sm font-medium text-gray-700">{Number(row.member_count || 0)}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <Badge variant="outline" className={`font-medium text-[10px] px-2 py-0.5 ${rowStageTone(row)}`}>
-                        {(row.status_label || "").trim() || "状态正常"}
-                      </Badge>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-1.5">
-                        {tags.map((tag) => (
-                          <Badge
-                            key={tag}
-                            variant="secondary"
-                            className={`border-transparent px-1.5 py-0 text-[10px] font-medium ${
-                              tag.includes("待")
-                                ? "bg-orange-50 text-orange-700"
-                                : tag.includes("聊天")
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : "bg-gray-100 text-gray-600"
-                            }`}
-                          >
-                            {tag}
-                          </Badge>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm font-medium text-gray-900">{formatDateTime(row.last_synced_at)}</div>
-                      <div className="mt-0.5 flex items-center text-[11px] text-gray-400">
-                        <MessageSquare className="mr-1 h-3 w-3" />
-                        {(row.notice_preview || "客户群资料更新").trim()}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <Avatar fallback={buildAvatarFallback(ownerName, "主")} size="xs" />
-                        <span className="text-sm text-gray-700">{ownerName}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1 opacity-0 transition-all group-hover:opacity-100">
-                        <Link to={groupDetailLink(chatID)}>
-                          <Button variant="ghost" size="sm" className="px-2 text-xs font-semibold text-blue-600 hover:bg-blue-50">
-                            详情
-                          </Button>
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
+        <div className="sticky top-0 z-10 flex border-b border-gray-200 bg-gray-50 text-[11px] uppercase tracking-wider text-gray-500">
+          <div className="w-14 px-6 py-3 font-semibold">
+            <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+          </div>
+          <div className="flex-1 px-6 py-3 font-semibold">群聊信息</div>
+          <div className="w-[92px] px-3 py-3 font-semibold">群人数</div>
+          <div className="w-[110px] px-3 py-3 font-semibold">群状态</div>
+          <div className="w-[180px] px-3 py-3 font-semibold">核心标签</div>
+          <div className="w-[176px] px-3 py-3 font-semibold">最近更新时间</div>
+          <div className="w-[180px] px-3 py-3 font-semibold">群主</div>
+          <div className="w-[84px] px-6 py-3 text-right font-semibold">操作</div>
+        </div>
+        {tabbedRows.length === 0 && !isLoading ? (
+          <div className="px-6 py-16">
+            <EmptyState
+              icon={Users}
+              title={hasActiveFilters || activeTab !== "all" ? "没有匹配的客户群" : "当前还没有客户群数据"}
+              description={
+                hasActiveFilters || activeTab !== "all"
+                  ? "请调整搜索条件后再试。"
+                  : "完成首次同步后，这里会展示群主、成员和风险状态。"
+              }
+            />
+          </div>
+        ) : (
+          <GroupOperationsListOpenDataFrame
+            rows={frameRows}
+            loading={isLoading}
+            onOpenDetail={(chatID) => {
+              window.location.assign(groupDetailLink(chatID))
+            }}
+          />
+        )}
       </div>
 
       <div className="shrink-0 border-t border-gray-200 bg-white p-4">

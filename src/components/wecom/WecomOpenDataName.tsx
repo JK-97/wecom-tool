@@ -1,8 +1,12 @@
 import { createElement, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { bindOpenDataElement, ensureOpenDataReady, type OpenDataRuntime } from "@/services/openDataService"
 
+// 通讯录名称展示走页面级 ww-open-data 直绑。
+// userid 仅用于 fallback 展示；真正的 open-data 身份必须由后端直接返回 openid。
 type WecomOpenDataNameProps = {
-  userid: string
+  userid?: string
+  openid?: string
+  type?: "userName" | "externalUserName" | "chatName"
   corpId?: string
   fallback?: string
   className?: string
@@ -18,6 +22,8 @@ function readFallback(userid: string, fallback?: string): string {
 
 export function WecomOpenDataName({
   userid,
+  openid,
+  type = "userName",
   corpId,
   fallback,
   className,
@@ -27,12 +33,16 @@ export function WecomOpenDataName({
   const ref = useRef<HTMLElement | null>(null)
   const [runtime, setRuntime] = useState<OpenDataRuntime | null>(null)
   const safeUserID = (userid || "").trim()
+  const safeOpenID = (openid || "").trim()
   const safeCorpID = (corpId || "").trim()
-  const fallbackText = useMemo(() => readFallback(safeUserID, fallback), [fallback, safeUserID])
+  const fallbackText = useMemo(
+    () => readFallback(safeUserID || safeOpenID, fallback),
+    [fallback, safeOpenID, safeUserID],
+  )
 
   useLayoutEffect(() => {
     let cancelled = false
-    if (!safeUserID) {
+    if (!safeOpenID) {
       setRuntime(null)
       return
     }
@@ -46,14 +56,14 @@ export function WecomOpenDataName({
     return () => {
       cancelled = true
     }
-  }, [safeUserID, safeCorpID])
+  }, [safeOpenID, safeCorpID])
 
   useLayoutEffect(() => {
     if (!runtime?.canUseOpenData) return
     bindOpenDataElement(ref.current)
-  }, [runtime, safeUserID, safeCorpID])
+  }, [runtime, safeOpenID, safeCorpID])
 
-  if (!safeUserID || !runtime?.canUseOpenData) {
+  if (!safeOpenID || !runtime?.canUseOpenData) {
     return (
       <span className="inline-flex min-w-0 flex-col">
         <span className={className} title={runtime?.reason || fallbackText}>
@@ -70,8 +80,8 @@ export function WecomOpenDataName({
     <span className="inline-flex min-w-0 flex-col">
       {createElement("ww-open-data", {
         ref,
-        type: "userName",
-        openid: safeUserID,
+        type,
+        openid: safeOpenID,
         corpid: safeCorpID || undefined,
         className,
       })}

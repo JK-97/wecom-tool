@@ -29,6 +29,7 @@ export type Customer360ViewModel = {
     name?: string
     avatar?: string
     owner_userid?: string
+    owner_open_userid?: string
     tags_json?: string
     updated_at?: string
     last_synced_at?: string
@@ -36,6 +37,7 @@ export type Customer360ViewModel = {
   tags?: string[]
   stage?: string
   owner_userid?: string
+  owner_open_userid?: string
   source_channel?: string
   updated_at?: string
   last_synced_at?: string

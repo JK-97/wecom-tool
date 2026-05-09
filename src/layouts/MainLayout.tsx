@@ -3,6 +3,7 @@ import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/Button"
 import { useAuth } from "@/context/AuthContext"
+import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment"
 
@@ -102,12 +103,18 @@ export default function MainLayout() {
         </nav>
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-[11px] font-semibold text-gray-500">
-              {auth.user?.userid?.slice(0, 1).toUpperCase() || "U"}
-            </div>
+            <WecomOpenDataAvatar
+              userid={auth.user?.userid || ""}
+              openid={auth.user?.openUserID || ""}
+              corpId={auth.corp?.id}
+              fallback={auth.user?.userid || "U"}
+              className="h-8 w-8 border border-gray-100"
+              size="sm"
+            />
             <div className="flex flex-col">
               <WecomOpenDataName
                 userid={auth.user?.userid || ""}
+                openid={auth.user?.openUserID || ""}
                 corpId={auth.corp?.id}
                 fallback={auth.user?.userid || "成员"}
                 className="truncate text-sm font-medium text-gray-900"

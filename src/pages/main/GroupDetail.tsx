@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import {
   AlertTriangle,
@@ -18,7 +18,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { ChatDataPanel } from "@/components/chatdata/ChatDataPanel"
 import { useChatDataPanel } from "@/hooks/useChatDataPanel"
+import {
+  GroupDetailMembersOpenDataFrame,
+  type GroupDetailMemberOpenDataRow,
+} from "@/components/wecom/GroupDetailMembersOpenDataFrame"
 import { normalizeErrorMessage } from "@/services/http"
+import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 import {
   getGroupOperationDetail,
   type CustomerGroupChatAdmin,
@@ -102,10 +108,27 @@ function riskTone(level?: string): string {
 
 function renderAdminChip(admin: CustomerGroupChatAdmin) {
   const userid = (admin.userid || "").trim()
+  const openUserID = (admin.open_userid || "").trim()
   if (!userid) {
     return <div className="inline-flex rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-500">未同步管理员</div>
   }
-  return <div className="inline-flex rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-700">{userid}</div>
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700">
+      <WecomOpenDataAvatar
+        userid={userid}
+        openid={openUserID}
+        fallback={userid}
+        size="xs"
+        className="border border-gray-100"
+      />
+      <WecomOpenDataName
+        userid={userid}
+        openid={openUserID}
+        fallback={userid}
+        className="max-w-[140px] truncate"
+      />
+    </div>
+  )
 }
 
 function shouldRefreshGroupDetail(prev?: CRMSyncScopeCard | null, next?: CRMSyncScopeCard | null): boolean {
@@ -133,11 +156,11 @@ function summaryText(detail?: GroupOperationDetail | null): string {
   return `当前没有额外运营提示，最近一次同步时间为 ${formatDateTime(detail.sync_status?.last_synced_at || detail.group_chat.last_synced_at)}。`
 }
 
-function SidebarField({ label, value }: { label: string; value: string }) {
+function SidebarField({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
       <label className="text-xs text-gray-500">{label}</label>
-      <p className="mt-1 text-sm leading-relaxed text-gray-700">{value || "-"}</p>
+      <p className="mt-1 text-sm leading-relaxed text-gray-700">{value ?? "-"}</p>
     </div>
   )
 }
@@ -210,6 +233,34 @@ export default function GroupDetail() {
   const admins = detail?.admins || []
   const notices = detail?.notices || []
   const risks = detail?.risk_signals || []
+  const ownerUserID = (detail?.group_chat?.owner_userid || "").trim()
+  const ownerOpenUserID = (detail?.group_chat?.owner_open_userid || "").trim()
+  const ownerName = ownerUserID || "未同步"
+  const memberFrameRows = useMemo<GroupDetailMemberOpenDataRow[]>(
+    () =>
+      members.map((member) => {
+        const userID = (member.userid || "").trim()
+        const displayName = memberName(member)
+        const isExternal = Number(member.type || 0) === 2
+        const openID = isExternal
+          ? userID
+            ? `${(detail?.group_chat?.chat_id || "").trim()}/${userID}`
+            : ""
+          : (member.open_userid || "").trim()
+        return {
+          key: `${userID}-${member.join_time}`,
+          openID,
+          userID,
+          displayName,
+          displayInitial: displayName.slice(0, 1) || "人",
+          typeLabel: memberTypeLabel(member.type),
+          joinTime: formatUnixSeconds(member.join_time),
+          inviterUserID: (member.invitor_userid || "").trim() || "-",
+          isExternal,
+        }
+      }),
+    [detail?.group_chat?.chat_id, members],
+  )
 
   if (!safeChatID) {
     return (
@@ -258,7 +309,13 @@ export default function GroupDetail() {
             </Link>
             <div className="flex -space-x-2">
               <Avatar fallback={detailName.slice(0, 1)} className="h-10 w-10 border-2 border-white" />
-              <Avatar fallback={(detail?.group_chat?.owner_userid || "主").slice(0, 1)} className="h-10 w-10 border-2 border-white" />
+              <WecomOpenDataAvatar
+                userid={ownerUserID}
+                openid={ownerOpenUserID}
+                fallback={ownerName}
+                size="default"
+                className="h-10 w-10 border-2 border-white"
+              />
               <Avatar fallback="群" className="h-10 w-10 border-2 border-white" />
             </div>
             <div>
@@ -456,37 +513,7 @@ export default function GroupDetail() {
                         </div>
                       ) : (
                         <div className="overflow-x-auto">
-                          <table className="min-w-full divide-y divide-gray-200 text-sm">
-                            <thead className="bg-gray-50/80">
-                              <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
-                                <th className="px-4 py-3 font-medium">成员</th>
-                                <th className="px-4 py-3 font-medium">类型</th>
-                                <th className="px-4 py-3 font-medium">入群时间</th>
-                                <th className="px-4 py-3 font-medium">邀请人</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100 bg-white">
-                              {members.map((member) => {
-                                const displayName = memberName(member)
-                                return (
-                                  <tr key={`${member.userid}-${member.join_time}`} className="hover:bg-gray-50/80">
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-3">
-                                        <Avatar fallback={displayName.slice(0, 1)} size="sm" />
-                                        <div>
-                                          <div className="font-medium text-gray-900">{displayName}</div>
-                                          <div className="text-xs text-gray-500">{(member.userid || "").trim() || "-"}</div>
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-600">{memberTypeLabel(member.type)}</td>
-                                    <td className="px-4 py-3 text-gray-600">{formatUnixSeconds(member.join_time)}</td>
-                                    <td className="px-4 py-3 text-gray-600">{(member.invitor_userid || "").trim() || "-"}</td>
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
+                          <GroupDetailMembersOpenDataFrame rows={memberFrameRows} loading={isLoading} />
                         </div>
                       )}
                     </CardContent>
@@ -551,7 +578,17 @@ export default function GroupDetail() {
                     <CardTitle className="text-sm font-semibold text-gray-800">群基本信息</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4 p-4">
-                    <SidebarField label="群主" value={(detail.group_chat.owner_userid || "").trim() || "未同步"} />
+                    <SidebarField
+                      label="群主"
+                      value={
+                        <WecomOpenDataName
+                          userid={ownerUserID}
+                          openid={ownerOpenUserID}
+                          fallback={ownerName}
+                          className="text-sm text-gray-700"
+                        />
+                      }
+                    />
                     <SidebarField label="群公告" value={(detail.group_chat.notice || "").trim() || "暂无群公告"} />
                     <SidebarField label="成员结构" value={`企业成员 ${Number(detail.member_stat?.internal_count || 0)} · 外部联系人 ${Number(detail.member_stat?.external_count || 0)}`} />
                   </CardContent>

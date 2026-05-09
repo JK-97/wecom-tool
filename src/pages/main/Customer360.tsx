@@ -14,7 +14,6 @@ import {
   Tag,
   UserPlus,
 } from "lucide-react"
-import { Avatar } from "@/components/ui/Avatar"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
@@ -22,6 +21,8 @@ import { Dialog } from "@/components/ui/Dialog"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { ChatDataPanel } from "@/components/chatdata/ChatDataPanel"
+import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
+import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
 import { useChatDataPanel } from "@/hooks/useChatDataPanel"
 import { updateCustomerProfile } from "@/services/customerListService"
 import { getCustomer360View, type Customer360ViewModel } from "@/services/customer360Service"
@@ -122,6 +123,9 @@ export default function Customer360() {
   const timeline = useMemo(() => view?.timeline || [], [view?.timeline])
   const tasks = view?.tasks || []
   const lastSyncedAt = formatDateTime(view?.last_synced_at || view?.contact?.last_synced_at || view?.updated_at || view?.contact?.updated_at)
+  const ownerUserID = (view?.owner_userid || view?.contact?.owner_userid || "").trim()
+  const ownerOpenUserID = (view?.owner_open_userid || view?.contact?.owner_open_userid || "").trim()
+  const ownerFallback = ownerUserID || "待分配"
   const chatdata = useChatDataPanel({
     target_type: "external_userid",
     target_id: externalUserID,
@@ -188,7 +192,14 @@ export default function Customer360() {
               <Edit2 className="h-4 w-4" />
             </Button>
             <CardContent className="flex flex-col items-center p-6 text-center">
-              <Avatar src={(view?.contact?.avatar || "").trim()} fallback={((view?.contact?.name || "").trim() || "客").slice(0, 1)} size="xl" className="mb-4" />
+              <WecomOpenDataAvatar
+                openid={externalUserID}
+                type="externalUserAvatar"
+                fallback={(view?.contact?.name || "").trim() || "客"}
+                fallbackSrc={(view?.contact?.avatar || "").trim()}
+                size="xl"
+                className="mb-4"
+              />
               <h2 className="text-xl font-bold text-gray-900">{(view?.contact?.name || "未命名客户").trim()}</h2>
               <p className="mt-1 text-sm text-gray-500">{externalUserID}</p>
               <div className="mt-4 flex items-center gap-2">
@@ -241,9 +252,23 @@ export default function Customer360() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 p-4 pt-0">
-              <div className="flex justify-between text-sm">
+              <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-gray-500">当前负责人</span>
-                <span className="font-medium text-gray-900">{(view?.owner_userid || "待分配").trim()}</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <WecomOpenDataAvatar
+                    userid={ownerUserID}
+                    openid={ownerOpenUserID}
+                    fallback={ownerFallback}
+                    size="xs"
+                    className="border border-gray-100"
+                  />
+                  <WecomOpenDataName
+                    userid={ownerUserID}
+                    openid={ownerOpenUserID}
+                    fallback={ownerFallback}
+                    className="truncate font-medium text-gray-900"
+                  />
+                </div>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">来源渠道</span>
@@ -375,7 +400,13 @@ export default function Customer360() {
       >
         <div className="space-y-4">
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
-            <Avatar src={(view?.contact?.avatar || "").trim()} fallback={((view?.contact?.name || "").trim() || "客").slice(0, 1)} size="sm" />
+            <WecomOpenDataAvatar
+              openid={externalUserID}
+              type="externalUserAvatar"
+              fallback={(view?.contact?.name || "").trim() || "客"}
+              fallbackSrc={(view?.contact?.avatar || "").trim()}
+              size="sm"
+            />
             <div>
               <div className="text-sm font-medium text-gray-900">{(view?.contact?.name || "未命名客户").trim()}</div>
               <div className="text-xs text-gray-500">{externalUserID}</div>
