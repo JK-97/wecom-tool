@@ -3,6 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ensureOpenDataReady } from "@/services/openDataService"
 
 const ROOT_REF = "customer-list-root"
+const CUSTOMER_LIST_MIN_WIDTH = 1240
+const CUSTOMER_HEADER_HEIGHT = 48
+const CUSTOMER_ROW_HEIGHT = 84
 
 export type CustomerListOpenDataRow = {
   externalUserID: string
@@ -32,6 +35,10 @@ type FrameFailureReason =
   | "factory_unavailable"
   | "mount_missing"
   | "runtime_error"
+
+function estimatedFrameHeight(rows: CustomerListOpenDataRow[]): number {
+  return Math.max(160, CUSTOMER_HEADER_HEIGHT + rows.length * CUSTOMER_ROW_HEIGHT)
+}
 
 function resolveFallbackReason(reason: FrameFailureReason): string {
   switch (reason) {
@@ -372,9 +379,24 @@ async function syncFrameSize(
   }
 
   const hostRect = host.getBoundingClientRect()
-  iframe.style.width = `${Math.max(960, Math.ceil(hostRect.width))}px`
-  iframe.style.height = `${Math.max(160, Math.ceil(bestHeight) + 2)}px`
-  iframe.style.maxWidth = "100%"
+  const fallbackHeight = Number(host.dataset.estimatedHeight || 0)
+  iframe.style.width = `${Math.max(CUSTOMER_LIST_MIN_WIDTH, Math.ceil(hostRect.width))}px`
+  iframe.style.height = `${Math.max(160, fallbackHeight, Math.ceil(bestHeight) + 2)}px`
+  iframe.style.maxWidth = "none"
+  iframe.style.visibility = "visible"
+}
+
+function primeFrameElement(instance: ww.OpenDataFrameInstance<FrameData>, host: HTMLDivElement, rows: CustomerListOpenDataRow[]): void {
+  const iframe = instance.el as HTMLIFrameElement
+  iframe.setAttribute("scrolling", "no")
+  iframe.style.display = "block"
+  iframe.style.width = `${Math.max(CUSTOMER_LIST_MIN_WIDTH, Math.ceil(host.getBoundingClientRect().width))}px`
+  iframe.style.height = `${estimatedFrameHeight(rows)}px`
+  iframe.style.maxWidth = "none"
+  iframe.style.border = "none"
+  iframe.style.overflow = "hidden"
+  iframe.style.background = "transparent"
+  iframe.style.visibility = "hidden"
 }
 
 export function CustomerListOpenDataFrame(props: {
@@ -403,9 +425,6 @@ export function CustomerListOpenDataFrame(props: {
     [props.allSelected, props.rows],
   )
 
-  // BUGFIX: this component renders a loading placeholder before rows exist.
-  // The placeholder has no hostRef node, so the list frame must be remounted
-  // when the row count changes from 0 to the first real page.
   useEffect(() => {
     toggleAllRef.current = props.onToggleAll
     toggleRowRef.current = props.onToggleRow
@@ -413,6 +432,9 @@ export function CustomerListOpenDataFrame(props: {
     openEditRef.current = props.onOpenEdit
   }, [props.onOpenDetail, props.onOpenEdit, props.onToggleAll, props.onToggleRow])
 
+  // BUGFIX: this component renders a loading placeholder before rows exist.
+  // The placeholder has no hostRef node, so the list frame must be remounted
+  // when the row count changes from 0 to the first real page.
   useEffect(() => {
     let cancelled = false
     let mountWatchTimer = 0
@@ -503,6 +525,9 @@ export function CustomerListOpenDataFrame(props: {
             failToFallback("runtime_error", nextError instanceof Error ? nextError.message : nextError)
           },
         })
+        if (instanceRef.current) {
+          primeFrameElement(instanceRef.current, host, frameData.rows)
+        }
       } catch (error) {
         failToFallback("runtime_error", error instanceof Error ? error.message : error)
         return
@@ -633,5 +658,15 @@ export function CustomerListOpenDataFrame(props: {
     )
   }
 
-  return <div ref={hostRef} className="w-full" />
+  return (
+    <div
+      ref={hostRef}
+      data-estimated-height={estimatedFrameHeight(props.rows)}
+      className="w-full"
+      style={{
+        minHeight: estimatedFrameHeight(props.rows),
+        minWidth: CUSTOMER_LIST_MIN_WIDTH,
+      }}
+    />
+  )
 }

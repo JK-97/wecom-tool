@@ -23,6 +23,7 @@ import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { normalizeErrorMessage } from "@/services/http"
 import {
   getGroupOperationListPage,
+  type CustomerGroupChatMember,
   type GroupOperationListPage,
   type GroupOperationRow,
 } from "@/services/groupChatService"
@@ -140,6 +141,18 @@ function groupDetailLink(chatID?: string): string {
   return safeID ? `/main/groups/${encodeURIComponent(safeID)}` : "/main/groups"
 }
 
+function groupMemberName(member: CustomerGroupChatMember): string {
+  return (member.group_nickname || "").trim() || (member.name || "").trim() || (member.userid || "").trim() || "成员"
+}
+
+function groupMemberOpenID(chatID: string, member: CustomerGroupChatMember): string {
+  const userID = (member.userid || "").trim()
+  if (Number(member.type || 0) === 2) {
+    return chatID && userID ? `${chatID}/${userID}` : ""
+  }
+  return (member.open_userid || "").trim()
+}
+
 export default function GroupOperations() {
   const { showFeedback } = usePageFeedback()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -240,6 +253,17 @@ export default function GroupOperations() {
         const chatID = (row.chat_id || "").trim()
         const ownerOpenID = (row.owner_open_userid || "").trim()
         const ownerName = (row.owner_name || row.owner_userid || "待分配").trim()
+        const previewMembers = (row.preview_members || []).slice(0, 3).map((member, index) => {
+          const displayName = groupMemberName(member)
+          const isExternal = Number(member.type || 0) === 2
+          return {
+            key: `${chatID}-${(member.userid || "").trim() || displayName}-${index}`,
+            openID: groupMemberOpenID(chatID, member),
+            avatarType: isExternal ? ("externalUserAvatar" as const) : ("userAvatar" as const),
+            displayName,
+            displayInitial: displayName.slice(0, 1) || "人",
+          }
+        })
         return {
           chatID,
           name: (row.name || "未命名客户群").trim(),
@@ -257,6 +281,8 @@ export default function GroupOperations() {
           tags: buildRowTags(row),
           lastSyncedAt: formatDateTime(row.last_synced_at),
           noticePreview: (row.notice_preview || "客户群资料更新").trim(),
+          previewMembers,
+          showMemberOverflow: Number(row.member_count || 0) > 3,
         }
       }),
     [tabbedRows],
@@ -376,7 +402,10 @@ export default function GroupOperations() {
       </div>
 
       <div className="flex-1 overflow-auto bg-white">
-        <div className="sticky top-0 z-10 flex border-b border-gray-200 bg-gray-50 text-[11px] uppercase tracking-wider text-gray-500">
+        <div
+          className="sticky top-0 z-10 flex border-b border-gray-200 bg-gray-50 text-[11px] uppercase tracking-wider text-gray-500"
+          style={{ minWidth: 1200 }}
+        >
           <div className="w-14 px-6 py-3 font-semibold">
             <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
           </div>

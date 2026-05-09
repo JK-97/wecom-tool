@@ -242,20 +242,35 @@ export default function GroupDetail() {
         const userID = (member.userid || "").trim()
         const displayName = memberName(member)
         const isExternal = Number(member.type || 0) === 2
+        const chatID = (detail?.group_chat?.chat_id || "").trim()
         const openID = isExternal
-          ? userID
-            ? `${(detail?.group_chat?.chat_id || "").trim()}/${userID}`
+          ? chatID && userID
+            ? `${chatID}/${userID}`
             : ""
           : (member.open_userid || "").trim()
+        const inviterUserID = (member.invitor_userid || "").trim()
+        const inviterIsExternal = Number(member.invitor_entity_type || 0) === 2
+        const inviterOpenID = inviterIsExternal
+          ? chatID && inviterUserID
+            ? `${chatID}/${inviterUserID}`
+            : ""
+          : (member.invitor_open_userid || "").trim()
+        const inviterName = inviterUserID || "-"
         return {
           key: `${userID}-${member.join_time}`,
           openID,
+          avatarType: isExternal ? ("externalUserAvatar" as const) : ("userAvatar" as const),
           userID,
           displayName,
           displayInitial: displayName.slice(0, 1) || "人",
           typeLabel: memberTypeLabel(member.type),
           joinTime: formatUnixSeconds(member.join_time),
-          inviterUserID: (member.invitor_userid || "").trim() || "-",
+          inviterUserID,
+          inviterOpenID,
+          inviterAvatarType: inviterIsExternal ? ("externalUserAvatar" as const) : ("userAvatar" as const),
+          inviterNameType: inviterIsExternal ? ("externalUserName" as const) : ("userName" as const),
+          inviterName,
+          inviterInitial: inviterName.slice(0, 1) || "人",
           isExternal,
         }
       }),

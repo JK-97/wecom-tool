@@ -3,6 +3,16 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ensureOpenDataReady } from "@/services/openDataService"
 
 const ROOT_REF = "group-ops-list-root"
+const GROUP_LIST_MIN_WIDTH = 1200
+const GROUP_ROW_HEIGHT = 96
+
+type GroupOperationsListPreviewMember = {
+  key: string
+  openID: string
+  avatarType: "userAvatar" | "externalUserAvatar"
+  displayName: string
+  displayInitial: string
+}
 
 export type GroupOperationsListOpenDataRow = {
   chatID: string
@@ -17,6 +27,8 @@ export type GroupOperationsListOpenDataRow = {
   tags: string[]
   lastSyncedAt: string
   noticePreview: string
+  previewMembers: GroupOperationsListPreviewMember[]
+  showMemberOverflow: boolean
 }
 
 type FrameData = {
@@ -28,6 +40,10 @@ type FrameFailureReason =
   | "factory_unavailable"
   | "mount_missing"
   | "runtime_error"
+
+function estimatedFrameHeight(rows: GroupOperationsListOpenDataRow[]): number {
+  return Math.max(160, rows.length * GROUP_ROW_HEIGHT)
+}
 
 function resolveFallbackReason(reason: FrameFailureReason): string {
   switch (reason) {
@@ -53,12 +69,21 @@ function buildTemplate(): string {
       <view class="group-ops-col group-ops-col--info">
         <view class="group-ops-info-stack">
           <view class="group-ops-avatars">
-            <view class="group-ops-group-avatar">{{item.nameInitial}}</view>
-            <block wx:if="{{item.ownerOpenID}}">
-              <ww-open-data class="group-ops-owner-avatar" type="userAvatar" openid="{{item.ownerOpenID}}"></ww-open-data>
+            <block wx:if="{{item.previewMembers.length}}">
+              <block wx:for="{{item.previewMembers}}" wx:for-item="member" wx:key="key">
+                <block wx:if="{{member.openID}}">
+                  <ww-open-data class="group-ops-member-avatar" type="{{member.avatarType}}" openid="{{member.openID}}"></ww-open-data>
+                </block>
+                <block wx:else>
+                  <view class="group-ops-member-avatar group-ops-member-avatar--fallback">{{member.displayInitial}}</view>
+                </block>
+              </block>
             </block>
             <block wx:else>
-              <view class="group-ops-owner-avatar group-ops-owner-avatar--fallback">{{item.ownerInitial}}</view>
+              <view class="group-ops-member-avatar group-ops-member-avatar--fallback">{{item.nameInitial}}</view>
+            </block>
+            <block wx:if="{{item.showMemberOverflow}}">
+              <view class="group-ops-avatar-more">...</view>
             </block>
           </view>
           <view class="group-ops-texts">
@@ -183,8 +208,9 @@ function buildStyle(): string {
   margin-right: 2px;
 }
 
-.group-ops-group-avatar,
-.group-ops-owner-avatar {
+.group-ops-member-avatar,
+.group-ops-owner-avatar,
+.group-ops-avatar-more {
   width: 30px;
   height: 30px;
   border-radius: 9999px;
@@ -196,7 +222,16 @@ function buildStyle(): string {
   box-sizing: border-box;
 }
 
-.group-ops-group-avatar {
+.group-ops-member-avatar {
+  margin-left: -8px;
+  background: #f3f4f6;
+}
+
+.group-ops-member-avatar:first-child {
+  margin-left: 0;
+}
+
+.group-ops-member-avatar--fallback {
   background: #eef2ff;
   color: #5b6476;
   font-size: 13px;
@@ -204,8 +239,15 @@ function buildStyle(): string {
 }
 
 .group-ops-owner-avatar {
-  margin-left: -8px;
   background: #f3f4f6;
+}
+
+.group-ops-avatar-more {
+  margin-left: -8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .group-ops-owner-avatar--fallback {
@@ -359,9 +401,24 @@ async function syncFrameSize(
   }
 
   const hostRect = host.getBoundingClientRect()
-  iframe.style.width = `${Math.max(320, Math.ceil(hostRect.width))}px`
-  iframe.style.height = `${Math.max(120, Math.ceil(bestHeight) + 2)}px`
-  iframe.style.maxWidth = "100%"
+  const fallbackHeight = Number(host.dataset.estimatedHeight || 0)
+  iframe.style.width = `${Math.max(GROUP_LIST_MIN_WIDTH, Math.ceil(hostRect.width))}px`
+  iframe.style.height = `${Math.max(120, fallbackHeight, Math.ceil(bestHeight) + 2)}px`
+  iframe.style.maxWidth = "none"
+  iframe.style.visibility = "visible"
+}
+
+function primeFrameElement(instance: ww.OpenDataFrameInstance<FrameData>, host: HTMLDivElement, rows: GroupOperationsListOpenDataRow[]): void {
+  const iframe = instance.el as HTMLIFrameElement
+  iframe.setAttribute("scrolling", "no")
+  iframe.style.display = "block"
+  iframe.style.width = `${Math.max(GROUP_LIST_MIN_WIDTH, Math.ceil(host.getBoundingClientRect().width))}px`
+  iframe.style.height = `${estimatedFrameHeight(rows)}px`
+  iframe.style.maxWidth = "none"
+  iframe.style.border = "none"
+  iframe.style.overflow = "hidden"
+  iframe.style.background = "transparent"
+  iframe.style.visibility = "hidden"
 }
 
 export function GroupOperationsListOpenDataFrame(props: {
@@ -377,13 +434,13 @@ export function GroupOperationsListOpenDataFrame(props: {
   const [fallbackMode, setFallbackMode] = useState(false)
   const frameData = useMemo<FrameData>(() => ({ rows: props.rows }), [props.rows])
 
-  // BUGFIX: the loading branch does not render the frame host. If the first
-  // mount runs while hostRef is null, the OpenDataFrame will stay blank unless
-  // it is recreated when real rows arrive.
   useEffect(() => {
     openDetailRef.current = props.onOpenDetail
   }, [props.onOpenDetail])
 
+  // BUGFIX: the loading branch does not render the frame host. If the first
+  // mount runs while hostRef is null, the OpenDataFrame will stay blank unless
+  // it is recreated when real rows arrive.
   useEffect(() => {
     let cancelled = false
     let mountWatchTimer = 0
@@ -476,12 +533,16 @@ export function GroupOperationsListOpenDataFrame(props: {
           hasIframe: instanceRef.current?.el instanceof HTMLIFrameElement,
           hostChildCount: host.childElementCount,
         })
+        if (instanceRef.current) {
+          primeFrameElement(instanceRef.current, host, frameData.rows)
+        }
       } catch (error) {
         failToFallback("runtime_error", error instanceof Error ? error.message : error)
         return
       }
 
       if (instanceRef.current?.el && instanceRef.current.el.parentElement !== host) {
+        primeFrameElement(instanceRef.current, host, frameData.rows)
         host.replaceChildren(instanceRef.current.el)
         console.info("[group-ops/open-data] iframe appended", {
           hostChildCount: host.childElementCount,
@@ -562,12 +623,19 @@ export function GroupOperationsListOpenDataFrame(props: {
             </div>
             <div className="flex flex-1 items-center gap-3 px-6 py-4">
               <div className="flex items-center">
-                <div className="flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-indigo-50 text-[13px] font-semibold text-slate-600">
-                  {row.nameInitial}
-                </div>
-                <div className="-ml-2 flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-gray-100 text-xs font-semibold text-gray-600">
-                  {row.ownerInitial}
-                </div>
+                {(row.previewMembers.length > 0 ? row.previewMembers : [{ key: `${row.chatID}-fallback`, displayInitial: row.nameInitial }]).map((member, index) => (
+                  <div
+                    key={member.key}
+                    className={`flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-indigo-50 text-[13px] font-semibold text-slate-600 ${index > 0 ? "-ml-2" : ""}`}
+                  >
+                    {member.displayInitial}
+                  </div>
+                ))}
+                {row.showMemberOverflow ? (
+                  <div className="-ml-2 flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-slate-50 text-xs font-bold text-slate-500">
+                    ...
+                  </div>
+                ) : null}
               </div>
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-gray-900">{row.name}</div>
@@ -619,5 +687,15 @@ export function GroupOperationsListOpenDataFrame(props: {
     )
   }
 
-  return <div ref={hostRef} className="w-full" />
+  return (
+    <div
+      ref={hostRef}
+      data-estimated-height={estimatedFrameHeight(props.rows)}
+      className="w-full"
+      style={{
+        minHeight: estimatedFrameHeight(props.rows),
+        minWidth: GROUP_LIST_MIN_WIDTH,
+      }}
+    />
+  )
 }

@@ -3,21 +3,34 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ensureOpenDataReady } from "@/services/openDataService"
 
 const ROOT_REF = "group-detail-members-root"
+const MEMBER_LIST_MIN_WIDTH = 860
+const MEMBER_HEADER_HEIGHT = 48
+const MEMBER_ROW_HEIGHT = 72
 
 export type GroupDetailMemberOpenDataRow = {
   key: string
   openID: string
+  avatarType: "userAvatar" | "externalUserAvatar"
   userID: string
   displayName: string
   displayInitial: string
   typeLabel: string
   joinTime: string
   inviterUserID: string
+  inviterOpenID: string
+  inviterAvatarType: "userAvatar" | "externalUserAvatar"
+  inviterNameType: "userName" | "externalUserName"
+  inviterName: string
+  inviterInitial: string
   isExternal: boolean
 }
 
 type FrameData = {
   rows: GroupDetailMemberOpenDataRow[]
+}
+
+function estimatedFrameHeight(rows: GroupDetailMemberOpenDataRow[]): number {
+  return Math.max(160, MEMBER_HEADER_HEIGHT + rows.length * MEMBER_ROW_HEIGHT)
 }
 
 function buildTemplate(): string {
@@ -34,12 +47,7 @@ function buildTemplate(): string {
       <view class="group-members-col group-members-col--member">
         <view class="group-members-person">
           <block wx:if="{{item.openID}}">
-            <block wx:if="{{item.isExternal}}">
-              <ww-open-data class="group-members-avatar" type="externalUserAvatar" openid="{{item.openID}}"></ww-open-data>
-            </block>
-            <block wx:else>
-              <ww-open-data class="group-members-avatar" type="userAvatar" openid="{{item.openID}}"></ww-open-data>
-            </block>
+            <ww-open-data class="group-members-avatar" type="{{item.avatarType}}" openid="{{item.openID}}"></ww-open-data>
           </block>
           <block wx:else>
             <view class="group-members-avatar group-members-avatar--fallback">{{item.displayInitial}}</view>
@@ -67,7 +75,15 @@ function buildTemplate(): string {
         <view class="group-members-plain">{{item.joinTime}}</view>
       </view>
       <view class="group-members-col group-members-col--inviter">
-        <view class="group-members-plain">{{item.inviterUserID || '-'}}</view>
+        <block wx:if="{{item.inviterOpenID}}">
+          <view class="group-members-person group-members-person--inviter">
+            <ww-open-data class="group-members-inviter-avatar" type="{{item.inviterAvatarType}}" openid="{{item.inviterOpenID}}"></ww-open-data>
+            <ww-open-data class="group-members-name" type="{{item.inviterNameType}}" openid="{{item.inviterOpenID}}"></ww-open-data>
+          </view>
+        </block>
+        <block wx:else>
+          <view class="group-members-plain">{{item.inviterName || '-'}}</view>
+        </block>
       </view>
     </view>
   </block>
@@ -86,7 +102,7 @@ function buildStyle(): string {
 .group-members-header,
 .group-members-row {
   display: grid;
-  grid-template-columns: minmax(320px, 1.8fr) 120px 168px 160px;
+  grid-template-columns: minmax(320px, 1.8fr) 120px 168px minmax(220px, 1.2fr);
   align-items: center;
 }
 
@@ -117,6 +133,10 @@ function buildStyle(): string {
   min-width: 0;
 }
 
+.group-members-person--inviter {
+  gap: 8px;
+}
+
 .group-members-avatar {
   width: 32px;
   height: 32px;
@@ -133,6 +153,16 @@ function buildStyle(): string {
   font-weight: 600;
   line-height: 32px;
   text-align: center;
+}
+
+.group-members-inviter-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  overflow: hidden;
+  display: block;
+  flex-shrink: 0;
+  background: #f3f4f6;
 }
 
 .group-members-meta {
@@ -190,9 +220,24 @@ async function syncFrameSize(
   }
 
   const hostRect = host.getBoundingClientRect()
-  iframe.style.width = `${Math.max(720, Math.ceil(hostRect.width))}px`
-  iframe.style.height = `${Math.max(120, Math.ceil(bestHeight) + 2)}px`
-  iframe.style.maxWidth = "100%"
+  const fallbackHeight = Number(host.dataset.estimatedHeight || 0)
+  iframe.style.width = `${Math.max(MEMBER_LIST_MIN_WIDTH, Math.ceil(hostRect.width))}px`
+  iframe.style.height = `${Math.max(120, fallbackHeight, Math.ceil(bestHeight) + 2)}px`
+  iframe.style.maxWidth = "none"
+  iframe.style.visibility = "visible"
+}
+
+function primeFrameElement(instance: ww.OpenDataFrameInstance<FrameData>, host: HTMLDivElement, rows: GroupDetailMemberOpenDataRow[]): void {
+  const iframe = instance.el as HTMLIFrameElement
+  iframe.setAttribute("scrolling", "no")
+  iframe.style.display = "block"
+  iframe.style.width = `${Math.max(MEMBER_LIST_MIN_WIDTH, Math.ceil(host.getBoundingClientRect().width))}px`
+  iframe.style.height = `${estimatedFrameHeight(rows)}px`
+  iframe.style.maxWidth = "none"
+  iframe.style.border = "none"
+  iframe.style.overflow = "hidden"
+  iframe.style.background = "transparent"
+  iframe.style.visibility = "hidden"
 }
 
 export function GroupDetailMembersOpenDataFrame(props: {
@@ -258,6 +303,9 @@ export function GroupDetailMembersOpenDataFrame(props: {
           setReady(false)
         },
       })
+      if (instanceRef.current) {
+        primeFrameElement(instanceRef.current, host, frameData.rows)
+      }
     }
 
     setReady(false)
@@ -305,5 +353,15 @@ export function GroupDetailMembersOpenDataFrame(props: {
     )
   }
 
-  return <div ref={hostRef} className="w-full" />
+  return (
+    <div
+      ref={hostRef}
+      data-estimated-height={estimatedFrameHeight(props.rows)}
+      className="w-full"
+      style={{
+        minHeight: estimatedFrameHeight(props.rows),
+        minWidth: MEMBER_LIST_MIN_WIDTH,
+      }}
+    />
+  )
 }

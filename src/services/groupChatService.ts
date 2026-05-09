@@ -22,6 +22,7 @@ export type GroupOperationRow = {
   owner_userid?: string
   owner_open_userid?: string
   owner_name?: string
+  preview_members?: CustomerGroupChatMember[]
   member_count?: number
   admin_count?: number
   status_label?: string
@@ -76,6 +77,7 @@ export type CustomerGroupChatMember = {
   name?: string
   group_nickname?: string
   invitor_userid?: string
+  invitor_open_userid?: string
   invitor_entity_type?: number
 }
 
