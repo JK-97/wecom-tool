@@ -9,7 +9,6 @@ import {
   ShieldAlert,
   Users,
 } from "lucide-react"
-import { Avatar } from "@/components/ui/Avatar"
 import { Badge } from "@/components/ui/Badge"
 import { Button } from "@/components/ui/Button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
@@ -22,6 +21,10 @@ import {
   GroupDetailMembersOpenDataFrame,
   type GroupDetailMemberOpenDataRow,
 } from "@/components/wecom/GroupDetailMembersOpenDataFrame"
+import {
+  GroupAvatarStackOpenDataFrame,
+  type GroupAvatarStackMember,
+} from "@/components/wecom/GroupAvatarStackOpenDataFrame"
 import { normalizeErrorMessage } from "@/services/http"
 import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
 import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
@@ -276,6 +279,17 @@ export default function GroupDetail() {
       }),
     [detail?.group_chat?.chat_id, members],
   )
+  const headerAvatarMembers = useMemo<GroupAvatarStackMember[]>(
+    () =>
+      memberFrameRows.slice(0, 3).map((member) => ({
+        key: member.key,
+        openID: member.openID,
+        avatarType: member.avatarType,
+        displayInitial: member.displayInitial,
+      })),
+    [memberFrameRows],
+  )
+  const headerAvatarOverflow = Number(detail?.member_stat?.total || members.length || 0) > headerAvatarMembers.length
 
   if (!safeChatID) {
     return (
@@ -322,17 +336,11 @@ export default function GroupDetail() {
                 <ArrowLeft className="h-5 w-5" />
               </Button>
             </Link>
-            <div className="flex -space-x-2">
-              <Avatar fallback={detailName.slice(0, 1)} className="h-10 w-10 border-2 border-white" />
-              <WecomOpenDataAvatar
-                userid={ownerUserID}
-                openid={ownerOpenUserID}
-                fallback={ownerName}
-                size="default"
-                className="h-10 w-10 border-2 border-white"
-              />
-              <Avatar fallback="群" className="h-10 w-10 border-2 border-white" />
-            </div>
+            <GroupAvatarStackOpenDataFrame
+              members={headerAvatarMembers}
+              overflow={headerAvatarOverflow}
+              fallbackInitial={detailName.slice(0, 1) || "群"}
+            />
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-xl font-bold text-gray-900">{detailName}</h2>

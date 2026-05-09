@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
   ChevronLeft,
   ChevronRight,
@@ -143,6 +144,7 @@ function customerLink(externalUserID?: string): string {
 
 export default function CustomerList() {
   const initial = useMemo(() => readInitialFilters(), [])
+  const navigate = useNavigate()
   const { showFeedback } = usePageFeedback()
 
   const [view, setView] = useState<CustomerListViewModel | null>(null)
@@ -544,7 +546,9 @@ export default function CustomerList() {
               openEditDialog(row)
             }}
             onOpenDetail={(externalUserID) => {
-              window.location.assign(customerLink(externalUserID))
+              // BUGFIX: keep customer detail navigation inside the SPA to
+              // avoid a full document reload when entering the detail page.
+              navigate(customerLink(externalUserID))
             }}
           />
         )}

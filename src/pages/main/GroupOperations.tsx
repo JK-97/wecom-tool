@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   ChevronLeft,
   ChevronRight,
@@ -155,6 +155,7 @@ function groupMemberOpenID(chatID: string, member: CustomerGroupChatMember): str
 
 export default function GroupOperations() {
   const { showFeedback } = usePageFeedback()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [pageData, setPageData] = useState<GroupOperationListPage | null>(null)
   const [syncOverview, setSyncOverview] = useState<CRMSyncOverview | null>(null)
@@ -434,7 +435,10 @@ export default function GroupOperations() {
             rows={frameRows}
             loading={isLoading}
             onOpenDetail={(chatID) => {
-              window.location.assign(groupDetailLink(chatID))
+              // BUGFIX: rows are rendered inside the official OpenDataFrame,
+              // so clicks arrive through a callback. Keep navigation inside
+              // React Router to avoid reloading the whole workbench.
+              navigate(groupDetailLink(chatID))
             }}
           />
         )}
