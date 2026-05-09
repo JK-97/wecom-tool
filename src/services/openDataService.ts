@@ -122,7 +122,7 @@ function createRuntime(
 }
 
 function openDataLoginHint(): string {
-  return "当前环境未满足企业微信通讯录展示条件，请在企业微信内打开，或从企业微信管理后台跳转进入同域页面。"
+  return "当前页面未建立有效的企业微信登录态，请重新通过企业微信登录面板登录后再查看，或在企业微信内打开。"
 }
 
 function ensureScript(src: string): Promise<void> {
