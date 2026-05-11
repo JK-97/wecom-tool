@@ -304,6 +304,11 @@ export default function OrganizationSettings() {
     return { label: "待检查", tone: "orange" }
   }
 
+  const readUnixSeconds = (value?: number): number => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0
+    return value > 1_000_000_000_000 ? Math.floor(value / 1000) : Math.floor(value)
+  }
+
   const dataZoneBadgeClass = (tone: "green" | "orange" | "red" | "gray"): string => {
     switch (tone) {
       case "green":
@@ -1045,7 +1050,15 @@ export default function OrganizationSettings() {
   }
   const dataZoneDebugMode = view?.data_zone_debug_mode
   const dataZoneDebugStatus = resolveDataZoneDebugModeStatus(dataZoneDebugMode?.debug_mode_status)
-  const isDataZoneDebugLocked = Boolean(dataZoneDebugMode?.enabled)
+  const isDataZoneDebugEnabled = Boolean(dataZoneDebugMode?.enabled)
+  const dataZoneDebugExpiredNote = (dataZoneDebugMode?.last_check_error || "").trim()
+  const isDataZoneDebugExpired =
+    !isDataZoneDebugEnabled &&
+    Boolean(dataZoneDebugExpiredNote) &&
+    /过期|自动关闭|自动切换为关闭状态/.test(dataZoneDebugExpiredNote)
+  const canOpenDataZoneDebugMode = !isDataZoneDebugEnabled
+  const canCloseDataZoneDebugMode = isDataZoneDebugEnabled
+  const isDataZoneDebugLocked = isDataZoneDebugEnabled
   const dataZoneDebugTokenPlaceholder = isDataZoneDebugLocked
     ? "********（已提交，关闭后可修改）"
     : "输入企业微信下发的 debug_token"
@@ -2060,13 +2073,23 @@ export default function OrganizationSettings() {
                     </div>
                   </div>
 
-                  {dataZoneDebugMode?.last_check_error ? (
+                  {dataZoneDebugMode?.last_check_error && !isDataZoneDebugExpired ? (
                     <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-700">
                       {dataZoneDebugMode.last_check_error}
                     </div>
                   ) : null}
 
-                  {dataZoneDebugMode?.enabled && dataZoneDebugMode?.corp_access_token ? (
+                  {isDataZoneDebugExpired ? (
+                    <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+                      {dataZoneDebugExpiredNote || "debug_token 已过期，平台已自动切换为关闭状态。请更新后重新开启。"}
+                    </div>
+                  ) : isDataZoneDebugEnabled ? (
+                    <div className="rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-xs leading-relaxed text-green-800">
+                      当前处于开启状态，平台会在 debug_token 过期后自动切回关闭状态。
+                    </div>
+                  ) : null}
+
+                  {isDataZoneDebugEnabled && dataZoneDebugMode?.corp_access_token ? (
                     <div className="space-y-2 rounded-xl border border-green-100 bg-green-50 p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs font-bold text-green-900">企业 `access_token`</div>
@@ -2088,23 +2111,27 @@ export default function OrganizationSettings() {
                     <div className="w-full text-[11px] leading-relaxed text-gray-500 md:order-first md:w-auto md:flex-1">
                       刷新状态会重新检查调试模式，并拉取当前企业最新的 `access_token`。
                     </div>
-                    <Button
-                      variant="outline"
-                      className="bg-white text-xs font-bold"
-                      onClick={() => void closeDataZoneDebugMode()}
-                      disabled={isClosingDataZoneDebugMode || !dataZoneDebugProgramID.trim()}
-                    >
-                      {isClosingDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      关闭调试模式
-                    </Button>
-                    <Button
-                      className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700"
-                      onClick={() => void openDataZoneDebugMode()}
-                      disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked}
-                    >
-                      {isOpeningDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      开启调试模式
-                    </Button>
+                    {canCloseDataZoneDebugMode ? (
+                      <Button
+                        variant="outline"
+                        className="bg-white text-xs font-bold"
+                        onClick={() => void closeDataZoneDebugMode()}
+                        disabled={isClosingDataZoneDebugMode || !dataZoneDebugProgramID.trim()}
+                      >
+                        {isClosingDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        关闭调试模式
+                      </Button>
+                    ) : null}
+                    {canOpenDataZoneDebugMode ? (
+                      <Button
+                        className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700"
+                        onClick={() => void openDataZoneDebugMode()}
+                        disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked}
+                      >
+                        {isOpeningDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        开启调试模式
+                      </Button>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
