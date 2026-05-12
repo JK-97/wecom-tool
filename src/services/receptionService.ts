@@ -169,12 +169,8 @@ export type ReceptionChannelsView = {
   channels?: ReceptionChannel[];
 };
 
-export type ReceptionChannelSyncResult = {
-  synced?: boolean;
-  open_kfid?: string;
-  sync_status?: string;
-  sync_reason?: string;
-  synced_at?: string;
+export type TriggerReceptionChannelsRefreshResult = {
+  accepted?: boolean;
 };
 
 export type UploadedMedia = {
@@ -316,32 +312,13 @@ export async function upsertKFServicerAssignments(input: {
   return payload?.data || null;
 }
 
-export async function triggerReceptionChannelSync(
-  openKFID: string,
-): Promise<ReceptionChannelSyncResult | null> {
-  const payload = await requestJSON<APIReply<ReceptionChannelSyncResult>>(
-    "/api/v1/reception/channels/sync",
+export async function triggerReceptionChannelsRefresh(): Promise<TriggerReceptionChannelsRefreshResult | null> {
+  const payload = await requestJSON<APIReply<TriggerReceptionChannelsRefreshResult>>(
+    "/api/v1/reception/channels/refresh",
     {
       method: "POST",
-      body: JSON.stringify({
-        open_kfid: openKFID,
-      }),
+      body: JSON.stringify({}),
     },
   );
   return payload?.data || null;
-}
-
-export async function retryReceptionChannelSync(
-  openKFID: string,
-): Promise<boolean> {
-  await requestJSON<APIReply<{ retried_count?: number }>>(
-    "/api/v1/reception/channels/retry",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        open_kfid: openKFID,
-      }),
-    },
-  );
-  return true;
 }

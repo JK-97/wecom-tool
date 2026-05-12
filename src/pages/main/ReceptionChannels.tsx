@@ -22,7 +22,7 @@ import {
   getReceptionChannelsView,
   getReceptionChannelDetail,
   listKFServicerAssignments,
-  triggerReceptionChannelSync,
+  triggerReceptionChannelsRefresh,
   uploadReceptionChannelAvatar,
   upsertKFServicerAssignments,
   type ReceptionChannel,
@@ -30,6 +30,7 @@ import {
   type KFServicerAssignment,
   type KFServicerUpsertResponse,
   type KFServicerUpsertResult,
+  type ReceptionChannelsView,
   type ReceptionOverview,
 } from "@/services/receptionService";
 import { normalizeErrorMessage } from "@/services/http";
@@ -104,6 +105,53 @@ const assignmentsFromDetail = (
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
+
+// 手动“刷新接待渠道”会走异步编排链。
+// 前端需要做短轮询，等待 routing 物化视图把最新状态回填回来，
+// 否则用户会看到“点击刷新后列表没变化，刷新整个页面才出现结果”。
+const manualReceptionRefreshPollIntervals = [350, 650, 1000, 1500, 2200, 3000];
+
+const buildReceptionChannelsViewSignature = (
+  overview: ReceptionOverview | null,
+  channels: ReceptionChannel[],
+): string =>
+  JSON.stringify({
+    overview: {
+      total: Number(overview?.total_channels || 0),
+      active: Number(overview?.active_channels || 0),
+      abnormal: Number(overview?.abnormal_channels || 0),
+      pending: Number(overview?.pending_sync || 0),
+      latestStatus: (overview?.latest_sync_status || "").trim(),
+      latestTime: (overview?.latest_sync_time || "").trim(),
+    },
+    channels: [...channels]
+      .map((channel) => ({
+        open_kfid: (channel.open_kfid || "").trim(),
+        status: (channel.status || "").trim(),
+        sync_status: (channel.sync_status || "").trim(),
+        last_sync: (channel.last_sync || "").trim(),
+        pending_tasks: Number(channel.pending_tasks || 0),
+        failed_tasks: Number(channel.failed_tasks || 0),
+        pool_user_count: Number(channel.pool_user_count || 0),
+        pool_department_count: Number(channel.pool_department_count || 0),
+      }))
+      .sort((left, right) => left.open_kfid.localeCompare(right.open_kfid)),
+  });
+
+const markReceptionChannelsRefreshing = (
+  channels: ReceptionChannel[],
+): ReceptionChannel[] =>
+  channels.map((channel) => {
+    const openKFID = (channel.open_kfid || "").trim();
+    if (!openKFID) {
+      return channel;
+    }
+    return {
+      ...channel,
+      sync_status: "syncing",
+      pending_tasks: Math.max(1, Number(channel.pending_tasks || 0)),
+    };
+  });
 
 const isSameSelection = (
   left: DirectorySelectionItem[],
@@ -340,9 +388,6 @@ export default function ReceptionChannels() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedChannel, setSelectedChannel] =
     useState<ReceptionChannel | null>(null);
-  const [syncingChannelIDs, setSyncingChannelIDs] = useState<Set<string>>(
-    () => new Set(),
-  );
   const [selectedChannelDetail, setSelectedChannelDetail] =
     useState<ReceptionChannelDetail | null>(null);
   const [servicerAssignments, setServicerAssignments] = useState<KFServicerAssignment[]>([]);
@@ -405,9 +450,15 @@ export default function ReceptionChannels() {
     setFallbackEditorNotice(message);
   };
 
+  const applyChannelsView = (view: ReceptionChannelsView | null) => {
+    setOverview(view?.overview || null);
+    setChannels(view?.channels || []);
+    return view;
+  };
+
   const loadChannels = async (
     query?: string,
-    options?: { showLoading?: boolean },
+    options?: { showLoading?: boolean; suppressError?: boolean },
   ) => {
     const showLoading = options?.showLoading !== false && channels.length === 0;
     try {
@@ -418,12 +469,12 @@ export default function ReceptionChannels() {
         query: query || "",
         limit: 200,
       });
-      setOverview(view?.overview || null);
-      setChannels(view?.channels || []);
-      return true;
+      return applyChannelsView(view);
     } catch (error) {
-      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
-      return false;
+      if (!options?.suppressError) {
+        showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
+      }
+      return null;
     } finally {
       if (showLoading) {
         setIsLoading(false);
@@ -471,13 +522,54 @@ export default function ReceptionChannels() {
     detailOpenKFIDRef.current = isDetailOpen ? getDetailOpenKFID() : "";
   }, [isDetailOpen, selectedChannel, selectedChannelDetail]);
 
+  const pollReceptionChannelsUntilUpdated = async (
+    query: string,
+    baselineSignature: string,
+  ): Promise<ReceptionChannelsView | null> => {
+    let latestView: ReceptionChannelsView | null = null;
+    for (const delay of manualReceptionRefreshPollIntervals) {
+      await wait(delay);
+      latestView = await loadChannels(query, {
+        showLoading: false,
+        suppressError: true,
+      });
+      if (!latestView) {
+        continue;
+      }
+      const latestSignature = buildReceptionChannelsViewSignature(
+        latestView.overview || null,
+        latestView.channels || [],
+      );
+      if (latestSignature !== baselineSignature) {
+        return latestView;
+      }
+    }
+    return latestView;
+  };
+
   const handleRefreshList = async () => {
     try {
       setIsSyncing(true);
-      const refreshed = await loadChannels(keyword, { showLoading: false });
+      const baselineSignature = buildReceptionChannelsViewSignature(
+        overview,
+        channels,
+      );
+      setChannels((current) => markReceptionChannelsRefreshing(current));
+      await triggerReceptionChannelsRefresh();
+      const refreshed = await pollReceptionChannelsUntilUpdated(keyword, baselineSignature);
       if (refreshed) {
-        showFeedback({ message: "接待渠道列表已刷新。", kind: "success" });
+        const openKFID = getDetailOpenKFID();
+        if (openKFID) {
+          await refreshOpenChannelDetail(openKFID);
+        }
+        showFeedback({ message: "接待渠道已刷新，列表状态已同步更新。", kind: "success" });
+        return;
       }
+      await loadChannels(keyword, { showLoading: false });
+      showFeedback({ message: "已提交刷新接待渠道，后台仍在处理中，请稍后查看。", kind: "warning" });
+    } catch (error) {
+      await loadChannels(keyword, { showLoading: false, suppressError: true });
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
     } finally {
       setIsSyncing(false);
     }
@@ -493,75 +585,6 @@ export default function ReceptionChannels() {
     setServicerAssignments(assignments);
     setSelectedServicerTargets(selectionItemsFromAssignments(assignments));
     syncFallbackDraftFromDetail(detail, assignments);
-  };
-
-  const handleSyncChannel = async (
-    channel: ReceptionChannel,
-    options?: { source?: "list" | "detail" },
-  ) => {
-    const target = (channel.open_kfid || "").trim();
-    if (!target || syncingChannelIDs.has(target)) return;
-    const displayName = getDisplayName(channel);
-    setSyncingChannelIDs((prev) => new Set(prev).add(target));
-    setChannels((prev) =>
-      prev.map((item) =>
-        (item.open_kfid || "").trim() === target
-          ? {
-              ...item,
-              sync_status: "syncing",
-              pending_tasks: Math.max(1, Number(item.pending_tasks || 0)),
-            }
-          : item,
-      ),
-    );
-    try {
-      const [result] = await Promise.all([
-        triggerReceptionChannelSync(target),
-        wait(420),
-      ]);
-      const syncStatus = (result?.sync_status || "success").trim();
-      const syncReason = (result?.sync_reason || "manual_sync_done").trim();
-      const syncedAt = (result?.synced_at || new Date().toISOString()).trim();
-      setChannels((prev) =>
-        prev.map((item) =>
-          (item.open_kfid || "").trim() === target
-            ? {
-                ...item,
-                sync_status: syncStatus,
-                sync_reason: syncReason,
-                last_sync: syncedAt,
-                pending_tasks: 0,
-                failed_tasks: syncStatus === "success" ? 0 : item.failed_tasks,
-              }
-            : item,
-        ),
-      );
-      setSelectedChannel((current) =>
-        (current?.open_kfid || "").trim() === target
-          ? {
-              ...current,
-              sync_status: syncStatus,
-              sync_reason: syncReason,
-              last_sync: syncedAt,
-              pending_tasks: 0,
-            }
-          : current,
-      );
-      showFeedback({
-        message: `${displayName} 已刷新，成员和部门树请在组织与设置中单独同步。`,
-        kind: "success",
-      });
-      await loadChannels(keyword, { showLoading: false });
-      await refreshOpenChannelDetail(target);
-    } catch (error) {
-      showFeedback({ message: normalizeErrorMessage(error), kind: "error" });
-    } finally {
-      setSyncingChannelIDs((prev) => {
-        const next = new Set(prev);
-        next.delete(target);
-        return next;
-      });
-    }
   };
 
   const loadDetail = async (channel: ReceptionChannel) => {
@@ -1107,8 +1130,6 @@ export default function ReceptionChannels() {
   };
 
   const getEffectiveSyncStatus = (channel: ReceptionChannel): string => {
-    const openKFID = (channel.open_kfid || "").trim();
-    if (openKFID && syncingChannelIDs.has(openKFID)) return "syncing";
     return (channel.sync_status || "").trim();
   };
 
@@ -1145,6 +1166,12 @@ export default function ReceptionChannels() {
         return (
           <Badge className="min-w-[72px] justify-center bg-green-50 text-green-700 border-green-200">
             正常
+          </Badge>
+        );
+      case "unauthorized":
+        return (
+          <Badge className="min-w-[90px] justify-center bg-amber-50 text-amber-700 border-amber-200">
+            未授权/失效
           </Badge>
         );
       case "error":
@@ -1543,7 +1570,12 @@ export default function ReceptionChannels() {
       ) {
         stats.stale += 1;
       }
-      if (syncStatus === "failed" || syncStatus === "error" || status === "error") {
+      if (
+        syncStatus === "failed" ||
+        syncStatus === "error" ||
+        status === "error" ||
+        status === "unauthorized"
+      ) {
         stats.failed += 1;
       }
     });
@@ -1556,7 +1588,7 @@ export default function ReceptionChannels() {
       stats.pending = Number(overview.pending_sync || 0);
     }
     return stats;
-  }, [channels, overview, syncingChannelIDs]);
+  }, [channels, overview]);
 
   const overviewTipText = (code: string): string => {
     switch ((code || "").trim()) {
@@ -1731,11 +1763,7 @@ export default function ReceptionChannels() {
                 ? channels.map((channel) => (
                     <tr
                       key={channel.open_kfid || channel.name}
-                      className={`hover:bg-gray-50 transition-colors group ${
-                        getEffectiveSyncStatus(channel) === "syncing"
-                          ? "bg-blue-50/40"
-                          : ""
-                      }`}
+                      className="hover:bg-gray-50 transition-colors group"
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -1753,9 +1781,6 @@ export default function ReceptionChannels() {
                           <span className="font-medium text-gray-900">
                             {getDisplayName(channel)}
                           </span>
-                          {getEffectiveSyncStatus(channel) === "syncing" ? (
-                            <span className="inline-flex h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-                          ) : null}
                         </div>
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-gray-500">
@@ -1828,27 +1853,6 @@ export default function ReceptionChannels() {
                               配置路由
                             </Button>
                           </Link>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-gray-600 hover:bg-gray-100 h-8"
-                            disabled={
-                              !(channel.open_kfid || "").trim() ||
-                              syncingChannelIDs.has((channel.open_kfid || "").trim())
-                            }
-                            aria-label={`刷新${getDisplayName(channel)}`}
-                            title="刷新此渠道"
-                            onClick={() => {
-                              void handleSyncChannel(channel, { source: "list" });
-                            }}
-                          >
-                            {syncingChannelIDs.has((channel.open_kfid || "").trim()) ? (
-                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-4 w-4 mr-1" />
-                            )}
-                            刷新
-                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -2330,23 +2334,6 @@ export default function ReceptionChannels() {
                   ).trim(),
                 )}
               </span>
-              <Button
-                variant="link"
-                size="sm"
-                className="text-blue-600 p-0 h-auto text-xs"
-                disabled={
-                  !getDetailOpenKFID() ||
-                  syncingChannelIDs.has(getDetailOpenKFID())
-                }
-                aria-label="刷新当前接待渠道"
-                onClick={() => {
-                  const channel = selectedChannelDetail?.channel || selectedChannel;
-                  if (!channel) return;
-                  void handleSyncChannel(channel, { source: "detail" });
-                }}
-              >
-                {syncingChannelIDs.has(getDetailOpenKFID()) ? "刷新中..." : "刷新此渠道"}
-              </Button>
             </div>
           </div>
         )}
