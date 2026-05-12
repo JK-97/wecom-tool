@@ -58,6 +58,16 @@ function resolveFallbackReason(reason: FrameFailureReason): string {
   }
 }
 
+function readDatasetValue(event: unknown, key: string): string {
+  if (!event || typeof event !== "object") return ""
+  const target = (event as { currentTarget?: unknown }).currentTarget
+  if (!target || typeof target !== "object") return ""
+  const dataset = (target as { dataset?: unknown }).dataset
+  if (!dataset || typeof dataset !== "object") return ""
+  const value = (dataset as Record<string, unknown>)[key]
+  return typeof value === "string" ? value.trim() : `${value || ""}`.trim()
+}
+
 function buildTemplate(): string {
   return `
 <view class="group-ops-list" ref="${ROOT_REF}">
@@ -494,8 +504,8 @@ export function GroupOperationsListOpenDataFrame(props: {
           template: buildTemplate(),
           style: buildStyle(),
           methods: {
-            handleOpenDetail(event: { currentTarget?: { dataset?: Record<string, unknown> } }) {
-              const chatID = `${event?.currentTarget?.dataset?.chatid || ""}`.trim()
+            handleOpenDetail(event: unknown) {
+              const chatID = readDatasetValue(event, "chatid")
               if (!chatID || !openDetailRef.current) return
               openDetailRef.current(chatID)
             },

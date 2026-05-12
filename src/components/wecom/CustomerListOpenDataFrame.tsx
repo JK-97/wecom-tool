@@ -53,6 +53,16 @@ function resolveFallbackReason(reason: FrameFailureReason): string {
   }
 }
 
+function readDatasetValue(event: unknown, key: string): string {
+  if (!event || typeof event !== "object") return ""
+  const target = (event as { currentTarget?: unknown }).currentTarget
+  if (!target || typeof target !== "object") return ""
+  const dataset = (target as { dataset?: unknown }).dataset
+  if (!dataset || typeof dataset !== "object") return ""
+  const value = (dataset as Record<string, unknown>)[key]
+  return typeof value === "string" ? value.trim() : `${value || ""}`.trim()
+}
+
 function buildTemplate(): string {
   return `
 <view class="customer-list" ref="${ROOT_REF}">
@@ -491,18 +501,18 @@ export function CustomerListOpenDataFrame(props: {
             handleToggleAll() {
               toggleAllRef.current?.()
             },
-            handleToggleRow(event: { currentTarget?: { dataset?: Record<string, unknown> } }) {
-              const externalUserID = `${event?.currentTarget?.dataset?.externaluserid || ""}`.trim()
+            handleToggleRow(event: unknown) {
+              const externalUserID = readDatasetValue(event, "externaluserid")
               if (!externalUserID) return
               toggleRowRef.current?.(externalUserID)
             },
-            handleOpenDetail(event: { currentTarget?: { dataset?: Record<string, unknown> } }) {
-              const externalUserID = `${event?.currentTarget?.dataset?.externaluserid || ""}`.trim()
+            handleOpenDetail(event: unknown) {
+              const externalUserID = readDatasetValue(event, "externaluserid")
               if (!externalUserID) return
               openDetailRef.current?.(externalUserID)
             },
-            handleOpenEdit(event: { currentTarget?: { dataset?: Record<string, unknown> } }) {
-              const externalUserID = `${event?.currentTarget?.dataset?.externaluserid || ""}`.trim()
+            handleOpenEdit(event: unknown) {
+              const externalUserID = readDatasetValue(event, "externaluserid")
               if (!externalUserID) return
               openEditRef.current?.(externalUserID)
             },
