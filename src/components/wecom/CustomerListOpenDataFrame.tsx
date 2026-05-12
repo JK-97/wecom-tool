@@ -585,70 +585,70 @@ export function CustomerListOpenDataFrame(props: {
     )
   }
 
-  if (fallbackMode) {
-    return (
-      <div className="w-full">
-        {error ? (
-          <div className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
-            {error}
-          </div>
-        ) : null}
-        {props.rows.map((row) => (
-          <div key={row.externalUserID} className="grid min-h-[84px] grid-cols-[56px_minmax(320px,1.65fr)_120px_120px_minmax(180px,1.1fr)_168px_180px_96px] items-center border-b border-gray-100 bg-white">
-            <div className="flex justify-center px-4">
-              <div className={`flex h-4 w-4 items-center justify-center rounded border ${row.selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white"}`}>
-                {row.selected ? <span className="text-[11px] font-bold">✓</span> : null}
-              </div>
+  const standardList = (
+    <div className="w-full">
+      {error ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
+          {error}
+        </div>
+      ) : null}
+      {props.rows.map((row) => (
+        <div key={row.externalUserID} className="grid min-h-[84px] grid-cols-[56px_minmax(320px,1.65fr)_120px_120px_minmax(180px,1.1fr)_168px_180px_96px] items-center border-b border-gray-100 bg-white">
+          <div className="flex justify-center px-4">
+            <div className={`flex h-4 w-4 items-center justify-center rounded border ${row.selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white"}`}>
+              {row.selected ? <span className="text-[11px] font-bold">✓</span> : null}
             </div>
-            <button
-              type="button"
-              className="flex min-w-0 items-center gap-3 px-4 text-left"
-              onClick={() => props.onOpenDetail?.(row.externalUserID)}
-            >
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm font-semibold text-gray-600">
-                {row.customerInitial}
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-gray-900">{row.customerName}</div>
-                <div className="truncate text-[11px] text-gray-400">{row.mobileMasked}</div>
-              </div>
-            </button>
-            <div className="px-4 text-sm text-gray-900">{row.sourceChannel}</div>
-            <div className="px-4">
-              <span className="inline-flex min-h-6 items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-700">
-                {row.stage}
+          </div>
+          <button
+            type="button"
+            className="flex min-w-0 items-center gap-3 px-4 text-left"
+            onClick={() => props.onOpenDetail?.(row.externalUserID)}
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm font-semibold text-gray-600">
+              {row.customerInitial}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-gray-900">{row.customerName}</div>
+              <div className="truncate text-[11px] text-gray-400">{row.mobileMasked}</div>
+            </div>
+          </button>
+          <div className="px-4 text-sm text-gray-900">{row.sourceChannel}</div>
+          <div className="px-4">
+            <span className="inline-flex min-h-6 items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-700">
+              {row.stage}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 px-4">
+            {row.hasChatdata ? (
+              <span className="inline-flex min-h-5 items-center rounded-full bg-emerald-50 px-2 text-[10px] font-semibold text-emerald-700">
+                已同步聊天内容
               </span>
-            </div>
-            <div className="flex flex-wrap gap-1.5 px-4">
-              {row.hasChatdata ? (
-                <span className="inline-flex min-h-5 items-center rounded-full bg-emerald-50 px-2 text-[10px] font-semibold text-emerald-700">
-                  已同步聊天内容
-                </span>
-              ) : null}
-              {row.tags.map((tag) => (
-                <span key={`${row.externalUserID}-${tag}`} className="inline-flex min-h-5 items-center rounded-full bg-gray-100 px-2 text-[10px] font-semibold text-gray-600">
-                  {tag}
-                </span>
-              ))}
-            </div>
-            <div className="px-4">
-              <div className="text-sm text-gray-900">{row.lastInteractionAt}</div>
-              <div className="mt-1 truncate text-[11px] text-gray-400">{row.lastInteractionLabel}</div>
-            </div>
-            <div className="px-4 text-sm text-gray-900">{row.ownerName}</div>
-            <div className="flex justify-end gap-3 px-4 text-sm font-semibold">
-              <button type="button" className="text-gray-500" onClick={() => props.onOpenEdit?.(row.externalUserID)}>
-                编辑
-              </button>
-              <button type="button" className="text-blue-600" onClick={() => props.onOpenDetail?.(row.externalUserID)}>
-                详情
-              </button>
-            </div>
+            ) : null}
+            {row.tags.map((tag) => (
+              <span key={`${row.externalUserID}-${tag}`} className="inline-flex min-h-5 items-center rounded-full bg-gray-100 px-2 text-[10px] font-semibold text-gray-600">
+                {tag}
+              </span>
+            ))}
           </div>
-        ))}
-      </div>
-    )
-  }
+          <div className="px-4">
+            <div className="text-sm text-gray-900">{row.lastInteractionAt}</div>
+            <div className="mt-1 truncate text-[11px] text-gray-400">{row.lastInteractionLabel}</div>
+          </div>
+          <div className="px-4 text-sm text-gray-900">{row.ownerName}</div>
+          <div className="flex justify-end gap-3 px-4 text-sm font-semibold">
+            <button type="button" className="text-gray-500" onClick={() => props.onOpenEdit?.(row.externalUserID)}>
+              编辑
+            </button>
+            <button type="button" className="text-blue-600" onClick={() => props.onOpenDetail?.(row.externalUserID)}>
+              详情
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+
+  if (fallbackMode) return standardList
 
   if (error) {
     return (
@@ -659,14 +659,17 @@ export function CustomerListOpenDataFrame(props: {
   }
 
   return (
-    <div
-      ref={hostRef}
-      data-estimated-height={estimatedFrameHeight(props.rows)}
-      className="w-full"
-      style={{
-        minHeight: estimatedFrameHeight(props.rows),
-        minWidth: CUSTOMER_LIST_MIN_WIDTH,
-      }}
-    />
+    <div className="relative w-full">
+      <div
+        ref={hostRef}
+        data-estimated-height={estimatedFrameHeight(props.rows)}
+        className={ready ? "w-full" : "pointer-events-none absolute inset-x-0 top-0 -z-10 w-full opacity-0"}
+        style={{
+          minHeight: ready ? estimatedFrameHeight(props.rows) : 0,
+          minWidth: CUSTOMER_LIST_MIN_WIDTH,
+        }}
+      />
+      {ready ? null : standardList}
+    </div>
   )
 }

@@ -470,17 +470,7 @@ export function GroupOperationsListOpenDataFrame(props: {
     const mount = async () => {
       const host = hostRef.current
       if (!host) return
-      console.info("[group-ops/open-data] mount begin", {
-        rowCount: frameData.rows.length,
-        hostWidth: Math.ceil(host.getBoundingClientRect().width),
-        hostHeight: Math.ceil(host.getBoundingClientRect().height),
-      })
       const runtime = await ensureOpenDataReady()
-      console.info("[group-ops/open-data] runtime ready", {
-        canUseOpenData: runtime.canUseOpenData,
-        availability: runtime.availability,
-        reason: runtime.reason || "",
-      })
       if (cancelled) return
       if (!runtime.canUseOpenData) {
         failToFallback("unsupported", runtime.reason)
@@ -497,7 +487,6 @@ export function GroupOperationsListOpenDataFrame(props: {
             failToFallback("runtime_error", nextError instanceof Error ? nextError.message : nextError)
           },
         })
-        console.info("[group-ops/open-data] factory created")
 
         instanceRef.current = factory.createOpenDataFrame({
           el: host,
@@ -529,10 +518,6 @@ export function GroupOperationsListOpenDataFrame(props: {
             failToFallback("runtime_error", nextError instanceof Error ? nextError.message : nextError)
           },
         })
-        console.info("[group-ops/open-data] instance created", {
-          hasIframe: instanceRef.current?.el instanceof HTMLIFrameElement,
-          hostChildCount: host.childElementCount,
-        })
         if (instanceRef.current) {
           primeFrameElement(instanceRef.current, host, frameData.rows)
         }
@@ -544,21 +529,12 @@ export function GroupOperationsListOpenDataFrame(props: {
       if (instanceRef.current?.el && instanceRef.current.el.parentElement !== host) {
         primeFrameElement(instanceRef.current, host, frameData.rows)
         host.replaceChildren(instanceRef.current.el)
-        console.info("[group-ops/open-data] iframe appended", {
-          hostChildCount: host.childElementCount,
-        })
       }
 
       mountWatchTimer = window.setTimeout(() => {
         if (cancelled || ready || fallbackMode) return
         const currentHost = hostRef.current
         const hasMountedFrame = Boolean(currentHost?.querySelector("iframe"))
-        console.info("[group-ops/open-data] mount watch", {
-          hasMountedFrame,
-          hostChildCount: currentHost?.childElementCount || 0,
-          ready,
-          fallbackMode,
-        })
         if (!hasMountedFrame) {
           failToFallback("mount_missing")
         }
@@ -603,81 +579,81 @@ export function GroupOperationsListOpenDataFrame(props: {
     )
   }
 
-  if (fallbackMode) {
-    return (
-      <div className="w-full">
-        {error ? (
-          <div className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
-            {error}
+  const standardList = (
+    <div className="w-full">
+      {error ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
+          {error}
+        </div>
+      ) : null}
+      {props.rows.map((row) => (
+        <button
+          key={row.chatID}
+          type="button"
+          className="flex min-h-[96px] w-full items-center border-b border-gray-100 bg-white text-left transition hover:bg-gray-50"
+          onClick={() => props.onOpenDetail?.(row.chatID)}
+        >
+          <div className="w-14 px-6 py-4">
+            <div className="h-[14px] w-[14px] rounded border border-gray-300 bg-white" />
           </div>
-        ) : null}
-        {props.rows.map((row) => (
-          <button
-            key={row.chatID}
-            type="button"
-            className="flex min-h-[96px] w-full items-center border-b border-gray-100 bg-white text-left transition hover:bg-gray-50"
-            onClick={() => props.onOpenDetail?.(row.chatID)}
-          >
-            <div className="w-14 px-6 py-4">
-              <div className="h-[14px] w-[14px] rounded border border-gray-300 bg-white" />
-            </div>
-            <div className="flex flex-1 items-center gap-3 px-6 py-4">
-              <div className="flex items-center">
-                {(row.previewMembers.length > 0 ? row.previewMembers : [{ key: `${row.chatID}-fallback`, displayInitial: row.nameInitial }]).map((member, index) => (
-                  <div
-                    key={member.key}
-                    className={`flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-indigo-50 text-[13px] font-semibold text-slate-600 ${index > 0 ? "-ml-2" : ""}`}
-                  >
-                    {member.displayInitial}
-                  </div>
-                ))}
-                {row.showMemberOverflow ? (
-                  <div className="-ml-2 flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-slate-50 text-xs font-bold text-slate-500">
-                    ...
-                  </div>
-                ) : null}
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-gray-900">{row.name}</div>
-                <div className="truncate text-xs text-slate-400">{row.chatID}</div>
-              </div>
-            </div>
-            <div className="w-[92px] px-3 py-4 text-sm text-gray-900">{row.memberCount}</div>
-            <div className="w-[110px] px-3 py-4">
-              <span
-                className={[
-                  "inline-flex min-h-6 items-center rounded-full border px-2.5 text-[11px] font-semibold",
-                  row.statusTone === "warning"
-                    ? "border-orange-300 bg-orange-50 text-orange-700"
-                    : row.statusTone === "success"
-                      ? "border-green-300 bg-green-50 text-green-700"
-                      : "border-blue-200 bg-blue-50 text-blue-700",
-                ].join(" ")}
-              >
-                {row.statusLabel}
-              </span>
-            </div>
-            <div className="flex w-[180px] flex-wrap gap-1.5 px-3 py-4">
-              {row.tags.map((tag) => (
-                <span
-                  key={`${row.chatID}-${tag}`}
-                  className="inline-flex min-h-5 items-center rounded-full bg-gray-100 px-2 text-[10px] font-semibold text-gray-600"
+          <div className="flex flex-1 items-center gap-3 px-6 py-4">
+            <div className="flex items-center">
+              {(row.previewMembers.length > 0 ? row.previewMembers : [{ key: `${row.chatID}-fallback`, displayInitial: row.nameInitial }]).map((member, index) => (
+                <div
+                  key={member.key}
+                  className={`flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-indigo-50 text-[13px] font-semibold text-slate-600 ${index > 0 ? "-ml-2" : ""}`}
                 >
-                  {tag}
-                </span>
+                  {member.displayInitial}
+                </div>
               ))}
+              {row.showMemberOverflow ? (
+                <div className="-ml-2 flex h-[30px] w-[30px] items-center justify-center rounded-full border-2 border-white bg-slate-50 text-xs font-bold text-slate-500">
+                  ...
+                </div>
+              ) : null}
             </div>
-            <div className="w-[176px] px-3 py-4">
-              <div className="text-sm text-gray-900">{row.lastSyncedAt}</div>
-              <div className="mt-1 truncate text-[11px] text-gray-400">{row.noticePreview}</div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-gray-900">{row.name}</div>
+              <div className="truncate text-xs text-slate-400">{row.chatID}</div>
             </div>
-            <div className="w-[180px] px-3 py-4 text-sm text-gray-900">{row.ownerName}</div>
-            <div className="w-[84px] px-6 py-4 text-right text-sm font-semibold text-blue-600">详情</div>
-          </button>
-        ))}
-      </div>
-    )
-  }
+          </div>
+          <div className="w-[92px] px-3 py-4 text-sm text-gray-900">{row.memberCount}</div>
+          <div className="w-[110px] px-3 py-4">
+            <span
+              className={[
+                "inline-flex min-h-6 items-center rounded-full border px-2.5 text-[11px] font-semibold",
+                row.statusTone === "warning"
+                  ? "border-orange-300 bg-orange-50 text-orange-700"
+                  : row.statusTone === "success"
+                    ? "border-green-300 bg-green-50 text-green-700"
+                    : "border-blue-200 bg-blue-50 text-blue-700",
+              ].join(" ")}
+            >
+              {row.statusLabel}
+            </span>
+          </div>
+          <div className="flex w-[180px] flex-wrap gap-1.5 px-3 py-4">
+            {row.tags.map((tag) => (
+              <span
+                key={`${row.chatID}-${tag}`}
+                className="inline-flex min-h-5 items-center rounded-full bg-gray-100 px-2 text-[10px] font-semibold text-gray-600"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+          <div className="w-[176px] px-3 py-4">
+            <div className="text-sm text-gray-900">{row.lastSyncedAt}</div>
+            <div className="mt-1 truncate text-[11px] text-gray-400">{row.noticePreview}</div>
+          </div>
+          <div className="w-[180px] px-3 py-4 text-sm text-gray-900">{row.ownerName}</div>
+          <div className="w-[84px] px-6 py-4 text-right text-sm font-semibold text-blue-600">详情</div>
+        </button>
+      ))}
+    </div>
+  )
+
+  if (fallbackMode) return standardList
 
   if (error) {
     return (
@@ -688,14 +664,17 @@ export function GroupOperationsListOpenDataFrame(props: {
   }
 
   return (
-    <div
-      ref={hostRef}
-      data-estimated-height={estimatedFrameHeight(props.rows)}
-      className="w-full"
-      style={{
-        minHeight: estimatedFrameHeight(props.rows),
-        minWidth: GROUP_LIST_MIN_WIDTH,
-      }}
-    />
+    <div className="relative w-full">
+      <div
+        ref={hostRef}
+        data-estimated-height={estimatedFrameHeight(props.rows)}
+        className={ready ? "w-full" : "pointer-events-none absolute inset-x-0 top-0 -z-10 w-full opacity-0"}
+        style={{
+          minHeight: ready ? estimatedFrameHeight(props.rows) : 0,
+          minWidth: GROUP_LIST_MIN_WIDTH,
+        }}
+      />
+      {ready ? null : standardList}
+    </div>
   )
 }
