@@ -73,9 +73,9 @@ function escapeAttr(value: string): string {
     .replaceAll(">", "&gt;")
 }
 
-// BUGFIX: avatar rendering must go through a tiny OpenDataFrame shell. The
-// page-level address-book bind is fine for names, but avatars are the part
-// that has proven unstable unless the conversation-style frame is used.
+// BUGFIX: avatar display still needs the official OpenDataFrame shell.
+// Page-level ww-open-data binding is fine for text, but avatar rendering
+// becomes flaky after login refactors unless we keep the tiny frame wrapper.
 function buildAvatarTemplate(type: "userAvatar" | "externalUserAvatar", openid: string): string {
   return `
 <view class="wecom-avatar-frame" ref="${AVATAR_ROOT_REF}">
@@ -133,6 +133,7 @@ export function WecomOpenDataAvatar({
   userid,
   openid,
   type = "userAvatar",
+  corpId,
   fallback,
   fallbackSrc,
   className,

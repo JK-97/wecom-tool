@@ -19,11 +19,22 @@ export default function OAuthCallbackPage() {
     let mounted = true
     const code = (searchParams.get("code") || "").trim()
     const state = (searchParams.get("state") || "").trim()
+    const grant = (searchParams.get("grant") || "").trim()
+
+    if (grant !== "") {
+      const params = new URLSearchParams()
+      params.set("grant", grant)
+      window.location.replace(`/api/v1/session/sso/complete?${params.toString()}`)
+      return
+    }
 
     if (code !== "" && state !== "") {
-      const params = new URLSearchParams(searchParams)
-      if (!params.get("next")) {
-        params.set("next", next)
+      const params = new URLSearchParams()
+      params.set("code", code)
+      params.set("state", state)
+      const source = (searchParams.get("source") || "").trim()
+      if (source !== "") {
+        params.set("source", source)
       }
       window.location.replace(`/api/v1/session/oauth/callback?${params.toString()}`)
       return

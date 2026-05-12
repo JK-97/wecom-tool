@@ -4,153 +4,246 @@ import { Navigate, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/Button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card"
 import { useAuth } from "@/context/AuthContext"
-import { getOAuthStartURL } from "@/services/authService"
+import {
+  getOAuthStartURL,
+  getSSOStartConfig,
+  type SSOStartPanelConfig,
+} from "@/services/authService"
 import { normalizeErrorMessage } from "@/services/http"
 import { cn } from "@/lib/utils"
 import { Loader2 } from "lucide-react"
 
+const WECOM_LOGIN_SDK_URL = "https://open.work.weixin.qq.com/wwopen/js/jwxwork-1.0.0.js"
+const GATEWAY_SSO_CALLBACK_PATH = "/api/v1/session/sso/callback"
+
+let loginSDKPromise: Promise<void> | null = null
+
+function ensureWeComLoginSDK(): Promise<void> {
+  if (loginSDKPromise) return loginSDKPromise
+  loginSDKPromise = ensureScript(WECOM_LOGIN_SDK_URL)
+  return loginSDKPromise
+}
+
+function ensureScript(src: string): Promise<void> {
+  if (typeof document === "undefined") return Promise.resolve()
+  const existing = Array.from(document.scripts).find((script) => script.src === src)
+  if (existing) {
+    if (existing.dataset.loaded === "true") return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      existing.addEventListener("load", () => resolve(), { once: true })
+      existing.addEventListener("error", () => reject(new Error(`failed to load ${src}`)), { once: true })
+    })
+  }
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script")
+    script.src = src
+    script.async = true
+    script.referrerPolicy = "origin"
+    script.dataset.wecomLoginSdk = src
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true"
+      resolve()
+    }, { once: true })
+    script.addEventListener("error", () => reject(new Error(`failed to load ${src}`)), { once: true })
+    document.head.appendChild(script)
+  })
+}
+
+function normalizeLoginPanelError(error: unknown): string {
+  if (error && typeof error === "object") {
+    const row = error as Record<string, unknown>
+    const errMsg = typeof row.errMsg === "string" ? row.errMsg.trim() : ""
+    if (errMsg) return errMsg
+    const errCode = typeof row.errCode === "number" && Number.isFinite(row.errCode) ? row.errCode : 0
+    if (errCode) return `企业微信登录失败：${errCode}`
+  }
+  return normalizeErrorMessage(error)
+}
+
+function resolveGatewayCallbackURL(rawRedirectURI: string): URL {
+  const fallback = new URL(GATEWAY_SSO_CALLBACK_PATH, window.location.origin)
+  try {
+    const parsed = new URL(rawRedirectURI, window.location.origin)
+    if (parsed.origin !== window.location.origin) {
+      return fallback
+    }
+    parsed.pathname = GATEWAY_SSO_CALLBACK_PATH
+    parsed.search = ""
+    parsed.hash = ""
+    return parsed
+  } catch {
+    return fallback
+  }
+}
+
+function buildGatewayCallbackURL(rawRedirectURI: string, code: string, state: string): string {
+  const callbackURL = resolveGatewayCallbackURL(rawRedirectURI)
+  callbackURL.searchParams.set("code", code)
+  callbackURL.searchParams.set("state", state)
+  return callbackURL.toString()
+}
+
 export default function LoginPage() {
   const [searchParams] = useSearchParams()
   const { loading, authenticated } = useAuth()
-  const [submitting, setSubmitting] = useState(false)
-  const [autoLoginTriggered, setAutoLoginTriggered] = useState(false)
-  const [showDesktopLoginPanel, setShowDesktopLoginPanel] = useState(false)
+  const panelHostRef = useRef<HTMLDivElement | null>(null)
+  const panelInstanceRef = useRef<ww.WWLoginInstance | null>(null)
+  const [panelConfig, setPanelConfig] = useState<SSOStartPanelConfig | null>(null)
+  const [panelLoading, setPanelLoading] = useState(false)
+  const [panelReady, setPanelReady] = useState(false)
+  const [retryToken, setRetryToken] = useState(0)
+  const [webviewRedirecting, setWebviewRedirecting] = useState(false)
   const [error, setError] = useState("")
-  const loginPanelRef = useRef<HTMLDivElement | null>(null)
-  const loginPanelInstanceRef = useRef<ww.WWLoginInstance | null>(null)
 
   const next = useMemo(() => {
     const raw = (searchParams.get("next") || "").trim()
     return raw || "/main/dashboard"
   }, [searchParams])
   const forceReauth = (searchParams.get("reauth") || "").trim() === "1"
-
+  const urlError = useMemo(() => (searchParams.get("error") || "").trim(), [searchParams])
   const isWeComWebview = useMemo(() => {
     const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent || ""
     return /wxwork/i.test(userAgent)
   }, [])
 
-  const buildLoginSuccessURL = (code: string, state: string, source: string) => {
-    const params = new URLSearchParams()
-    params.set("code", code)
-    if (state.trim() !== "") {
-      params.set("state", state)
+  useEffect(() => {
+    if (!isWeComWebview || loading || (authenticated && !forceReauth)) {
+      return
     }
-    if (source.trim() !== "") {
-      params.set("source", source)
-    }
-    if (next.trim() !== "") {
-      params.set("next", next)
-    }
-    return `/api/v1/session/oauth/callback?${params.toString()}`
-  }
 
-  const mountLoginPanel = async () => {
+    let cancelled = false
+    setWebviewRedirecting(true)
+    setError("")
+
+    void getOAuthStartURL(next, "webview_oauth")
+      .then((url) => {
+        if (cancelled) return
+        window.location.assign(url)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(normalizeErrorMessage(err))
+        setWebviewRedirecting(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authenticated, forceReauth, isWeComWebview, loading, next, retryToken])
+
+  useEffect(() => {
     if (isWeComWebview || loading || (authenticated && !forceReauth)) {
       return
     }
 
-    const host = loginPanelRef.current
+    let cancelled = false
+    setPanelLoading(true)
+    setPanelReady(false)
+    setPanelConfig(null)
+    setError("")
+
+    void getSSOStartConfig(next)
+      .then((config) => {
+        if (cancelled) return
+        setPanelConfig(config)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(normalizeErrorMessage(err))
+      })
+      .finally(() => {
+        if (cancelled) return
+        setPanelLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authenticated, forceReauth, isWeComWebview, loading, next, retryToken])
+
+  useEffect(() => {
+    if (isWeComWebview || loading || (authenticated && !forceReauth) || !panelConfig) {
+      return
+    }
+    const host = panelHostRef.current
     if (!host) {
       return
     }
 
-    loginPanelInstanceRef.current?.unmount()
-    loginPanelInstanceRef.current = null
-    host.replaceChildren()
+    let cancelled = false
+    const clearPanel = () => {
+      panelInstanceRef.current?.unmount()
+      panelInstanceRef.current = null
+      panelHostRef.current?.replaceChildren()
+    }
 
-    try {
-      const startURL = await getOAuthStartURL(next)
-      const parsed = new URL(startURL, window.location.origin)
-      const params = parsed.searchParams
-      const loginType = params.get("login_type")?.trim() || "CorpApp"
-      const appid = params.get("appid")?.trim() || ""
-      const agentid = params.get("agentid")?.trim() || ""
-      const redirectUri = (params.get("redirect_uri") || "").trim()
-      const state = params.get("state")?.trim() || ""
-      const source = "qr_connect"
+    clearPanel()
+    setPanelReady(false)
 
-      if (!appid || !redirectUri) {
-        throw new Error("登录参数不完整，无法初始化企业微信登录组件。")
+    void (async () => {
+      try {
+        await ensureWeComLoginSDK()
+        if (cancelled) return
+        if (typeof ww.createWWLoginPanel !== "function") {
+          throw new Error("企业微信登录组件不可用")
+        }
+
+        // BUGFIX: 会话展示组件要求 Web 登录组件和 open-data 页面同域。
+        // 因此登录面板必须挂载在当前环境域名下，并把 code 回交给本环境 gateway。
+        const redirectURI = resolveGatewayCallbackURL(panelConfig.redirectURI).toString()
+        panelInstanceRef.current = ww.createWWLoginPanel({
+          el: host,
+          params: {
+            login_type: panelConfig.loginType === "CorpApp" ? ww.WWLoginType.corpApp : ww.WWLoginType.serviceApp,
+            appid: panelConfig.appID,
+            redirect_uri: redirectURI,
+            state: panelConfig.state,
+            redirect_type: ww.WWLoginRedirectType.callback,
+            panel_size: panelConfig.panelSize === "small" ? ww.WWLoginPanelSizeType.small : ww.WWLoginPanelSizeType.middle,
+            lang: panelConfig.lang === "en" ? ww.WWLoginLangType.en : ww.WWLoginLangType.zh,
+          },
+          onLoginSuccess({ code }) {
+            const safeCode = (code || "").trim()
+            if (!safeCode) {
+              setError("企业微信登录回调缺少 code")
+              return
+            }
+            window.location.replace(buildGatewayCallbackURL(redirectURI, safeCode, panelConfig.state))
+          },
+          onLoginFail(err) {
+            if (cancelled) return
+            setPanelReady(false)
+            setError(normalizeLoginPanelError(err))
+          },
+        })
+        setPanelReady(true)
+      } catch (err) {
+        if (cancelled) return
+        setError(normalizeLoginPanelError(err))
+        setPanelReady(false)
       }
+    })()
 
-      loginPanelInstanceRef.current = ww.createWWLoginPanel({
-        el: host,
-        params: {
-          login_type: loginType === "ServiceApp" ? ww.WWLoginType.serviceApp : ww.WWLoginType.corpApp,
-          appid,
-          ...(agentid ? { agentid } : {}),
-          redirect_uri: redirectUri,
-          state,
-          redirect_type: ww.WWLoginRedirectType.callback,
-          panel_size: ww.WWLoginPanelSizeType.middle,
-          lang: ww.WWLoginLangType.zh,
-        },
-        onCheckWeComLogin() {
-          // 保留给快速登录面板使用，不额外干预。
-        },
-        onLoginSuccess({ code }) {
-          const target = buildLoginSuccessURL(code, state, source)
-          window.location.assign(target)
-        },
-        onLoginFail(nextError) {
-          setError(nextError?.errMsg || nextError?.errCode ? `登录失败：${nextError.errMsg || nextError.errCode}` : "登录失败，请稍后再试。")
-        },
-      })
-    } catch (err) {
-      setError(normalizeErrorMessage(err))
-    }
-  }
-
-  const startLogin = async () => {
-    if (!isWeComWebview) {
-      setError("")
-      setShowDesktopLoginPanel(true)
-      return
-    }
-    setSubmitting(true)
-    setError("")
-    try {
-      const url = await getOAuthStartURL(next)
-      window.location.assign(url)
-    } catch (err) {
-      setError(normalizeErrorMessage(err))
-      setSubmitting(false)
-    }
-  }
-
-  useEffect(() => {
-    if (loading || (authenticated && !forceReauth) || submitting || autoLoginTriggered) {
-      return
-    }
-    if (!isWeComWebview) {
-      return
-    }
-    setAutoLoginTriggered(true)
-    void startLogin()
-  }, [authenticated, autoLoginTriggered, forceReauth, isWeComWebview, loading, submitting])
-
-  useEffect(() => {
-    if (isWeComWebview || !showDesktopLoginPanel || loading || (authenticated && !forceReauth)) {
-      return
-    }
-    void mountLoginPanel()
     return () => {
-      loginPanelInstanceRef.current?.unmount()
-      loginPanelInstanceRef.current = null
+      cancelled = true
+      clearPanel()
     }
-  }, [authenticated, forceReauth, isWeComWebview, loading, next, showDesktopLoginPanel])
+  }, [authenticated, forceReauth, isWeComWebview, loading, panelConfig])
 
   if (!loading && authenticated && !forceReauth) {
     return <Navigate to={next} replace />
   }
+
+  const visibleError = error || urlError
+  const showLoading = loading || webviewRedirecting || panelLoading || (Boolean(panelConfig) && !panelReady && !visibleError)
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
       <Card
         className={cn(
           "w-full border-gray-200 shadow-sm",
-          !isWeComWebview && showDesktopLoginPanel ? "max-w-[560px]" : "max-w-md",
+          "max-w-[560px]",
         )}
       >
         <CardHeader className="space-y-2">
@@ -159,38 +252,35 @@ export default function LoginPage() {
             统一登录后可访问客服侧边栏与主站工作台。
           </p>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {loading ? (
+        <CardContent className="space-y-4">
+          {showLoading ? (
             <div className="flex items-center justify-center rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              正在检测登录态...
+              {isWeComWebview ? "检测到企业微信环境，正在自动跳转登录..." : "正在加载企业微信登录面板..."}
             </div>
           ) : null}
-          {!loading && isWeComWebview && autoLoginTriggered && submitting ? (
-            <div className="flex items-center justify-center rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              检测到企业微信环境，正在自动跳转登录...
+
+          {!isWeComWebview ? (
+            <div className="mx-auto flex min-h-[416px] w-full max-w-[480px] items-center justify-center overflow-hidden rounded-md bg-white">
+              <div
+                ref={panelHostRef}
+                className={cn(
+                  "flex min-h-[416px] w-full items-center justify-center transition-opacity",
+                  panelReady ? "opacity-100" : "opacity-50",
+                )}
+              />
             </div>
           ) : null}
-          {isWeComWebview || !showDesktopLoginPanel ? (
-            <Button className="w-full" onClick={() => void startLogin()} disabled={submitting}>
-              {isWeComWebview
-                ? submitting
-                  ? "正在跳转..."
-                  : "使用企业微信登录"
-                : "使用企业微信登录"}
-            </Button>
-          ) : null}
-          {!isWeComWebview && showDesktopLoginPanel ? (
-            <div
-              ref={loginPanelRef}
-              className="mx-auto h-[416px] w-[480px] shrink-0 overflow-hidden rounded-md border border-gray-200 bg-white"
-            />
-          ) : null}
-          {error ? (
+
+          {visibleError ? (
             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-              {error}
+              {visibleError}
             </div>
+          ) : null}
+          {visibleError ? (
+            <Button className="w-full" variant="outline" onClick={() => setRetryToken((value) => value + 1)}>
+              {isWeComWebview ? "重新跳转登录" : "重新加载登录面板"}
+            </Button>
           ) : null}
         </CardContent>
       </Card>

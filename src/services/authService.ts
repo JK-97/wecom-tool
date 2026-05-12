@@ -36,12 +36,23 @@ type SessionResponse = {
   }
 }
 
-type OAuthStartResponse = {
+type StartResponse = {
   code?: number
   message?: string
   data?: {
     oauth_url?: string
+    sso_url?: string
   }
+}
+
+export type SSOStartPanelConfig = {
+  ssoURL: string
+  loginType: "ServiceApp" | "CorpApp"
+  appID: string
+  redirectURI: string
+  state: string
+  panelSize: "middle" | "small"
+  lang: "zh" | "en"
 }
 
 export async function getSession(): Promise<SessionSnapshot> {
@@ -56,30 +67,44 @@ export async function getSession(): Promise<SessionSnapshot> {
   }
 }
 
-export async function getOAuthStartURL(next: string): Promise<string> {
+export async function getSSOStartConfig(next: string): Promise<SSOStartPanelConfig> {
+  const url = await getSSOStartURL(next)
+  return parseSSOStartConfig(url)
+}
+
+async function getSSOStartURL(next: string): Promise<string> {
   const params = new URLSearchParams()
   params.set("response", "json")
-  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent || ""
-  const isWeComWebview = /wxwork/i.test(userAgent)
-  if (isWeComWebview) {
-    params.set("mode", "webview_oauth")
-  }
   if (next.trim() !== "") {
     params.set("next", next.trim())
   }
-  const payload = await requestJSON<OAuthStartResponse>(`/api/v1/session/oauth/start?${params.toString()}`, {
+  const payload = await requestJSON<StartResponse>(`/api/v1/session/sso/start?${params.toString()}`, {
+    skipAuthRedirect: true,
+  })
+  const url = (payload?.data?.sso_url || "").trim()
+  if (url === "") {
+    throw new Error("登录面板初始化失败")
+  }
+
+  return url
+}
+
+export async function getOAuthStartURL(next: string, mode: "webview_oauth"): Promise<string> {
+  const params = new URLSearchParams()
+  params.set("response", "json")
+  params.set("mode", mode)
+  if (next.trim() !== "") {
+    params.set("next", next.trim())
+  }
+  const payload = await requestJSON<StartResponse>(`/api/v1/session/oauth/start?${params.toString()}`, {
     skipAuthRedirect: true,
   })
   const url = (payload?.data?.oauth_url || "").trim()
-  if (url !== "") {
-    return url
+  if (url === "") {
+    throw new Error("登录面板初始化失败")
   }
-  const fallback = new URLSearchParams()
-  if (isWeComWebview) {
-    fallback.set("mode", "webview_oauth")
-  }
-  fallback.set("next", next || "/main/dashboard")
-  return `/api/v1/session/oauth/start?${fallback.toString()}`
+
+  return url
 }
 
 export async function logout(): Promise<void> {
@@ -106,17 +131,17 @@ function mapSessionUser(raw?: Record<string, unknown>): SessionUser | null {
     teamIDs: Array.isArray(raw.team_ids) ? raw.team_ids.map((item) => readString(item)).filter(Boolean) : [],
     departments: Array.isArray(raw.departments)
       ? raw.departments
-          .map((item) => {
+          .flatMap((item) => {
             const row = item && typeof item === "object" ? (item as Record<string, unknown>) : null
-            if (!row) return null
-            return {
+            if (!row) return []
+            const department = {
               departmentID: readNumber(row.department_id),
               name: readString(row.name),
               parentID: readNumber(row.parent_id),
               order: readNumber(row.order),
             }
+            return department.departmentID > 0 ? [department] : []
           })
-          .filter((item): item is NonNullable<typeof item> => Boolean(item) && item.departmentID > 0)
       : [],
   }
 }
@@ -141,4 +166,33 @@ function readString(value: unknown): string {
 
 function readNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
+function parseSSOStartConfig(ssoURL: string): SSOStartPanelConfig {
+  const parsed = new URL(ssoURL)
+  const loginType = normalizeLoginType(parsed.searchParams.get("login_type"))
+  const appID = readString(parsed.searchParams.get("appid"))
+  const redirectURI = readString(parsed.searchParams.get("redirect_uri"))
+  const state = readString(parsed.searchParams.get("state"))
+  if (!appID || !redirectURI || !state) {
+    throw new Error("登录面板参数不完整")
+  }
+  return {
+    ssoURL,
+    loginType,
+    appID,
+    redirectURI,
+    state,
+    panelSize: "middle",
+    lang: "zh",
+  }
+}
+
+function normalizeLoginType(value: string | null): "ServiceApp" | "CorpApp" {
+  switch ((value || "").trim()) {
+    case "CorpApp":
+      return "CorpApp"
+    default:
+      return "ServiceApp"
+  }
 }
