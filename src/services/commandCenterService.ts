@@ -12,6 +12,11 @@ export type CommandCenterSession = {
   open_kfid?: string;
   name?: string;
   source?: string;
+  source_channel_display_name?: string;
+  source_channel_avatar_url?: string;
+  source_channel_status?: string;
+  source_channel_status_label?: string;
+  source_channel_invalid?: boolean;
   session_state?: number;
   session_label?: string;
   state_bucket?: string;
@@ -117,6 +122,8 @@ export type CommandCenterMessage = {
   last_attempt_at?: string;
   delivered_at?: string;
   next_retry_at?: string;
+  notice_kind?: string;
+  notice_status?: string;
 };
 
 export type CommandCenterSessionDetail = {
@@ -155,6 +162,7 @@ export type CommandCenterSessionDetail = {
   warnings?: string[];
   next_cursor?: string;
   next_token?: string;
+  has_more_history?: boolean;
   latest_version?: number;
 };
 

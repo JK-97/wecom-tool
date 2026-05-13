@@ -7,6 +7,10 @@ import { Textarea } from "@/components/ui/Textarea";
 import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName";
 import { hasAPIErrorReason, normalizeErrorMessage } from "@/services/http";
 import {
+  resolveWecomNoticePalette,
+  resolveWecomNoticePresentation,
+} from "@/lib/wecomNoticePresentation";
+import {
   openWecomKfConversation,
   resolveSidebarRuntimeContext,
   sendTextToCurrentSession,
@@ -942,55 +946,49 @@ function resolveToolbarMessageRenderKind(
 }
 
 function renderToolbarNoticeContent(
-  kind: ReturnType<typeof resolveToolbarMessageRenderKind>,
-  content: string,
+  message?: ToolbarConversationMessage | null,
 ): string {
-  if (content) return content;
-  if (kind === "sync_gap_notice") return "同步状态已更新";
-  if (kind === "wecom_recall_notice") return "一条消息已撤回";
-  return "企业微信事件已同步";
+  return resolveWecomNoticePresentation(message).content;
 }
 
 function resolveToolbarNoticeMeta(
-  kind: ReturnType<typeof resolveToolbarMessageRenderKind>,
+  message?: ToolbarConversationMessage | null,
 ): {
   wrapperClassName: string;
   contentClassName: string;
   timeClassName: string;
   compactTimeInline: boolean;
 } {
-  if (kind === "sync_gap_notice") {
+  const notice = resolveWecomNoticePresentation(message);
+  const palette = resolveWecomNoticePalette(message);
+  if (notice.kind === "wecom_recall_notice") {
     return {
-      wrapperClassName:
-        "rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-center shadow-sm",
-      contentClassName: "text-[12px] font-medium leading-5 text-amber-950",
-      timeClassName: "text-[10px] text-amber-600/80",
+      wrapperClassName: `rounded-full px-3 py-2 text-center shadow-sm ${palette.containerClassName}`,
+      contentClassName: `text-[12px] leading-5 ${palette.contentClassName}`,
+      timeClassName: `text-[10px] ${palette.timeClassName}`,
       compactTimeInline: false,
     };
   }
-  if (kind === "wecom_recall_notice") {
+  if (notice.kind === "wecom_event_notice") {
     return {
-      wrapperClassName:
-        "rounded-full border border-slate-200 bg-slate-50/80 px-3 py-2 text-center shadow-sm",
-      contentClassName: "text-[12px] leading-5 text-slate-600",
-      timeClassName: "text-[10px] text-slate-400",
-      compactTimeInline: false,
-    };
-  }
-  if (kind === "wecom_event_notice") {
-    return {
-      wrapperClassName:
-        "rounded-full bg-slate-100/85 px-2.5 py-1 text-center",
-      contentClassName: "text-[11px] leading-4 text-slate-500",
-      timeClassName: "text-[10px] text-slate-400/90",
+      wrapperClassName: `rounded-full px-2.5 py-1 text-center ${palette.containerClassName}`,
+      contentClassName: `text-[11px] leading-4 ${palette.contentClassName}`,
+      timeClassName: `text-[10px] ${palette.timeClassName}`,
       compactTimeInline: true,
     };
   }
+  if (notice.kind === "sync_gap_notice") {
+    return {
+      wrapperClassName: `rounded-2xl border px-3 py-2.5 text-center shadow-sm ${palette.containerClassName}`,
+      contentClassName: `text-[12px] font-medium leading-5 ${palette.contentClassName}`,
+      timeClassName: `text-[10px] ${palette.timeClassName}`,
+      compactTimeInline: false,
+    };
+  }
   return {
-    wrapperClassName:
-      "rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 text-center shadow-sm",
-    contentClassName: "text-[12px] leading-5 text-slate-700",
-    timeClassName: "text-[10px] text-slate-400",
+    wrapperClassName: `rounded-2xl border px-3 py-2 text-center shadow-sm ${palette.containerClassName}`,
+    contentClassName: `text-[12px] leading-5 ${palette.contentClassName}`,
+    timeClassName: `text-[10px] ${palette.timeClassName}`,
     compactTimeInline: false,
   };
 }
@@ -3263,7 +3261,7 @@ export default function CSSidebar() {
                               renderKind === "wecom_recall_notice"
                             ) {
                               const noticeMeta =
-                                resolveToolbarNoticeMeta(renderKind);
+                                resolveToolbarNoticeMeta(message);
                               return (
                                 <div
                                   key={`${message?.id || "msg"}-${idx}`}
@@ -3272,10 +3270,7 @@ export default function CSSidebar() {
                                   {noticeMeta.compactTimeInline ? (
                                     <div className={noticeMeta.contentClassName}>
                                       <span>
-                                        {renderToolbarNoticeContent(
-                                          renderKind,
-                                          content,
-                                        )}
+                                        {renderToolbarNoticeContent(message)}
                                       </span>
                                       {timeText ? (
                                         <span
@@ -3290,10 +3285,7 @@ export default function CSSidebar() {
                                       <div
                                         className={noticeMeta.contentClassName}
                                       >
-                                        {renderToolbarNoticeContent(
-                                          renderKind,
-                                          content,
-                                        )}
+                                        {renderToolbarNoticeContent(message)}
                                       </div>
                                       {timeText ? (
                                         <div

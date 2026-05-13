@@ -72,6 +72,8 @@ export type KFToolbarBootstrap = {
       type?: string;
       status?: string;
       delivery_status?: string;
+      notice_kind?: string;
+      notice_status?: string;
     }>;
     next_cursor?: string;
     next_token?: string;

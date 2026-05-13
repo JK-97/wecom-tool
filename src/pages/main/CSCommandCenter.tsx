@@ -21,6 +21,11 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import {
+  CSCommandCenterMessageBuyerAvatarOpenDataFrame,
+  type CSCommandCenterMessageBuyerAvatarRow,
+} from "@/components/wecom/CSCommandCenterMessageBuyerAvatarOpenDataFrame";
+import { CSCommandCenterSessionAvatarOpenDataFrame } from "@/components/wecom/CSCommandCenterSessionAvatarOpenDataFrame";
 import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName";
 import {
   getCSCommandCenterSessionDetail,
@@ -36,7 +41,6 @@ import {
 } from "@/services/commandCenterService";
 import {
   listKFServicerAssignments,
-  listReceptionChannels,
   type KFServicerAssignment,
 } from "@/services/receptionService";
 import {
@@ -53,6 +57,10 @@ import { executeContactSidebarCommand } from "@/services/sidebarService";
 import { normalizeErrorMessage } from "@/services/http";
 import { useAuth } from "@/context/AuthContext";
 import { useStickyScroll } from "@/hooks/useStickyScroll";
+import {
+  resolveWecomNoticePalette,
+  resolveWecomNoticePresentation,
+} from "@/lib/wecomNoticePresentation";
 
 type SessionTab = "queue" | "active" | "closed";
 type DetailPanelTab = "monitor" | "upgrade" | "session";
@@ -74,6 +82,18 @@ type MessageRenderKind =
   | "sync_gap_notice"
   | "wecom_event_notice"
   | "wecom_recall_notice";
+type CommandCenterMessageRenderRow = {
+  key: string;
+  index: number;
+  message: CommandCenterMessage;
+  senderKind: MessageSenderKind;
+  renderKind: MessageRenderKind;
+  outgoing: boolean;
+  isAssistantMessage: boolean;
+  isStaffMessage: boolean;
+  isRecalledMessage: boolean;
+  showBuyerAvatar: boolean;
+};
 
 type SessionActionDescriptor = {
   key: ActionKey;
@@ -213,6 +233,7 @@ type MessageWindowState = {
   messages: CommandCenterMessage[];
   nextCursor: string;
   nextToken: string;
+  hasMoreHistory: boolean;
   latestVersion: number;
 };
 
@@ -220,6 +241,7 @@ const EMPTY_MESSAGE_WINDOW: MessageWindowState = {
   messages: [],
   nextCursor: "",
   nextToken: "",
+  hasMoreHistory: false,
   latestVersion: 0,
 };
 
@@ -383,54 +405,26 @@ function resolveCommandCenterMessageRenderKind(
 }
 
 function resolveCommandCenterNoticeMeta(kind: MessageRenderKind): {
-  containerClassName: string;
-  contentClassName: string;
-  timeClassName: string;
   compactTimeInline: boolean;
 } {
-  if (kind === "sync_gap_notice") {
-    return {
-      containerClassName:
-        "border-amber-200 bg-amber-50/70 text-amber-950 shadow-amber-100/50",
-      contentClassName: "text-amber-950",
-      timeClassName: "text-amber-600/80",
-      compactTimeInline: false,
-    };
-  }
   if (kind === "wecom_recall_notice") {
     return {
-      containerClassName:
-        "border-slate-200 bg-slate-50/80 text-slate-700 shadow-slate-100/50",
-      contentClassName: "text-slate-600",
-      timeClassName: "text-slate-400",
       compactTimeInline: false,
     };
   }
   if (kind === "wecom_event_notice") {
     return {
-      containerClassName: "bg-slate-100/85 text-slate-500",
-      contentClassName: "text-slate-500",
-      timeClassName: "text-slate-400/90",
       compactTimeInline: true,
     };
   }
+  if (kind === "sync_gap_notice") {
+    return {
+      compactTimeInline: false,
+    };
+  }
   return {
-    containerClassName:
-      "border-slate-200 bg-white/80 text-slate-700 shadow-slate-100/60",
-    contentClassName: "text-slate-700",
-    timeClassName: "text-slate-400",
     compactTimeInline: false,
   };
-}
-
-function renderCommandCenterNoticeContent(
-  kind: MessageRenderKind,
-  content: string,
-): string {
-  if (content) return content;
-  if (kind === "sync_gap_notice") return "同步状态已更新";
-  if (kind === "wecom_recall_notice") return "一条消息已撤回";
-  return "企业微信事件已同步";
 }
 
 function resolveCommandCenterNoticeWrapperClass(
@@ -464,46 +458,102 @@ function renderCommandCenterNoticeRow(input: {
   message: CommandCenterMessage;
   kind: MessageRenderKind;
   index: number;
+  rowRef?: (node: HTMLDivElement | null) => void;
 }): ReactNode {
-  const meta = resolveCommandCenterNoticeMeta(input.kind);
   const timeText = (input.message.timestamp || "")
     .replace("T", " ")
     .slice(0, 16);
-  const noticeContent = renderCommandCenterNoticeContent(
-    input.kind,
-    (input.message.content || "").trim(),
-  );
+  const noticePresentation = resolveWecomNoticePresentation(input.message);
+  const noticePalette = resolveWecomNoticePalette(input.message);
+  const meta = resolveCommandCenterNoticeMeta(input.kind);
+  const noticeContent = noticePresentation.content;
   return (
     <div
       key={getCommandCenterMessageKey(input.message, input.index)}
       data-sticky-scroll-item="true"
       className="flex justify-center px-2"
+      ref={input.rowRef}
     >
       <div
-        className={`${input.kind === "wecom_event_notice" ? "text-center" : "text-center shadow-sm"} ${resolveCommandCenterNoticeWrapperClass(input.kind)} ${resolveCommandCenterNoticeRadius(input.kind)} ${resolveCommandCenterNoticePadding(input.kind)} ${meta.containerClassName}`}
+        className={`${input.kind === "wecom_event_notice" ? "text-center" : "text-center shadow-sm"} ${resolveCommandCenterNoticeWrapperClass(input.kind)} ${resolveCommandCenterNoticeRadius(input.kind)} ${resolveCommandCenterNoticePadding(input.kind)} ${noticePalette.containerClassName}`}
       >
         {meta.compactTimeInline ? (
           <p
-            className={`whitespace-nowrap ${resolveCommandCenterNoticeTypography(input.kind)} ${meta.contentClassName}`}
+            className={`whitespace-nowrap ${resolveCommandCenterNoticeTypography(input.kind)} ${noticePalette.contentClassName}`}
           >
             <span>{noticeContent}</span>
             {timeText ? (
-              <span className={`ml-1.5 ${meta.timeClassName}`}>{timeText}</span>
+              <span className={`ml-1.5 ${noticePalette.timeClassName}`}>{timeText}</span>
             ) : null}
           </p>
         ) : (
           <p
-            className={`whitespace-pre-wrap break-words ${resolveCommandCenterNoticeTypography(input.kind)} ${meta.contentClassName}`}
+            className={`whitespace-pre-wrap break-words ${resolveCommandCenterNoticeTypography(input.kind)} ${noticePalette.contentClassName}`}
           >
             {noticeContent}
           </p>
         )}
         {!meta.compactTimeInline && timeText ? (
-          <p className={`mt-1 text-[10px] ${meta.timeClassName}`}>{timeText}</p>
+          <p className={`mt-1 text-[10px] ${noticePalette.timeClassName}`}>{timeText}</p>
         ) : null}
       </div>
     </div>
   );
+}
+
+function resolveSessionSourcePresentation(session?: CommandCenterSession | null): {
+  label: string;
+  title: string;
+  invalid: boolean;
+  statusLabel: string;
+} {
+  const label = (
+    session?.source_channel_display_name ||
+    session?.source ||
+    ""
+  ).trim();
+  const statusLabel = (session?.source_channel_status_label || "").trim();
+  const invalid = Boolean(session?.source_channel_invalid);
+  if (!label) {
+    return { label: "-", title: "", invalid: false, statusLabel: "" };
+  }
+  if (!invalid || !statusLabel) {
+    return { label, title: label, invalid, statusLabel };
+  }
+  return {
+    label,
+    title: `${label}(${statusLabel})`,
+    invalid,
+    statusLabel,
+  };
+}
+
+function resolveSessionSourceAvatar(session?: CommandCenterSession | null): {
+  src: string;
+  fallback: string;
+  alt: string;
+} {
+  const label = (
+    session?.source_channel_display_name ||
+    session?.source ||
+    "客服"
+  ).trim();
+  return {
+    src: (session?.source_channel_avatar_url || "").trim(),
+    fallback: label.slice(0, 1).toUpperCase() || "客",
+    alt: `${label}头像`,
+  };
+}
+
+function buildBuyerAvatarLayoutSignature(
+  rows: CSCommandCenterMessageBuyerAvatarRow[],
+): string {
+  return rows
+    .map(
+      (item) =>
+        `${item.key}\u0001${item.externalUserID}\u0001${item.fallback}\u0001${item.top}\u0001${item.height}\u0001${item.visible ? "1" : "0"}`,
+    )
+    .join("\u0002");
 }
 
 function buildCommandCenterSessionKey(
@@ -849,15 +899,13 @@ export default function CSCommandCenter() {
   const [sessionServicerAssignments, setSessionServicerAssignments] = useState<
     KFServicerAssignment[]
   >([]);
-  const [channelDisplayMap, setChannelDisplayMap] = useState<
-    Record<string, string>
-  >({});
-  const [hasLoadedChannelDisplayMap, setHasLoadedChannelDisplayMap] =
-    useState(false);
   const [isLoadingTransferCandidates, setIsLoadingTransferCandidates] =
     useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [messageBuyerAvatarRows, setMessageBuyerAvatarRows] = useState<
+    CSCommandCenterMessageBuyerAvatarRow[]
+  >([]);
   const [viewFetchedAtMs, setViewFetchedAtMs] = useState(0);
   const [detailFetchedAtMs, setDetailFetchedAtMs] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -873,6 +921,9 @@ export default function CSCommandCenter() {
   const selectedSessionKeyRef = useRef("");
   const sessionsRef = useRef<CommandCenterSession[]>([]);
   const prevSelectedBucketRef = useRef<string>("");
+  const messageContentWrapperRef = useRef<HTMLDivElement | null>(null);
+  const messageRowElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const messageAvatarMeasureFrameRef = useRef<number | null>(null);
   const messageWindowRef = useRef<MessageWindowState>(EMPTY_MESSAGE_WINDOW);
   const realtimeCursorRef = useRef(0);
   const refreshTimerRef = useRef<number | null>(null);
@@ -880,9 +931,9 @@ export default function CSCommandCenter() {
   const refreshQueuedRef = useRef(false);
   const refreshViewRequestedRef = useRef(false);
   const refreshDetailRequestedRef = useRef(false);
-  const viewRefreshPromiseRef = useRef<Promise<CommandCenterViewModel> | null>(
-    null,
-  );
+  const viewRefreshPromiseRef = useRef<
+    Promise<CommandCenterViewModel | null> | null
+  >(null);
   const lastViewRefreshStartedAtRef = useRef(0);
   const trailingViewRefreshTimerRef = useRef<number | null>(null);
   const lastDetailRefreshRef = useRef<{ key: string; at: number }>({
@@ -907,22 +958,6 @@ export default function CSCommandCenter() {
     [sessionServicerAssignments],
   );
 
-  const resolveChannelPresentation = (source?: string) => {
-    const token = (source || "").trim();
-    if (!token) return { label: "-", title: "" };
-    const mapped = (channelDisplayMap[token] || "").trim();
-    if (mapped) {
-      return {
-        label: mapped,
-        title: mapped === token ? "" : token,
-      };
-    }
-    if (!hasLoadedChannelDisplayMap) {
-      return { label: "渠道", title: token };
-    }
-    return { label: "未知渠道", title: token };
-  };
-
   const applyDetailSnapshot = (
     data: CommandCenterSessionDetail | null,
     mode: DetailLoadMode,
@@ -941,6 +976,7 @@ export default function CSCommandCenter() {
           messages: incomingMessages,
           nextCursor: (data.next_cursor || "").trim(),
           nextToken: (data.next_token || "").trim(),
+          hasMoreHistory: Boolean(data.has_more_history),
           latestVersion: Number(data.latest_version || 0),
         };
       }
@@ -953,6 +989,7 @@ export default function CSCommandCenter() {
           ),
           nextCursor: (data.next_cursor || "").trim(),
           nextToken: (data.next_token || "").trim(),
+          hasMoreHistory: Boolean(data.has_more_history),
           latestVersion: Math.max(
             previous.latestVersion,
             Number(data.latest_version || 0),
@@ -967,6 +1004,7 @@ export default function CSCommandCenter() {
         ),
         nextCursor: previous.nextCursor,
         nextToken: previous.nextToken,
+        hasMoreHistory: previous.hasMoreHistory,
         latestVersion: Math.max(
           previous.latestVersion,
           Number(data.latest_version || 0),
@@ -1264,37 +1302,6 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     let alive = true;
-    void listReceptionChannels({ limit: 500 })
-      .then((channels) => {
-        if (!alive) return;
-        const next: Record<string, string> = {};
-        channels.forEach((channel) => {
-          const openKFID = (channel.open_kfid || "").trim();
-          if (!openKFID) return;
-          const label = (
-            channel.display_name ||
-            channel.name ||
-            channel.open_kfid ||
-            ""
-          ).trim();
-          if (!label) return;
-          next[openKFID] = label;
-        });
-        setChannelDisplayMap(next);
-        setHasLoadedChannelDisplayMap(true);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setChannelDisplayMap({});
-        setHasLoadedChannelDisplayMap(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
     void fetchViewSnapshot()
       .then((data) => {
         if (!alive) return;
@@ -1550,20 +1557,48 @@ export default function CSCommandCenter() {
       if (activeTab !== bucket) return false;
       if (!q) return true;
       const joined =
-        `${item.name || ""} ${item.last_message || ""} ${resolveChannelPresentation(item.source).label} ${item.source || ""}`.toLowerCase();
+        `${item.name || ""} ${item.last_message || ""} ${resolveSessionSourcePresentation(item).label} ${item.source || ""}`.toLowerCase();
       return joined.includes(q);
     });
-  }, [
-    activeTab,
-    channelDisplayMap,
-    hasLoadedChannelDisplayMap,
-    keyword,
-    sessions,
-  ]);
+  }, [activeTab, keyword, sessions]);
+
+  const sessionAvatarRows = useMemo(
+    () =>
+      filteredSessions.map((session) => ({
+        sessionKey: buildCommandCenterSessionKey(session),
+        externalUserID: (session.external_userid || "").trim(),
+        fallback: (session.name || "").trim().slice(0, 1).toUpperCase() || "?",
+      })),
+    [filteredSessions],
+  );
 
   const orderedMessages = useMemo(() => {
     return sortCommandCenterMessages(messageWindow.messages);
   }, [messageWindow.messages]);
+  const messageRenderRows = useMemo<CommandCenterMessageRenderRow[]>(
+    () =>
+      orderedMessages.map((message, index) => {
+        const renderKind = resolveCommandCenterMessageRenderKind(message);
+        const senderKind = resolveMessageSenderKind(message);
+        return {
+          key: getCommandCenterMessageKey(message, index),
+          index,
+          message,
+          senderKind,
+          renderKind,
+          outgoing: senderKind !== "customer",
+          isAssistantMessage: senderKind === "assistant",
+          isStaffMessage: senderKind === "staff",
+          isRecalledMessage: renderKind === "recalled_chat",
+          showBuyerAvatar:
+            senderKind === "customer" &&
+            renderKind !== "sync_gap_notice" &&
+            renderKind !== "wecom_event_notice" &&
+            renderKind !== "wecom_recall_notice",
+        };
+      }),
+    [orderedMessages],
+  );
 
   const messageScrollContentKey = useMemo(() => {
     const first = orderedMessages[0];
@@ -1606,9 +1641,7 @@ export default function CSCommandCenter() {
       sessions.filter((item) => resolveSessionBucket(item) === "closed").length,
     [sessions],
   );
-  const hasOlderMessages =
-    messageWindow.nextCursor.trim() !== "" ||
-    messageWindow.nextToken.trim() !== "";
+  const hasOlderMessages = messageWindow.hasMoreHistory;
 
   const handleLoadOlderMessages = async () => {
     if (!selectedSession || isLoadingOlderMessages || !hasOlderMessages) return;
@@ -1809,9 +1842,8 @@ export default function CSCommandCenter() {
   const assignedDisplayForHeader = resolveAssignedDisplay(
     selectedSession || undefined,
   );
-  const selectedSourcePresentation = resolveChannelPresentation(
-    selectedSession?.source,
-  );
+  const selectedSourcePresentation =
+    resolveSessionSourcePresentation(selectedSession);
   const routingRecords = detail?.routing_records || [];
   const routingHistoryRecords = routingRecords.slice(0, 10);
   const visibleRoutingRecords = isRoutingHistoryExpanded
@@ -1872,6 +1904,96 @@ export default function CSCommandCenter() {
     transferCandidates.length,
     isTransferModalOpen,
   );
+  const selectedSourceAvatar = resolveSessionSourceAvatar(currentSessionMeta);
+
+  const setMessageRowElement = (key: string, node: HTMLDivElement | null) => {
+    if (node) {
+      messageRowElementsRef.current.set(key, node);
+      return;
+    }
+    messageRowElementsRef.current.delete(key);
+  };
+
+  const measureMessageBuyerAvatarRows = () => {
+    const buyerSession = currentSessionMeta;
+    const externalUserID = (buyerSession?.external_userid || "").trim();
+    const fallback =
+      (buyerSession?.name || "").trim().slice(0, 1).toUpperCase() || "?";
+    const nextRows = messageRenderRows.map((item) => {
+      const element = messageRowElementsRef.current.get(item.key);
+      return {
+        key: item.key,
+        externalUserID,
+        fallback,
+        top: element ? Math.round(element.offsetTop) : 0,
+        height: element
+          ? Math.max(32, Math.round(element.getBoundingClientRect().height))
+          : 56,
+        visible: item.showBuyerAvatar,
+      } satisfies CSCommandCenterMessageBuyerAvatarRow;
+    });
+    const nextSignature = buildBuyerAvatarLayoutSignature(nextRows);
+    setMessageBuyerAvatarRows((previous) => {
+      return buildBuyerAvatarLayoutSignature(previous) === nextSignature
+        ? previous
+        : nextRows;
+    });
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (messageAvatarMeasureFrameRef.current !== null) {
+      window.cancelAnimationFrame(messageAvatarMeasureFrameRef.current);
+      messageAvatarMeasureFrameRef.current = null;
+    }
+    if (!hasSelectedSession || messageRenderRows.length === 0) {
+      messageRowElementsRef.current.clear();
+      setMessageBuyerAvatarRows((previous) =>
+        previous.length === 0 ? previous : [],
+      );
+      return;
+    }
+
+    messageAvatarMeasureFrameRef.current = window.requestAnimationFrame(() => {
+      messageAvatarMeasureFrameRef.current = null;
+      measureMessageBuyerAvatarRows();
+    });
+
+    return () => {
+      if (messageAvatarMeasureFrameRef.current !== null) {
+        window.cancelAnimationFrame(messageAvatarMeasureFrameRef.current);
+        messageAvatarMeasureFrameRef.current = null;
+      }
+    };
+  }, [
+    currentSessionMeta,
+    hasSelectedSession,
+    hasOlderMessages,
+    isLoadingDetail,
+    messageRenderRows,
+    messageScrollContentKey,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => {
+      if (messageAvatarMeasureFrameRef.current !== null) {
+        window.cancelAnimationFrame(messageAvatarMeasureFrameRef.current);
+      }
+      messageAvatarMeasureFrameRef.current = window.requestAnimationFrame(() => {
+        messageAvatarMeasureFrameRef.current = null;
+        measureMessageBuyerAvatarRows();
+      });
+    };
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (messageAvatarMeasureFrameRef.current !== null) {
+        window.cancelAnimationFrame(messageAvatarMeasureFrameRef.current);
+        messageAvatarMeasureFrameRef.current = null;
+      }
+    };
+  }, [currentSessionMeta, messageRenderRows]);
 
   return (
     <div className="flex h-full gap-5">
@@ -1917,7 +2039,12 @@ export default function CSCommandCenter() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+        <div className="relative flex-1 overflow-y-auto divide-y divide-gray-100">
+          <CSCommandCenterSessionAvatarOpenDataFrame
+            rows={sessionAvatarRows}
+            pending={!view && filteredSessions.length === 0}
+            enabled={filteredSessions.length > 0}
+          />
           {filteredSessions.length === 0 ? (
             <div className="p-4 text-sm text-gray-500">当前筛选下暂无会话</div>
           ) : (
@@ -1960,8 +2087,7 @@ export default function CSCommandCenter() {
                   }}
                 >
                   <div className="flex items-start justify-between mb-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Avatar src="" size="sm" />
+                    <div className="flex min-w-0 items-center gap-2 pl-12">
                       <div className="flex min-w-0 flex-col">
                         <span className="truncate text-sm font-medium text-gray-900">
                           {(session.name || "未命名客户").trim()}
@@ -1969,10 +2095,14 @@ export default function CSCommandCenter() {
                         <div className="mt-0.5 flex min-h-[18px] min-w-0 items-center gap-1">
                           {(() => {
                             const sourcePresentation =
-                              resolveChannelPresentation(session.source);
+                              resolveSessionSourcePresentation(session);
                             return (
                               <Badge
-                                className="max-w-[120px] truncate text-[9px] px-1 py-0 bg-blue-100 text-blue-600 border-none"
+                                className={`max-w-[120px] truncate border-none px-1 py-0 text-[9px] ${
+                                  sourcePresentation.invalid
+                                    ? "bg-slate-100 text-slate-500"
+                                    : "bg-blue-100 text-blue-600"
+                                }`}
                                 title={
                                   sourcePresentation.title ||
                                   sourcePresentation.label
@@ -2107,7 +2237,10 @@ export default function CSCommandCenter() {
                 className="min-w-[72px] truncate text-gray-900"
                 title={selectedSourcePresentation.title || undefined}
               >
-                {selectedSourcePresentation.label}
+                {selectedSourcePresentation.invalid &&
+                selectedSourcePresentation.statusLabel
+                  ? `${selectedSourcePresentation.label}(${selectedSourcePresentation.statusLabel})`
+                  : selectedSourcePresentation.label}
               </span>
             </div>
             <div className="flex min-w-[150px] items-center gap-1.5 text-gray-500">
@@ -2182,7 +2315,21 @@ export default function CSCommandCenter() {
                     className="h-full overflow-y-auto bg-[#F5F7FA] p-6"
                     onScroll={handleChatScroll}
                   >
-                    <div className="flex flex-col gap-6">
+                    <div
+                      ref={messageContentWrapperRef}
+                      className="relative flex flex-col gap-6"
+                    >
+                      <CSCommandCenterMessageBuyerAvatarOpenDataFrame
+                        rows={messageBuyerAvatarRows}
+                        pending={
+                          isLoadingDetail &&
+                          messageRenderRows.some((item) => item.showBuyerAvatar)
+                        }
+                        enabled={
+                          hasSelectedSession &&
+                          messageBuyerAvatarRows.some((item) => item.visible)
+                        }
+                      />
                       {hasOlderMessages ? (
                         <div className="flex justify-center">
                           <Button
@@ -2206,59 +2353,50 @@ export default function CSCommandCenter() {
                           ) : null}
                         </div>
                       ) : (
-                        orderedMessages.map((message, index) => {
-                          const renderKind =
-                            resolveCommandCenterMessageRenderKind(message);
+                        messageRenderRows.map((row) => {
                           if (
-                            renderKind === "sync_gap_notice" ||
-                            renderKind === "wecom_event_notice" ||
-                            renderKind === "wecom_recall_notice"
+                            row.renderKind === "sync_gap_notice" ||
+                            row.renderKind === "wecom_event_notice" ||
+                            row.renderKind === "wecom_recall_notice"
                           ) {
                             return renderCommandCenterNoticeRow({
-                              message,
-                              kind: renderKind,
-                              index,
+                              message: row.message,
+                              kind: row.renderKind,
+                              index: row.index,
+                              rowRef: (node) => setMessageRowElement(row.key, node),
                             });
                           }
 
-                          const senderKind =
-                            resolveMessageSenderKind(message);
-                          const outgoing = senderKind !== "customer";
-                          const isAssistantMessage = senderKind === "assistant";
-                          const isStaffMessage = senderKind === "staff";
-                          const isRecalledMessage =
-                            renderKind === "recalled_chat";
                           return (
                             <div
-                              key={getCommandCenterMessageKey(message, index)}
+                              key={row.key}
                               data-sticky-scroll-item="true"
-                              className={`flex min-w-0 items-start gap-3 ${outgoing ? "flex-row-reverse" : ""}`}
+                              ref={(node) => setMessageRowElement(row.key, node)}
+                              className={`flex min-w-0 items-start gap-3 ${row.outgoing ? "flex-row-reverse" : ""}`}
                             >
-                              {outgoing ? (
-                                <div
-                                  className={`flex h-8 min-w-8 items-center justify-center rounded-full px-2 shrink-0 ${
-                                    isAssistantMessage
-                                      ? "bg-blue-100 text-blue-600"
-                                      : "bg-slate-100 text-slate-600"
-                                  }`}
-                                >
-                                  <span className="text-[10px] font-bold">
-                                    {isAssistantMessage ? "AI" : "客服"}
-                                  </span>
-                                </div>
+                              {row.outgoing ? (
+                                <Avatar
+                                  src={selectedSourceAvatar.src}
+                                  alt={selectedSourceAvatar.alt}
+                                  fallback={selectedSourceAvatar.fallback}
+                                  size="sm"
+                                />
                               ) : (
-                                <Avatar src="" size="sm" />
+                                <div
+                                  className="h-8 w-8 shrink-0"
+                                  aria-hidden="true"
+                                />
                               )}
                               <div className="flex max-w-[70%] min-w-0 flex-col">
-                                {outgoing ? (
+                                {row.outgoing ? (
                                   <div className="mb-1 flex justify-end">
-                                    {isAssistantMessage ? (
+                                    {row.isAssistantMessage ? (
                                       <span className="text-[11px] font-medium text-blue-600">
                                         AI 助手
                                       </span>
-                                    ) : isStaffMessage ? (
+                                    ) : row.isStaffMessage ? (
                                       renderMessageStaffName({
-                                        message,
+                                        message: row.message,
                                         corpId: corpID,
                                         identityLookup: sessionServicerLookup,
                                       })
@@ -2267,25 +2405,25 @@ export default function CSCommandCenter() {
                                 ) : null}
                                 <div
                                   className={`min-w-0 rounded-2xl px-4 py-2.5 shadow-sm ${
-                                    isRecalledMessage
-                                      ? outgoing
+                                    row.isRecalledMessage
+                                      ? row.outgoing
                                         ? "rounded-tr-none border border-dashed border-slate-300 bg-slate-100 text-slate-600"
                                         : "rounded-tl-none border border-dashed border-slate-300 bg-slate-50 text-slate-600"
-                                      : outgoing
+                                      : row.outgoing
                                         ? "rounded-tr-none bg-blue-600 text-white"
                                         : "rounded-tl-none border border-gray-200 bg-white text-gray-800"
                                   }`}
                                 >
                                   <p
                                     className={`whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere] ${
-                                      isRecalledMessage
+                                      row.isRecalledMessage
                                         ? "text-slate-500 line-through decoration-slate-300 decoration-[1.5px]"
                                         : ""
                                     }`}
                                   >
-                                    {(message.content || "").trim()}
+                                    {(row.message.content || "").trim()}
                                   </p>
-                                  {isRecalledMessage ? (
+                                  {row.isRecalledMessage ? (
                                     <div className="mt-2 flex items-center justify-between gap-2">
                                       <span className="inline-flex items-center rounded-full bg-slate-200/80 px-2 py-0.5 text-[10px] font-medium text-slate-600">
                                         已撤回
@@ -2297,14 +2435,14 @@ export default function CSCommandCenter() {
                                   ) : null}
                                   <p
                                     className={`mt-1 text-[10px] ${
-                                      isRecalledMessage
+                                      row.isRecalledMessage
                                         ? "text-slate-400"
-                                        : outgoing
+                                        : row.outgoing
                                           ? "text-blue-100"
                                           : "text-gray-400"
                                     }`}
                                   >
-                                    {(message.timestamp || "")
+                                    {(row.message.timestamp || "")
                                       .replace("T", " ")
                                       .slice(0, 16)}
                                   </p>
