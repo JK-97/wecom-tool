@@ -9,9 +9,18 @@ import {
 
 const AVATAR_ROOT_REF = "wecom-open-data-avatar-root"
 
-type WecomOpenDataAvatarProps = {
-  userid?: string
-  openid?: string
+// 页面级企微身份头像展示组件。
+//
+// 边界说明：
+// 1. 这是“身份 / Profile 展示”组件，不是“会话展示组件”。
+// 2. 它使用的是通用 OpenDataFrame 容器能力，但模板内只承载
+//    <ww-open-data type="userAvatar|externalUserAvatar">。
+// 3. 会话展示组件的边界是 ww-open-message + message-id/secret-key；
+//    本文件没有这些消息语义，因此不能归类为会话展示组件。
+// 4. 这里的 Profile 指成员 / 外部联系人身份展示，不承载会话消息内容。
+// 5. 保留 frame 外壳的原因仅是头像场景的渲染稳定性。
+type WecomProfileAvatarOpenDataFrameProps = {
+  openID?: string
   type?: "userAvatar" | "externalUserAvatar"
   corpId?: string
   fallback?: string
@@ -29,25 +38,10 @@ type AvatarFrameData = {
   openid: string
 }
 
-function readFallback(openid: string, fallback?: string): string {
+function readFallback(openID: string, fallback?: string): string {
   const text = (fallback || "").trim()
   if (text) return text
-  return (openid || "").trim().slice(0, 1).toUpperCase() || "?"
-}
-
-function avatarSizeClass(size: AvatarProps["size"]): string {
-  switch (size) {
-    case "xs":
-      return "h-6 w-6"
-    case "sm":
-      return "h-8 w-8"
-    case "lg":
-      return "h-12 w-12"
-    case "xl":
-      return "h-16 w-16"
-    default:
-      return "h-10 w-10"
-  }
+  return (openID || "").trim().slice(0, 1).toUpperCase() || "?"
 }
 
 function avatarPixelSize(size: AvatarProps["size"]): number {
@@ -65,6 +59,21 @@ function avatarPixelSize(size: AvatarProps["size"]): number {
   }
 }
 
+function avatarSizeClass(size: AvatarProps["size"]): string {
+  switch (size) {
+    case "xs":
+      return "h-6 w-6"
+    case "sm":
+      return "h-8 w-8"
+    case "lg":
+      return "h-12 w-12"
+    case "xl":
+      return "h-16 w-16"
+    default:
+      return "h-10 w-10"
+  }
+}
+
 function escapeAttr(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -73,10 +82,10 @@ function escapeAttr(value: string): string {
     .replaceAll(">", "&gt;")
 }
 
-// BUGFIX: avatar display still needs the official OpenDataFrame shell.
-// Page-level ww-open-data binding is fine for text, but avatar rendering
-// becomes flaky after login refactors unless we keep the tiny frame wrapper.
-function buildAvatarTemplate(type: "userAvatar" | "externalUserAvatar", openid: string): string {
+function buildProfileAvatarOpenDataTemplate(
+  type: "userAvatar" | "externalUserAvatar",
+  openid: string,
+): string {
   return `
 <view class="wecom-avatar-frame" ref="${AVATAR_ROOT_REF}">
   <ww-open-data class="wecom-avatar-node" type="${escapeAttr(type)}" openid="${escapeAttr(openid)}"></ww-open-data>
@@ -84,7 +93,7 @@ function buildAvatarTemplate(type: "userAvatar" | "externalUserAvatar", openid: 
 `
 }
 
-function buildAvatarStyle(width: number, height: number): string {
+function buildProfileAvatarOpenDataStyle(width: number, height: number): string {
   return `
 .wecom-avatar-frame {
   display: block;
@@ -121,7 +130,10 @@ function syncAvatarFrameSize(
   iframe.style.background = "transparent"
 }
 
-function measureAvatarBox(shell: HTMLSpanElement, size: AvatarProps["size"]): { width: number; height: number } {
+function measureAvatarBox(
+  shell: HTMLSpanElement,
+  size: AvatarProps["size"],
+): { width: number; height: number } {
   const fallbackSize = avatarPixelSize(size)
   const rect = shell.getBoundingClientRect()
   const width = Math.max(1, Math.ceil(rect.width || fallbackSize))
@@ -129,9 +141,8 @@ function measureAvatarBox(shell: HTMLSpanElement, size: AvatarProps["size"]): { 
   return { width, height }
 }
 
-export function WecomOpenDataAvatar({
-  userid,
-  openid,
+export function WecomProfileAvatarOpenDataFrame({
+  openID,
   type = "userAvatar",
   corpId,
   fallback,
@@ -143,18 +154,18 @@ export function WecomOpenDataAvatar({
   size = "default",
   enabled = true,
   lazy = true,
-}: WecomOpenDataAvatarProps) {
+}: WecomProfileAvatarOpenDataFrameProps) {
   const hostRef = useRef<HTMLSpanElement | null>(null)
   const shellRef = useRef<HTMLSpanElement | null>(null)
   const instanceRef = useRef<ww.OpenDataFrameInstance<AvatarFrameData> | null>(null)
   const [runtime, setRuntime] = useState<OpenDataRuntime | null>(null)
   const [inViewport, setInViewport] = useState(!lazy)
   const [frameReady, setFrameReady] = useState(false)
-  const safeUserID = (userid || "").trim()
-  const safeOpenID = (openid || "").trim()
+  const safeOpenID = (openID || "").trim()
+  const safeCorpID = (corpId || "").trim()
   const fallbackText = useMemo(
-    () => readFallback(safeUserID || safeOpenID, fallback),
-    [fallback, safeOpenID, safeUserID],
+    () => readFallback(safeOpenID, fallback),
+    [fallback, safeOpenID],
   )
   const shouldBind = enabled && Boolean(safeOpenID) && (lazy ? inViewport : true)
 
@@ -221,8 +232,8 @@ export function WecomOpenDataAvatar({
         instanceRef.current = factory.createOpenDataFrame({
           el: host,
           data: { openid: safeOpenID },
-          template: buildAvatarTemplate(type, safeOpenID),
-          style: buildAvatarStyle(width, height),
+          template: buildProfileAvatarOpenDataTemplate(type, safeOpenID),
+          style: buildProfileAvatarOpenDataStyle(width, height),
           handleMounted() {
             if (cancelled || !instanceRef.current) return
             syncAvatarFrameSize(instanceRef.current, width, height)
@@ -249,12 +260,11 @@ export function WecomOpenDataAvatar({
     }
 
     void mount()
-
     return () => {
       cancelled = true
       dispose()
     }
-  }, [enabled, safeOpenID, shouldBind, size, type])
+  }, [safeOpenID, safeCorpID, size, type, shouldBind])
 
   return (
     <span className="inline-flex min-w-0 flex-col">
@@ -272,14 +282,17 @@ export function WecomOpenDataAvatar({
           alt={alt}
           fallback={fallbackText}
           size={size}
-          className={cn("absolute inset-0 h-full w-full border-0", frameReady ? "opacity-0" : "opacity-100")}
+          className={cn(
+            "absolute inset-0 h-full w-full border-0",
+            frameReady ? "opacity-0" : "opacity-100",
+          )}
         />
         {safeOpenID && enabled ? (
           <span
             ref={hostRef}
             className={cn(
               "absolute inset-0 z-10 block overflow-hidden rounded-full bg-transparent",
-              frameReady ? "opacity-100" : "pointer-events-none opacity-0",
+              runtime?.canUseOpenData ? "opacity-100" : "pointer-events-none opacity-0",
             )}
           />
         ) : null}

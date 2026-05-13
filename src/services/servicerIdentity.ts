@@ -11,6 +11,7 @@ export type ServicerIdentitySource = {
   assigned_raw_servicer_userid?: string;
   assigned_resolved_userid?: string;
   assigned_resolved_open_userid?: string;
+  sender_display_userid?: string;
   display_identity?: string;
   displayIdentity?: string;
   display_userid?: string;
@@ -48,7 +49,7 @@ export type ServicerIdentityView = {
   resolvedUserID: string;
   resolvedOpenUserID: string;
   stableIdentity: string;
-  displayIdentity: string;
+  openDataOpenID: string;
   displayFallback: string;
   resolutionStatus: string;
 };
@@ -79,7 +80,9 @@ export function resolveServicerIdentityView(
     resolvedOpenUserID,
     rawServicerUserID,
   );
-  const displayIdentity = firstNonEmpty(
+  const openDataOpenID = firstNonEmpty(
+    resolvedOpenUserID,
+    source?.sender_display_userid,
     source?.display_identity,
     source?.displayIdentity,
     source?.assigned_display_userid,
@@ -104,7 +107,7 @@ export function resolveServicerIdentityView(
     resolvedUserID,
     resolvedOpenUserID,
     stableIdentity,
-    displayIdentity,
+    openDataOpenID,
     displayFallback,
     resolutionStatus,
   };
@@ -121,7 +124,7 @@ export function buildServicerIdentityLookup(
       identity.resolvedUserID,
       identity.resolvedOpenUserID,
       identity.stableIdentity,
-      identity.displayIdentity,
+      identity.openDataOpenID,
       identity.displayFallback,
     ];
     keys.forEach((key) => {
@@ -159,13 +162,13 @@ export function buildRawServicerIDsByStableIdentity(
     if (!rawID) return;
     const stableID = (identity.stableIdentity || rawID).trim();
     [
-      stableID,
-      identity.rawServicerUserID,
-      identity.resolvedUserID,
-      identity.resolvedOpenUserID,
-      identity.displayIdentity,
-      identity.displayFallback,
-    ].forEach((key) => {
+        stableID,
+        identity.rawServicerUserID,
+        identity.resolvedUserID,
+        identity.resolvedOpenUserID,
+        identity.openDataOpenID,
+        identity.displayFallback,
+      ].forEach((key) => {
       const normalized = (key || "").trim();
       if (!normalized) return;
       const bucket = next.get(normalized) || [];

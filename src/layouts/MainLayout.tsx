@@ -3,9 +3,9 @@ import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/Button"
 import { useAuth } from "@/context/AuthContext"
-import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
-import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment"
+import { WecomProfileAvatarOpenDataFrame } from "@/components/wecom/WecomProfileAvatarOpenDataFrame"
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName"
+import { WecomDirectoryOpenDataDepartment } from "@/components/wecom/WecomDirectoryOpenDataDepartment"
 
 const navItems = [
   { name: "微信客服中心", path: "/main/cs-center", icon: MessageSquare },
@@ -45,8 +45,8 @@ function MainLayoutDepartmentList({
         {validDepartments.map((department, index) => (
           <span key={department.departmentID} className="inline-flex min-w-0 items-center">
             {index > 0 ? <span className="mx-1 text-gray-400">/</span> : null}
-            <WecomOpenDataDepartment
-              departmentId={department.departmentID}
+            <WecomDirectoryOpenDataDepartment
+              departmentID={department.departmentID}
               corpId={corpId}
               fallback={(department.name || "").trim() || `部门 #${department.departmentID}`}
               className="max-w-[120px] truncate"
@@ -103,18 +103,16 @@ export default function MainLayout() {
         </nav>
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-3">
-            <WecomOpenDataAvatar
-              userid={auth.user?.userid || ""}
-              openid={auth.user?.openUserID || ""}
+            <WecomProfileAvatarOpenDataFrame
+              openID={auth.user?.openUserID || ""}
               corpId={auth.corp?.id}
               fallback={auth.user?.userid || "U"}
-              className="h-8 w-8 border border-gray-100"
+              className="border border-gray-100"
               size="sm"
             />
             <div className="flex flex-col">
-              <WecomOpenDataName
-                userid={auth.user?.userid || ""}
-                openid={auth.user?.openUserID || ""}
+              <WecomDirectoryOpenDataName
+                openID={auth.user?.openUserID || ""}
                 corpId={auth.corp?.id}
                 fallback={auth.user?.userid || "成员"}
                 className="truncate text-sm font-medium text-gray-900"

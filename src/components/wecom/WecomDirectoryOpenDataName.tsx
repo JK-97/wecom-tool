@@ -1,11 +1,11 @@
 import { createElement, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { bindOpenDataElement, ensureOpenDataReady, type OpenDataRuntime } from "@/services/openDataService"
 
-// 通讯录名称展示走页面级 ww-open-data 直绑。
-// userid 仅用于 fallback 展示；真正的 open-data 身份必须由后端直接返回 openid。
-type WecomOpenDataNameProps = {
-  userid?: string
-  openid?: string
+// 页面级通讯录成员名称展示组件。
+// 这里走的是通讯录展示组件语义，不是会话模板 open-data。
+// 真正可渲染的身份只有 openID；其余值都只能作为 fallback 文本。
+type WecomDirectoryOpenDataNameProps = {
+  openID?: string
   type?: "userName" | "externalUserName" | "chatName"
   corpId?: string
   fallback?: string
@@ -14,30 +14,28 @@ type WecomOpenDataNameProps = {
   showHint?: boolean
 }
 
-function readFallback(userid: string, fallback?: string): string {
+function readFallback(openID: string, fallback?: string): string {
   const text = (fallback || "").trim()
   if (text) return text
-  return (userid || "").trim() || "-"
+  return (openID || "").trim() || "-"
 }
 
-export function WecomOpenDataName({
-  userid,
-  openid,
+export function WecomDirectoryOpenDataName({
+  openID,
   type = "userName",
   corpId,
   fallback,
   className,
   hintClassName,
   showHint = false,
-}: WecomOpenDataNameProps) {
+}: WecomDirectoryOpenDataNameProps) {
   const ref = useRef<HTMLElement | null>(null)
   const [runtime, setRuntime] = useState<OpenDataRuntime | null>(null)
-  const safeUserID = (userid || "").trim()
-  const safeOpenID = (openid || "").trim()
+  const safeOpenID = (openID || "").trim()
   const safeCorpID = (corpId || "").trim()
   const fallbackText = useMemo(
-    () => readFallback(safeUserID || safeOpenID, fallback),
-    [fallback, safeOpenID, safeUserID],
+    () => readFallback(safeOpenID, fallback),
+    [fallback, safeOpenID],
   )
 
   useLayoutEffect(() => {

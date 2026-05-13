@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/Card";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName";
 import { hasAPIErrorReason, normalizeErrorMessage } from "@/services/http";
 import {
   openWecomKfConversation,
@@ -1971,10 +1971,18 @@ export default function CSSidebar() {
     bootstrap?.suggestions?.generated_at,
   );
   const sampleOpenDataMessage = conversationMessages.find((message) =>
-    Boolean((message?.sender_display_userid || "").trim()),
+    Boolean(
+      (
+        message?.sender_resolved_open_userid ||
+        message?.sender_display_userid ||
+        ""
+      ).trim(),
+    ),
   );
-  const sampleOpenDataUserID = (
-    sampleOpenDataMessage?.sender_display_userid || ""
+  const sampleOpenDataOpenID = (
+    sampleOpenDataMessage?.sender_resolved_open_userid ||
+    sampleOpenDataMessage?.sender_display_userid ||
+    ""
   ).trim();
   const sampleOpenDataFallback = (
     sampleOpenDataMessage?.sender_display_fallback ||
@@ -2486,7 +2494,7 @@ export default function CSSidebar() {
           query.external_userid
         }
         sessionCandidates={bootstrap?.selection?.candidates || []}
-        sampleOpenDataUserID={sampleOpenDataUserID}
+        sampleOpenDataOpenID={sampleOpenDataOpenID}
         sampleOpenDataFallback={sampleOpenDataFallback}
       />
     );
@@ -3237,8 +3245,10 @@ export default function CSSidebar() {
                               message?.timestamp,
                             );
                             const content = (message?.content || "").trim();
-                            const staffDisplayUserID = (
-                              message?.sender_display_userid || ""
+                            const staffOpenDataOpenID = (
+                              message?.sender_resolved_open_userid ||
+                              message?.sender_display_userid ||
+                              ""
                             ).trim();
                             const staffFallback = (
                               message?.sender_display_fallback ||
@@ -3320,9 +3330,9 @@ export default function CSSidebar() {
                                         AI 回复
                                       </span>
                                     ) : renderKind === "staff" ? (
-                                      staffDisplayUserID ? (
-                                        <WecomOpenDataName
-                                          userid={staffDisplayUserID}
+                                      staffOpenDataOpenID ? (
+                                        <WecomDirectoryOpenDataName
+                                          openID={staffOpenDataOpenID}
                                           corpId=""
                                           fallback={staffFallback}
                                           className="font-bold text-blue-700"

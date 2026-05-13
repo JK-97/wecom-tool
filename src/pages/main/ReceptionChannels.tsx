@@ -53,10 +53,11 @@ import {
   OrganizationDirectorySelect,
   selectionKey,
   type DirectoryDepartment,
+  type DirectoryMember,
   type DirectorySelectionItem,
 } from "@/components/wecom/OrganizationDirectorySelect";
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
-import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment";
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName";
+import { WecomDirectoryOpenDataDepartment } from "@/components/wecom/WecomDirectoryOpenDataDepartment";
 
 const selectionItemsFromAssignments = (
   assignments: KFServicerAssignment[],
@@ -299,11 +300,13 @@ function ServicerUpsertResultPanel({
   formatReason,
   orgCorpID,
   orgDepartmentMap,
+  orgMemberMap,
 }: {
   result: KFServicerUpsertResponse | null;
   formatReason: (item: KFServicerUpsertResult) => string;
   orgCorpID: string;
   orgDepartmentMap: Map<number, DirectoryDepartment>;
+  orgMemberMap: Map<string, DirectoryMember>;
 }) {
   if (!result) return null;
   const summary = result.summary;
@@ -341,8 +344,8 @@ function ServicerUpsertResultPanel({
               <div className="flex items-center justify-between gap-3">
                 <span className="font-medium">
                   {item.target_type === "department" ? (
-                    <WecomOpenDataDepartment
-                      departmentId={Number(item.department_id || item.target_id || 0)}
+                    <WecomDirectoryOpenDataDepartment
+                      departmentID={Number(item.department_id || item.target_id || 0)}
                       corpId={orgCorpID}
                       fallback={
                         (orgDepartmentMap.get(
@@ -354,8 +357,8 @@ function ServicerUpsertResultPanel({
                       hintClassName="text-[10px] opacity-70"
                     />
                   ) : (
-                    <WecomOpenDataName
-                      userid={(item.userid || item.target_id || "").trim()}
+                    <WecomDirectoryOpenDataName
+                      openID={(orgMemberMap.get((item.userid || item.target_id || "").trim())?.open_userid || "").trim()}
                       corpId={orgCorpID}
                       fallback={(item.userid || item.target_id || "").trim()}
                       className="text-xs font-medium text-inherit"
@@ -1511,8 +1514,8 @@ export default function ReceptionChannels() {
               variant="secondary"
               className="bg-blue-50 text-blue-700 border-transparent"
             >
-              <WecomOpenDataDepartment
-                departmentId={Number(item.id)}
+              <WecomDirectoryOpenDataDepartment
+                departmentID={Number(item.id)}
                 corpId={orgCorpID}
                 fallback={
                   (orgDepartmentMap.get(Number(item.id))?.name || "").trim() ||
@@ -1528,8 +1531,8 @@ export default function ReceptionChannels() {
               variant="secondary"
               className="bg-gray-100 text-gray-700 border-transparent"
             >
-              <WecomOpenDataName
-                userid={item.id}
+              <WecomDirectoryOpenDataName
+                openID={(orgMemberMap.get(item.id)?.open_userid || "").trim()}
                 corpId={orgCorpID}
                 fallback={item.id}
                 className="text-xs font-medium text-gray-700"
@@ -2191,8 +2194,8 @@ export default function ReceptionChannels() {
                         <div className="flex items-center justify-between gap-3">
                           <span className="font-medium">
                             {item.target_type === "department" ? (
-                              <WecomOpenDataDepartment
-                                departmentId={Number(item.department_id || item.target_id || 0)}
+                              <WecomDirectoryOpenDataDepartment
+                                departmentID={Number(item.department_id || item.target_id || 0)}
                                 corpId={orgCorpID}
                                 fallback={
                                   (orgDepartmentMap.get(
@@ -2204,8 +2207,8 @@ export default function ReceptionChannels() {
                                 hintClassName="text-[10px] opacity-70"
                               />
                             ) : (
-                              <WecomOpenDataName
-                                userid={(item.userid || item.target_id || "").trim()}
+                              <WecomDirectoryOpenDataName
+                                openID={(orgMemberMap.get((item.userid || item.target_id || "").trim())?.open_userid || "").trim()}
                                 corpId={orgCorpID}
                                 fallback={(item.userid || item.target_id || "").trim()}
                                 className="text-xs font-medium text-inherit"
@@ -2380,6 +2383,7 @@ export default function ReceptionChannels() {
             formatReason={formatServicerReason}
             orgCorpID={orgCorpID}
             orgDepartmentMap={orgDepartmentMap}
+            orgMemberMap={orgMemberMap}
           />
           <OrganizationDirectorySelect
             label="选择成员或部门"

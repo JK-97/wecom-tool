@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName";
 import {
   getCSCommandCenterSessionDetail,
   getCSCommandCenterView,
@@ -98,7 +98,7 @@ type TransferCandidate = {
   openUserID: string;
   role: string;
   searchText: string;
-  displayUserID: string;
+  openDataOpenID: string;
   displayFallback: string;
   rawID: string;
 };
@@ -239,11 +239,11 @@ function resolveSessionBucket(session: CommandCenterSession): SessionTab {
 function resolveAssignedDisplay(session?: CommandCenterSession) {
   const identity = resolveServicerIdentityView(session);
   const rawID = identity.rawServicerUserID;
-  const displayUserID = identity.displayIdentity;
+  const openDataOpenID = identity.openDataOpenID;
   const displayFallback = (identity.displayFallback || "待分配").trim();
   return {
     rawID,
-    displayUserID,
+    openDataOpenID,
     displayFallback,
   };
 }
@@ -263,7 +263,7 @@ function renderServicerValue(props: {
           token,
           props.identityLookup,
         );
-        const displayIdentity = (identity?.displayIdentity || "").trim();
+        const openDataOpenID = (identity?.openDataOpenID || "").trim();
         const displayFallback = (identity?.displayFallback || token).trim();
         const rawID = (identity?.rawServicerUserID || "").trim();
         return (
@@ -272,9 +272,9 @@ function renderServicerValue(props: {
             className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-700"
             title={rawID || displayFallback}
           >
-            {displayIdentity ? (
-              <WecomOpenDataName
-                userid={displayIdentity}
+            {openDataOpenID ? (
+              <WecomDirectoryOpenDataName
+                openID={openDataOpenID}
                 corpId={props.corpId}
                 fallback={displayFallback}
                 className="text-[11px] font-medium text-gray-700"
@@ -336,11 +336,14 @@ function renderRoutingIdentity(props: {
     resolvedToken,
     props.identityLookup,
   );
-  const displayIdentity = (identity?.displayIdentity || resolvedToken).trim();
+  const openDataOpenID = (identity?.openDataOpenID || "").trim();
   const displayFallback = (identity?.displayFallback || fallback).trim();
+  if (!openDataOpenID) {
+    return <span>{displayFallback}</span>;
+  }
   return (
-    <WecomOpenDataName
-      userid={displayIdentity}
+    <WecomDirectoryOpenDataName
+      openID={openDataOpenID}
       corpId={props.corpId}
       fallback={displayFallback}
       className="font-medium text-gray-900"
@@ -549,16 +552,18 @@ function renderMessageStaffName(props: {
   corpId: string;
   identityLookup: Map<string, ReturnType<typeof resolveServicerIdentityView>>;
 }) {
-  const directDisplayUserID = (
-    props.message.sender_display_userid || ""
+  const directOpenDataOpenID = (
+    props.message.sender_resolved_open_userid ||
+    props.message.sender_display_userid ||
+    ""
   ).trim();
   const senderUserID = (props.message.sender_userid || "").trim();
-  const resolvedIdentity = directDisplayUserID
+  const resolvedIdentity = directOpenDataOpenID
     ? null
     : resolveServicerIdentityToken(senderUserID, props.identityLookup);
-  const displayUserID = (
-    directDisplayUserID ||
-    resolvedIdentity?.displayIdentity ||
+  const openDataOpenID = (
+    directOpenDataOpenID ||
+    resolvedIdentity?.openDataOpenID ||
     ""
   ).trim();
   const displayFallback = (
@@ -567,10 +572,10 @@ function renderMessageStaffName(props: {
     senderUserID ||
     "人工客服"
   ).trim();
-  if (displayUserID) {
+  if (openDataOpenID) {
     return (
-      <WecomOpenDataName
-        userid={displayUserID}
+      <WecomDirectoryOpenDataName
+        openID={openDataOpenID}
         corpId={props.corpId}
         fallback={displayFallback}
         className="text-[11px] font-medium text-gray-600"
@@ -795,9 +800,9 @@ function HeaderAssignedIdentity(props: {
   const display = props.assignedDisplay;
   return (
     <span className="inline-flex h-5 min-w-[128px] max-w-[220px] items-center align-bottom">
-      {display.displayUserID ? (
-        <WecomOpenDataName
-          userid={display.displayUserID}
+      {display.openDataOpenID ? (
+        <WecomDirectoryOpenDataName
+          openID={display.openDataOpenID}
           corpId={props.corpId}
           fallback={display.displayFallback}
           className="truncate text-sm text-gray-700"
@@ -2018,15 +2023,15 @@ export default function CSCommandCenter() {
                   <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span className="flex min-w-0 items-center gap-1">
                       <GitBranch className="w-3 h-3" />{" "}
-                      {assignedDisplay.displayUserID ? (
+                      {assignedDisplay.openDataOpenID ? (
                         <span
                           title={
                             assignedDisplay.rawID ||
                             assignedDisplay.displayFallback
                           }
                         >
-                          <WecomOpenDataName
-                            userid={assignedDisplay.displayUserID}
+                          <WecomDirectoryOpenDataName
+                            openID={assignedDisplay.openDataOpenID}
                             corpId={corpID}
                             fallback={assignedDisplay.displayFallback}
                             className="truncate text-[10px] text-gray-700"
@@ -3092,8 +3097,8 @@ export default function CSCommandCenter() {
                           className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-blue-600 bg-blue-600" : "border-gray-300 bg-white"}`}
                         />
                         <div className="min-w-0 flex-1">
-                          <WecomOpenDataName
-                            userid={candidate.displayUserID}
+                          <WecomDirectoryOpenDataName
+                            openID={candidate.openDataOpenID}
                             corpId={corpID}
                             fallback={candidate.displayFallback}
                             className="truncate text-sm font-medium text-gray-900"
@@ -3230,7 +3235,7 @@ function buildTransferCandidates(
     const userid = identity.resolvedUserID;
     const openUserID = identity.resolvedOpenUserID;
     const role = (assignment.role || "").trim();
-    const displayUserID = identity.displayIdentity;
+    const openDataOpenID = identity.openDataOpenID;
     const displayFallback = identity.displayFallback;
     const searchText =
       `${displayFallback} ${servicerUserID} ${userid} ${openUserID} ${role}`.toLowerCase();
@@ -3239,7 +3244,7 @@ function buildTransferCandidates(
       userid,
       openUserID,
       role,
-      displayUserID,
+      openDataOpenID,
       displayFallback,
       rawID: servicerUserID,
       searchText,

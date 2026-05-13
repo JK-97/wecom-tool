@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName";
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName";
 import { normalizeErrorMessage } from "@/services/http";
 import {
   listKFCustomerSessions,
@@ -57,7 +57,7 @@ type ToolbarDebugViewProps = {
   openKFID?: string;
   externalUserID?: string;
   sessionCandidates?: ToolbarDebugSessionCandidate[];
-  sampleOpenDataUserID?: string;
+  sampleOpenDataOpenID?: string;
   sampleOpenDataFallback?: string;
 };
 
@@ -769,7 +769,7 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
     }
   }, [openDataRuntime]);
 
-  const sampleOpenDataUserID = (props.sampleOpenDataUserID || "").trim();
+  const sampleOpenDataOpenID = (props.sampleOpenDataOpenID || "").trim();
   const sampleOpenDataFallback = (props.sampleOpenDataFallback || "").trim();
   const registrationBaseNotice = firstNonEmpty(
     registrationNotice,
@@ -1286,13 +1286,13 @@ export function ToolbarDebugView(props: ToolbarDebugViewProps) {
             />
           </div>
 
-          {sampleOpenDataUserID ? (
+          {sampleOpenDataOpenID ? (
             <div className="mt-3 space-y-1">
               <div className="text-[11px] font-medium text-gray-500">示例渲染</div>
               <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-[12px] text-gray-700">
-                <WecomOpenDataName
-                  userid={sampleOpenDataUserID}
-                  fallback={sampleOpenDataFallback || sampleOpenDataUserID}
+                <WecomDirectoryOpenDataName
+                  openID={sampleOpenDataOpenID}
+                  fallback={sampleOpenDataFallback || sampleOpenDataOpenID}
                   showHint
                   className="font-medium text-gray-900"
                   hintClassName="mt-1 text-[11px] text-gray-500"

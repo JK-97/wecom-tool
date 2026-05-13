@@ -12,7 +12,7 @@ import {
   Search, Trash2, KeyRound, Webhook,
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { normalizeErrorMessage } from "@/services/http"
 import {
   executeOrganizationSettingsCommand,
@@ -27,7 +27,7 @@ import {
   type MuYuAIConnectorStatus,
 } from "@/services/connectorService"
 import { checkMainWebviewJSSDKRuntime } from "@/services/jssdkService"
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName"
 import muyuaiLogo from "@/assets/muyuai-logo.svg"
 
 const ROLE_OPTIONS = [
@@ -886,6 +886,16 @@ export default function OrganizationSettings() {
   const currentDataZoneCallbackProgramID = (dataZone?.receive_callback_program_id || "").trim()
   const dataZoneAuthEditions = dataZone?.auth_editions || []
   const dataZoneAuthUserPreview = dataZone?.auth_user_preview || []
+  const memberOpenUserIDMap = useMemo(() => {
+    const next = new Map<string, string>()
+    ;(view?.members || []).forEach((member) => {
+      const userID = (member.userid || "").trim()
+      const openUserID = (member.open_userid || "").trim()
+      if (!userID || !openUserID) return
+      next.set(userID, openUserID)
+    })
+    return next
+  }, [view?.members])
   const orgSync = view?.org_sync
   const appVisibility = view?.app_visibility
   const integrationAdmins = view?.integration_admins || []
@@ -1287,8 +1297,8 @@ export default function OrganizationSettings() {
                           if (!userID) return null
                           return (
                             <div key={userID} className="min-w-0 rounded-lg border border-gray-100 p-3">
-                              <WecomOpenDataName
-                                userid={userID}
+                              <WecomDirectoryOpenDataName
+                                openID={(memberOpenUserIDMap.get(userID) || "").trim()}
                                 corpId={view?.integration?.corp_id}
                                 fallback={userID}
                                 className="block truncate text-xs font-bold text-gray-900"
@@ -1823,8 +1833,8 @@ export default function OrganizationSettings() {
                     return (
                       <div key={userID} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
                         <div className="min-w-0">
-                          <WecomOpenDataName
-                            userid={userID}
+                          <WecomDirectoryOpenDataName
+                            openID={(member.open_userid || "").trim()}
                             corpId={view?.integration?.corp_id}
                             fallback={userID}
                             className="block truncate text-xs font-bold text-gray-900"

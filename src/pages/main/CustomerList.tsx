@@ -20,7 +20,7 @@ import {
   CustomerListOpenDataFrame,
   type CustomerListOpenDataRow,
 } from "@/components/wecom/CustomerListOpenDataFrame"
-import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
+import { WecomProfileAvatarOpenDataFrame } from "@/components/wecom/WecomProfileAvatarOpenDataFrame"
 import { usePageFeedback } from "@/components/ui/PageFeedback"
 import { normalizeErrorMessage } from "@/services/http"
 import {
@@ -632,8 +632,8 @@ export default function CustomerList() {
       >
         <div className="space-y-4">
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
-            <WecomOpenDataAvatar
-              openid={(editingRow?.external_userid || "").trim()}
+            <WecomProfileAvatarOpenDataFrame
+              openID={(editingRow?.external_userid || "").trim()}
               type="externalUserAvatar"
               fallback={(editingRow?.name || "").trim() || "客"}
               fallbackSrc={(editingRow?.avatar || "").trim()}

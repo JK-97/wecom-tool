@@ -21,8 +21,8 @@ import { Dialog } from "@/components/ui/Dialog"
 import { EmptyState } from "@/components/ui/EmptyState"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs"
 import { ChatDataPanel } from "@/components/chatdata/ChatDataPanel"
-import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
+import { WecomProfileAvatarOpenDataFrame } from "@/components/wecom/WecomProfileAvatarOpenDataFrame"
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName"
 import { useChatDataPanel } from "@/hooks/useChatDataPanel"
 import { updateCustomerProfile } from "@/services/customerListService"
 import { getCustomer360View, type Customer360ViewModel } from "@/services/customer360Service"
@@ -192,8 +192,8 @@ export default function Customer360() {
               <Edit2 className="h-4 w-4" />
             </Button>
             <CardContent className="flex flex-col items-center p-6 text-center">
-              <WecomOpenDataAvatar
-                openid={externalUserID}
+              <WecomProfileAvatarOpenDataFrame
+                openID={externalUserID}
                 type="externalUserAvatar"
                 fallback={(view?.contact?.name || "").trim() || "客"}
                 fallbackSrc={(view?.contact?.avatar || "").trim()}
@@ -255,16 +255,14 @@ export default function Customer360() {
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-gray-500">当前负责人</span>
                 <div className="flex min-w-0 items-center gap-2">
-                  <WecomOpenDataAvatar
-                    userid={ownerUserID}
-                    openid={ownerOpenUserID}
+                  <WecomProfileAvatarOpenDataFrame
+                    openID={ownerOpenUserID}
                     fallback={ownerFallback}
                     size="xs"
                     className="border border-gray-100"
                   />
-                  <WecomOpenDataName
-                    userid={ownerUserID}
-                    openid={ownerOpenUserID}
+                  <WecomDirectoryOpenDataName
+                    openID={ownerOpenUserID}
                     fallback={ownerFallback}
                     className="truncate font-medium text-gray-900"
                   />
@@ -400,8 +398,8 @@ export default function Customer360() {
       >
         <div className="space-y-4">
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
-            <WecomOpenDataAvatar
-              openid={externalUserID}
+            <WecomProfileAvatarOpenDataFrame
+              openID={externalUserID}
               type="externalUserAvatar"
               fallback={(view?.contact?.name || "").trim() || "客"}
               fallbackSrc={(view?.contact?.avatar || "").trim()}

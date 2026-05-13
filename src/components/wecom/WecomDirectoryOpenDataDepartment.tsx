@@ -1,8 +1,10 @@
 import { createElement, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { bindOpenDataElement, ensureOpenDataReady, type OpenDataRuntime } from "@/services/openDataService"
 
-type WecomOpenDataDepartmentProps = {
-  departmentId: number | string
+// 页面级通讯录部门名称展示组件。
+// 这里仍然走通讯录展示组件语义，和会话模板 open-data 分开。
+type WecomDirectoryOpenDataDepartmentProps = {
+  departmentID: number | string
   corpId?: string
   fallback?: string
   className?: string
@@ -10,32 +12,32 @@ type WecomOpenDataDepartmentProps = {
   showHint?: boolean
 }
 
-function readFallback(departmentId: string, fallback?: string): string {
+function readFallback(departmentID: string, fallback?: string): string {
   const text = (fallback || "").trim()
   if (text) return text
-  return departmentId ? `部门 #${departmentId}` : "-"
+  return departmentID ? `部门 #${departmentID}` : "-"
 }
 
-export function WecomOpenDataDepartment({
-  departmentId,
+export function WecomDirectoryOpenDataDepartment({
+  departmentID,
   corpId,
   fallback,
   className,
   hintClassName,
   showHint = false,
-}: WecomOpenDataDepartmentProps) {
+}: WecomDirectoryOpenDataDepartmentProps) {
   const ref = useRef<HTMLElement | null>(null)
   const [runtime, setRuntime] = useState<OpenDataRuntime | null>(null)
-  const safeDepartmentId = `${departmentId ?? ""}`.trim()
+  const safeDepartmentID = `${departmentID ?? ""}`.trim()
   const safeCorpID = (corpId || "").trim()
   const fallbackText = useMemo(
-    () => readFallback(safeDepartmentId, fallback),
-    [fallback, safeDepartmentId],
+    () => readFallback(safeDepartmentID, fallback),
+    [fallback, safeDepartmentID],
   )
 
   useLayoutEffect(() => {
     let cancelled = false
-    if (!safeDepartmentId) {
+    if (!safeDepartmentID) {
       setRuntime(null)
       return
     }
@@ -49,14 +51,14 @@ export function WecomOpenDataDepartment({
     return () => {
       cancelled = true
     }
-  }, [safeDepartmentId, safeCorpID])
+  }, [safeDepartmentID, safeCorpID])
 
   useLayoutEffect(() => {
     if (!runtime?.canUseOpenData) return
     bindOpenDataElement(ref.current)
-  }, [runtime, safeDepartmentId, safeCorpID])
+  }, [runtime, safeDepartmentID, safeCorpID])
 
-  if (!safeDepartmentId || !runtime?.canUseOpenData) {
+  if (!safeDepartmentID || !runtime?.canUseOpenData) {
     return (
       <span className="inline-flex min-w-0 flex-col">
         <span className={className} title={runtime?.reason || fallbackText}>
@@ -74,7 +76,7 @@ export function WecomOpenDataDepartment({
       {createElement("ww-open-data", {
         ref,
         type: "departmentName",
-        openid: safeDepartmentId,
+        openid: safeDepartmentID,
         corpid: safeCorpID || undefined,
         className,
       })}

@@ -26,8 +26,8 @@ import {
   type GroupAvatarStackMember,
 } from "@/components/wecom/GroupAvatarStackOpenDataFrame"
 import { normalizeErrorMessage } from "@/services/http"
-import { WecomOpenDataAvatar } from "@/components/wecom/WecomOpenDataAvatar"
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
+import { WecomProfileAvatarOpenDataFrame } from "@/components/wecom/WecomProfileAvatarOpenDataFrame"
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName"
 import {
   getGroupOperationDetail,
   type CustomerGroupChatAdmin,
@@ -117,16 +117,14 @@ function renderAdminChip(admin: CustomerGroupChatAdmin) {
   }
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700">
-      <WecomOpenDataAvatar
-        userid={userid}
-        openid={openUserID}
+      <WecomProfileAvatarOpenDataFrame
+        openID={openUserID}
         fallback={userid}
         size="xs"
         className="border border-gray-100"
       />
-      <WecomOpenDataName
-        userid={userid}
-        openid={openUserID}
+      <WecomDirectoryOpenDataName
+        openID={openUserID}
         fallback={userid}
         className="max-w-[140px] truncate"
       />
@@ -604,9 +602,8 @@ export default function GroupDetail() {
                     <SidebarField
                       label="群主"
                       value={
-                        <WecomOpenDataName
-                          userid={ownerUserID}
-                          openid={ownerOpenUserID}
+                        <WecomDirectoryOpenDataName
+                          openID={ownerOpenUserID}
                           fallback={ownerName}
                           className="text-sm text-gray-700"
                         />

@@ -107,6 +107,7 @@ export type CommandCenterMessage = {
   sender?: string;
   sender_userid?: string;
   sender_display_userid?: string;
+  sender_resolved_open_userid?: string;
   sender_display_fallback?: string;
   content?: string;
   timestamp?: string;

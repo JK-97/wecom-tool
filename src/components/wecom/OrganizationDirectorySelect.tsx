@@ -2,8 +2,8 @@ import { Badge } from "@/components/ui/Badge"
 import { Check, ChevronDown, ChevronRight, Folder, Search, User } from "lucide-react"
 import { useEffect, useId, useMemo, useState } from "react"
 import type { OrganizationSettingsView } from "@/services/organizationSettingsService"
-import { WecomOpenDataDepartment } from "@/components/wecom/WecomOpenDataDepartment"
-import { WecomOpenDataName } from "@/components/wecom/WecomOpenDataName"
+import { WecomDirectoryOpenDataDepartment } from "@/components/wecom/WecomDirectoryOpenDataDepartment"
+import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName"
 
 export type DirectoryDepartment = NonNullable<OrganizationSettingsView["departments"]>[number]
 export type DirectoryMember = NonNullable<OrganizationSettingsView["members"]>[number]
@@ -509,8 +509,8 @@ export function OrganizationDirectorySelect({
         </span>
         <span className="min-w-0 flex-1 space-y-0.5">
           <span className="flex items-center gap-2 min-w-0">
-            <WecomOpenDataName
-              userid={userID}
+            <WecomDirectoryOpenDataName
+              openID={(member.open_userid || "").trim()}
               corpId={corpId}
               fallback={userID}
               className={`truncate text-xs font-medium ${
@@ -582,8 +582,8 @@ export function OrganizationDirectorySelect({
             </span>
             <span className="min-w-0 flex-1 space-y-0.5">
               <span className="flex items-center gap-2 min-w-0">
-                <WecomOpenDataDepartment
-                  departmentId={departmentID}
+                <WecomDirectoryOpenDataDepartment
+                  departmentID={departmentID}
                   corpId={corpId}
                   fallback={fallbackName}
                   className={`truncate text-xs font-semibold ${
@@ -708,8 +708,8 @@ export function OrganizationDirectorySelect({
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex min-w-0 items-center gap-2 truncate font-medium">
                         <Folder className="h-3.5 w-3.5 shrink-0 text-blue-600" />
-                        <WecomOpenDataDepartment
-                          departmentId={departmentID}
+                        <WecomDirectoryOpenDataDepartment
+                          departmentID={departmentID}
                           corpId={corpId}
                           fallback={
                             (departmentMap.get(departmentID)?.name || "").trim() ||
@@ -743,8 +743,8 @@ export function OrganizationDirectorySelect({
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex min-w-0 items-center gap-2 truncate">
                         <User className="h-3.5 w-3.5 shrink-0 text-gray-500" />
-                        <WecomOpenDataName
-                          userid={userID}
+                        <WecomDirectoryOpenDataName
+                          openID={(memberMap.get(userID)?.open_userid || "").trim()}
                           corpId={corpId}
                           fallback={userID}
                           className="min-w-0 flex-1 truncate text-xs font-medium text-gray-800"
