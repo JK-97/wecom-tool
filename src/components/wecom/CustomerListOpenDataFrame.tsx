@@ -68,7 +68,7 @@ function buildTemplate(): string {
 <view class="customer-list" ref="${ROOT_REF}">
   <view class="customer-list-header">
     <view class="customer-list-col customer-list-col--check">
-      <view class="customer-list-check {{data.allSelected ? 'customer-list-check--selected' : ''}}" bindclick="handleToggleAll">
+      <view class="customer-list-check {{data.allSelected ? 'customer-list-check--selected' : ''}}" catchclick="handleToggleAll">
         <block wx:if="{{data.allSelected}}">
           <view class="customer-list-check-mark">✓</view>
         </block>
@@ -83,16 +83,16 @@ function buildTemplate(): string {
     <view class="customer-list-col customer-list-col--actions">操作</view>
   </view>
   <block wx:for="{{data.rows}}" wx:key="externalUserID">
-    <view class="customer-list-row">
+    <view class="customer-list-row customer-list-row--interactive" data-externaluserid="{{item.externalUserID}}" bindclick="handleOpenDetail">
       <view class="customer-list-col customer-list-col--check">
-        <view class="customer-list-check {{item.selected ? 'customer-list-check--selected' : ''}}" data-externaluserid="{{item.externalUserID}}" bindclick="handleToggleRow">
+        <view class="customer-list-check {{item.selected ? 'customer-list-check--selected' : ''}}" data-externaluserid="{{item.externalUserID}}" catchclick="handleToggleRow">
           <block wx:if="{{item.selected}}">
             <view class="customer-list-check-mark">✓</view>
           </block>
         </view>
       </view>
       <view class="customer-list-col customer-list-col--customer">
-        <view class="customer-list-customer" data-externaluserid="{{item.externalUserID}}" bindclick="handleOpenDetail">
+        <view class="customer-list-customer">
           <ww-open-data class="customer-list-customer-avatar" type="externalUserAvatar" openid="{{item.externalUserID}}"></ww-open-data>
           <view class="customer-list-customer-meta">
             <ww-open-data class="customer-list-customer-name" type="externalUserName" openid="{{item.externalUserID}}"></ww-open-data>
@@ -134,8 +134,8 @@ function buildTemplate(): string {
       </view>
       <view class="customer-list-col customer-list-col--actions">
         <view class="customer-list-actions">
-          <view class="customer-list-link customer-list-link--muted" data-externaluserid="{{item.externalUserID}}" bindclick="handleOpenEdit">编辑</view>
-          <view class="customer-list-link" data-externaluserid="{{item.externalUserID}}" bindclick="handleOpenDetail">详情</view>
+          <view class="customer-list-link customer-list-link--muted" data-externaluserid="{{item.externalUserID}}" catchclick="handleOpenEdit">编辑</view>
+          <view class="customer-list-link" data-externaluserid="{{item.externalUserID}}" catchclick="handleOpenDetail">详情</view>
         </view>
       </view>
     </view>
@@ -174,6 +174,10 @@ function buildStyle(): string {
   background: #ffffff;
 }
 
+.customer-list-row--interactive {
+  cursor: pointer;
+}
+
 .customer-list-col {
   box-sizing: border-box;
   min-width: 0;
@@ -195,6 +199,7 @@ function buildStyle(): string {
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
 }
 
 .customer-list-check--selected {
@@ -213,6 +218,7 @@ function buildStyle(): string {
   display: flex;
   align-items: center;
   gap: 12px;
+  cursor: pointer;
 }
 
 .customer-list-customer-avatar,
@@ -358,6 +364,7 @@ function buildStyle(): string {
   font-size: 12px;
   font-weight: 600;
   line-height: 1.5;
+  cursor: pointer;
 }
 
 .customer-list-link--muted {
@@ -409,6 +416,10 @@ function primeFrameElement(instance: ww.OpenDataFrameInstance<FrameData>, host: 
   iframe.style.visibility = "hidden"
 }
 
+function placeholderRowCount(rows: CustomerListOpenDataRow[]): number {
+  return Math.max(3, Math.min(5, rows.length || 3))
+}
+
 export function CustomerListOpenDataFrame(props: {
   rows: CustomerListOpenDataRow[]
   loading?: boolean
@@ -442,9 +453,8 @@ export function CustomerListOpenDataFrame(props: {
     openEditRef.current = props.onOpenEdit
   }, [props.onOpenDetail, props.onOpenEdit, props.onToggleAll, props.onToggleRow])
 
-  // BUGFIX: this component renders a loading placeholder before rows exist.
-  // The placeholder has no hostRef node, so the list frame must be remounted
-  // when the row count changes from 0 to the first real page.
+  // Keep the frame host alive behind the unified placeholder so runtime
+  // initialization and first-page data loading converge into one reveal step.
   useEffect(() => {
     let cancelled = false
     let mountWatchTimer = 0
@@ -587,13 +597,9 @@ export function CustomerListOpenDataFrame(props: {
     return () => observer.disconnect()
   }, [ready])
 
-  if (props.loading && props.rows.length === 0) {
-    return (
-      <div className="flex min-h-[320px] items-center justify-center text-sm text-gray-500">
-        正在读取客户数据...
-      </div>
-    )
-  }
+  const loading = props.loading === true
+  const displayOpenDataFrame = !loading && ready
+  const displayFallbackList = !loading && fallbackMode
 
   const standardList = (
     <div className="w-full">
@@ -603,16 +609,30 @@ export function CustomerListOpenDataFrame(props: {
         </div>
       ) : null}
       {props.rows.map((row) => (
-        <div key={row.externalUserID} className="grid min-h-[84px] grid-cols-[56px_minmax(320px,1.65fr)_120px_120px_minmax(180px,1.1fr)_168px_180px_96px] items-center border-b border-gray-100 bg-white">
+        <div
+          key={row.externalUserID}
+          className="grid min-h-[84px] cursor-pointer grid-cols-[56px_minmax(320px,1.65fr)_120px_120px_minmax(180px,1.1fr)_168px_180px_96px] items-center border-b border-gray-100 bg-white transition hover:bg-gray-50"
+          onClick={() => props.onOpenDetail?.(row.externalUserID)}
+        >
           <div className="flex justify-center px-4">
-            <div className={`flex h-4 w-4 items-center justify-center rounded border ${row.selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white"}`}>
+            <button
+              type="button"
+              className={`flex h-4 w-4 items-center justify-center rounded border ${row.selected ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white"}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onToggleRow?.(row.externalUserID)
+              }}
+            >
               {row.selected ? <span className="text-[11px] font-bold">✓</span> : null}
-            </div>
+            </button>
           </div>
           <button
             type="button"
             className="flex min-w-0 items-center gap-3 px-4 text-left"
-            onClick={() => props.onOpenDetail?.(row.externalUserID)}
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onOpenDetail?.(row.externalUserID)
+            }}
           >
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm font-semibold text-gray-600">
               {row.customerInitial}
@@ -646,10 +666,24 @@ export function CustomerListOpenDataFrame(props: {
           </div>
           <div className="px-4 text-sm text-gray-900">{row.ownerName}</div>
           <div className="flex justify-end gap-3 px-4 text-sm font-semibold">
-            <button type="button" className="text-gray-500" onClick={() => props.onOpenEdit?.(row.externalUserID)}>
+            <button
+              type="button"
+              className="text-gray-500"
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onOpenEdit?.(row.externalUserID)
+              }}
+            >
               编辑
             </button>
-            <button type="button" className="text-blue-600" onClick={() => props.onOpenDetail?.(row.externalUserID)}>
+            <button
+              type="button"
+              className="text-blue-600"
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onOpenDetail?.(row.externalUserID)
+              }}
+            >
               详情
             </button>
           </div>
@@ -658,9 +692,60 @@ export function CustomerListOpenDataFrame(props: {
     </div>
   )
 
-  if (fallbackMode) return standardList
+  const placeholderList = (
+    <div className="w-full animate-pulse">
+      <div className="grid min-h-[48px] grid-cols-[56px_minmax(320px,1.65fr)_120px_120px_minmax(180px,1.1fr)_168px_180px_96px] items-center border-b border-gray-200 bg-gray-50 px-0">
+        {Array.from({ length: 8 }, (_, index) => (
+          <div key={`customer-list-header-placeholder-${index}`} className="px-4">
+            <div className={`h-3 rounded bg-gray-200 ${index === 0 ? "mx-auto w-4" : "w-16"}`} />
+          </div>
+        ))}
+      </div>
+      {Array.from({ length: placeholderRowCount(props.rows) }, (_, index) => (
+        <div
+          key={`customer-list-placeholder-${index}`}
+          className="grid min-h-[84px] grid-cols-[56px_minmax(320px,1.65fr)_120px_120px_minmax(180px,1.1fr)_168px_180px_96px] items-center border-b border-gray-100 bg-white"
+          aria-hidden="true"
+        >
+          <div className="flex justify-center px-4">
+            <div className="h-4 w-4 rounded border border-gray-200 bg-gray-100" />
+          </div>
+          <div className="flex min-w-0 items-center gap-3 px-4">
+            <div className="h-8 w-8 rounded-full bg-gray-200" />
+            <div className="min-w-0 space-y-2">
+              <div className="h-4 w-24 rounded bg-gray-200" />
+              <div className="h-3 w-20 rounded bg-gray-100" />
+            </div>
+          </div>
+          <div className="px-4">
+            <div className="h-4 w-14 rounded bg-gray-100" />
+          </div>
+          <div className="px-4">
+            <div className="h-6 w-16 rounded-full bg-gray-100" />
+          </div>
+          <div className="flex gap-1.5 px-4">
+            <div className="h-5 w-16 rounded-full bg-gray-100" />
+            <div className="h-5 w-12 rounded-full bg-gray-200" />
+          </div>
+          <div className="px-4 space-y-2">
+            <div className="h-4 w-24 rounded bg-gray-200" />
+            <div className="h-3 w-16 rounded bg-gray-100" />
+          </div>
+          <div className="px-4">
+            <div className="h-4 w-16 rounded bg-gray-200" />
+          </div>
+          <div className="flex justify-end gap-3 px-4">
+            <div className="h-4 w-8 rounded bg-gray-100" />
+            <div className="h-4 w-8 rounded bg-gray-200" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 
-  if (error) {
+  if (displayFallbackList) return standardList
+
+  if (!loading && error && !displayOpenDataFrame) {
     return (
       <div className="flex min-h-[160px] items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm text-amber-800">
         {error}
@@ -673,13 +758,13 @@ export function CustomerListOpenDataFrame(props: {
       <div
         ref={hostRef}
         data-estimated-height={estimatedFrameHeight(props.rows)}
-        className={ready ? "w-full" : "pointer-events-none absolute inset-x-0 top-0 -z-10 w-full opacity-0"}
+        className={displayOpenDataFrame ? "w-full" : "pointer-events-none absolute inset-x-0 top-0 -z-10 w-full opacity-0"}
         style={{
-          minHeight: ready ? estimatedFrameHeight(props.rows) : 0,
+          minHeight: displayOpenDataFrame ? estimatedFrameHeight(props.rows) : 0,
           minWidth: CUSTOMER_LIST_MIN_WIDTH,
         }}
       />
-      {ready ? null : standardList}
+      {displayOpenDataFrame ? null : placeholderList}
     </div>
   )
 }

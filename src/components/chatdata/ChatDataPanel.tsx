@@ -93,9 +93,31 @@ function emptyReason(panel: ChatDataPanelView | null, error?: string): "not-sync
 }
 
 function showPendingState(panel: ChatDataPanelView | null, loading?: boolean, bootstrapping?: boolean): boolean {
+  const capability = (panel?.capability_status || "").trim()
   const state = (panel?.init_state || "").trim()
+  const syncMode = (panel?.sync_mode || "").trim()
   if (loading || bootstrapping) return true
+  if (capability && capability !== "ready") return false
+  if (syncMode === "idle") return false
   return state === "queued" || state === "running"
+}
+
+function headerStatus(panel: ChatDataPanelView | null, error?: string, loading?: boolean, bootstrapping?: boolean) {
+  const capability = (panel?.capability_status || "").trim()
+  const state = (panel?.init_state || "").trim()
+  if (error || (panel?.last_error || "").trim()) {
+    return { label: "同步异常", healthy: false }
+  }
+  if (loading || bootstrapping || (capability === "ready" && (state === "queued" || state === "running"))) {
+    return { label: "正在同步最近消息", healthy: true }
+  }
+  if (capability && capability !== "ready") {
+    return {
+      label: panel?.open_data_required ? "需完成专区配置" : "会话回显未就绪",
+      healthy: false,
+    }
+  }
+  return { label: "自动同步中", healthy: true }
 }
 
 export function ChatDataPanel(props: {
@@ -110,9 +132,11 @@ export function ChatDataPanel(props: {
   const panel = props.panel
   const messages = orderedMessages(panel?.messages || [])
   const lastSyncTime = formatHeaderTime(panel?.last_sync_time)
-  const statusIsHealthy = !props.error && !panel?.last_error && (panel?.capability_status || "").trim() === "ready"
+  const status = headerStatus(panel, props.error, props.loading, props.bootstrapping)
+  const statusIsHealthy = status.healthy
   const needsRetryAction = Boolean(props.onBootstrap && panel?.can_retry_init && (props.error || panel?.last_error))
   const isPending = showPendingState(panel, props.loading, props.bootstrapping) && messages.length === 0
+  const openDataHint = (panel?.open_data_hint || "").trim()
   const currentUserID = (auth.user?.userid || "").trim()
   const currentOpenUserID = (auth.user?.openUserID || "").trim()
 
@@ -123,7 +147,7 @@ export function ChatDataPanel(props: {
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 text-sm text-gray-700">
               <span className="relative flex h-2 w-2">
-                <span
+              <span
                   className={cn(
                     "absolute inline-flex h-full w-full rounded-full opacity-75",
                     statusIsHealthy ? "animate-ping bg-green-400" : "bg-amber-300"
@@ -131,7 +155,7 @@ export function ChatDataPanel(props: {
                 />
                 <span className={cn("relative inline-flex h-2 w-2 rounded-full", statusIsHealthy ? "bg-green-500" : "bg-amber-500")} />
               </span>
-              自动同步中
+              {status.label}
             </div>
             <span className="hidden text-gray-300 sm:inline">|</span>
             <span className="text-xs text-gray-500">上次同步时间: {lastSyncTime}</span>
@@ -169,6 +193,24 @@ export function ChatDataPanel(props: {
           <div className="mb-4 flex flex-col gap-3 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
             <span>最近一次同步未完成：{(panel.last_error || "").trim()}</span>
             {needsRetryAction ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 border-amber-200 bg-white text-xs text-amber-800 hover:bg-amber-100"
+                onClick={props.onBootstrap}
+                disabled={props.bootstrapping}
+              >
+                {props.bootstrapping ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                重新尝试
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {!props.error && !panel?.last_error && openDataHint ? (
+          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+            <span>{openDataHint}</span>
+            {panel?.open_data_required ? null : needsRetryAction ? (
               <Button
                 variant="outline"
                 size="sm"

@@ -100,15 +100,19 @@ export function useChatDataPanel(params: {
   ])
 
   useEffect(() => {
+    const capability = (panel?.capability_status || "").trim()
     const state = (panel?.init_state || "").trim()
+    const syncMode = (panel?.sync_mode || "").trim()
     if (state !== "queued" && state !== "running") return
+    if (capability && capability !== "ready") return
+    if (syncMode === "idle") return
     if (progressTimerRef.current !== null) {
       window.clearTimeout(progressTimerRef.current)
     }
     progressTimerRef.current = window.setTimeout(() => {
       void load()
     }, 3000)
-  }, [load, panel?.init_state, panel?.messages])
+  }, [load, panel?.capability_status, panel?.init_state, panel?.messages, panel?.sync_mode])
 
   useEffect(() => {
     const targetId = (params.target_id || "").trim()

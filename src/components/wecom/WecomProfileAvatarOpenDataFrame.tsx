@@ -30,6 +30,7 @@ type WecomProfileAvatarOpenDataFrameProps = {
   showHint?: boolean
   alt?: string
   size?: AvatarProps["size"]
+  pending?: boolean
   enabled?: boolean
   lazy?: boolean
 }
@@ -152,6 +153,7 @@ export function WecomProfileAvatarOpenDataFrame({
   showHint = false,
   alt,
   size = "default",
+  pending = false,
   enabled = true,
   lazy = true,
 }: WecomProfileAvatarOpenDataFrameProps) {
@@ -168,6 +170,10 @@ export function WecomProfileAvatarOpenDataFrame({
     [fallback, safeOpenID],
   )
   const shouldBind = enabled && Boolean(safeOpenID) && (lazy ? inViewport : true)
+  const runtimePending = shouldBind && runtime === null
+  const openDataReady = runtime?.canUseOpenData === true
+  const openDataUnsupported = Boolean(runtime) && !runtime.canUseOpenData
+  const showPlaceholder = pending || runtimePending || (openDataReady && !frameReady)
 
   useLayoutEffect(() => {
     if (!lazy) {
@@ -277,27 +283,31 @@ export function WecomProfileAvatarOpenDataFrame({
         )}
         title={alt || runtime?.reason || fallbackText}
       >
-        <Avatar
-          src={(fallbackSrc || "").trim()}
-          alt={alt}
-          fallback={fallbackText}
-          size={size}
-          className={cn(
-            "absolute inset-0 h-full w-full border-0",
-            frameReady ? "opacity-0" : "opacity-100",
-          )}
-        />
+        {showPlaceholder ? (
+          <span className="absolute inset-0 animate-pulse rounded-full bg-gray-200" aria-hidden="true" />
+        ) : (
+          <Avatar
+            src={(fallbackSrc || "").trim()}
+            alt={alt}
+            fallback={fallbackText}
+            size={size}
+            className={cn(
+              "absolute inset-0 h-full w-full border-0",
+              openDataReady && frameReady && !pending ? "opacity-0" : "opacity-100",
+            )}
+          />
+        )}
         {safeOpenID && enabled ? (
           <span
             ref={hostRef}
             className={cn(
               "absolute inset-0 z-10 block overflow-hidden rounded-full bg-transparent",
-              runtime?.canUseOpenData ? "opacity-100" : "pointer-events-none opacity-0",
+              openDataReady && frameReady && !pending ? "opacity-100" : "pointer-events-none opacity-0",
             )}
           />
         ) : null}
       </span>
-      {showHint && runtime?.reason ? (
+      {showHint && openDataUnsupported && runtime?.reason ? (
         <span className={hintClassName}>{runtime.reason}</span>
       ) : null}
     </span>

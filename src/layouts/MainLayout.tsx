@@ -28,14 +28,24 @@ type LayoutDepartment = {
 function MainLayoutDepartmentList({
   departments,
   corpId,
+  pending = false,
   className,
   prefix,
 }: {
   departments: LayoutDepartment[]
   corpId?: string
+  pending?: boolean
   className?: string
   prefix?: string
 }) {
+  if (pending) {
+    return (
+      <span className={cn("inline-flex min-w-0 items-center gap-1", className)} aria-hidden="true">
+        {prefix ? <span className="shrink-0">{prefix}</span> : null}
+        <span className="inline-block h-3 w-24 animate-pulse rounded bg-gray-200" />
+      </span>
+    )
+  }
   const validDepartments = departments.filter((item) => Number(item.departmentID || 0) > 0)
   if (validDepartments.length === 0) return null
   return (
@@ -49,6 +59,7 @@ function MainLayoutDepartmentList({
               departmentID={department.departmentID}
               corpId={corpId}
               fallback={(department.name || "").trim() || `部门 #${department.departmentID}`}
+              pending={pending}
               className="max-w-[120px] truncate"
             />
           </span>
@@ -68,6 +79,7 @@ export default function MainLayout() {
   }
 
   const departments = auth.user?.departments || []
+  const profileLoading = auth.loading
 
   return (
     <div className="flex h-screen w-full bg-[#F0F2F5]">
@@ -109,28 +121,34 @@ export default function MainLayout() {
               fallback={auth.user?.userid || "U"}
               className="border border-gray-100"
               size="sm"
+              pending={profileLoading}
             />
             <div className="flex flex-col">
               <WecomDirectoryOpenDataName
                 openID={auth.user?.openUserID || ""}
                 corpId={auth.corp?.id}
                 fallback={auth.user?.userid || "成员"}
+                pending={profileLoading}
                 className="truncate text-sm font-medium text-gray-900"
                 hintClassName="text-[10px] text-gray-400"
               />
-              <span className="inline-flex min-w-0 items-center gap-1 text-xs text-gray-500">
-                {auth.user?.userid || "-"}
-                {departments.length > 0 ? (
-                  <>
-                    <span className="text-gray-400">·</span>
-                    <MainLayoutDepartmentList
-                      departments={departments}
-                      corpId={auth.corp?.id}
-                      className="min-w-0"
-                    />
-                  </>
-                ) : null}
-              </span>
+              {profileLoading ? (
+                <span className="mt-1 h-3 w-28 animate-pulse rounded bg-gray-100" aria-hidden="true" />
+              ) : (
+                <span className="inline-flex min-w-0 items-center gap-1 text-xs text-gray-500">
+                  {auth.user?.userid || "-"}
+                  {departments.length > 0 ? (
+                    <>
+                      <span className="text-gray-400">·</span>
+                      <MainLayoutDepartmentList
+                        departments={departments}
+                        corpId={auth.corp?.id}
+                        className="min-w-0"
+                      />
+                    </>
+                  ) : null}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -143,13 +161,23 @@ export default function MainLayout() {
             {navItems.find(item => location.pathname.startsWith(item.path))?.name || "工作台"}
           </h1>
           <div className="flex items-center gap-4">
-            {auth.corp?.id ? <span className="text-xs text-gray-500">{auth.corp.name || auth.corp.id}</span> : null}
-            <MainLayoutDepartmentList
-              departments={departments}
-              corpId={auth.corp?.id}
-              className="max-w-[320px] text-xs text-gray-500"
-              prefix="部门："
-            />
+            {profileLoading ? (
+              <>
+                <span className="h-3 w-20 animate-pulse rounded bg-gray-200" aria-hidden="true" />
+                <span className="h-3 w-24 animate-pulse rounded bg-gray-100" aria-hidden="true" />
+              </>
+            ) : (
+              <>
+                {auth.corp?.id ? <span className="text-xs text-gray-500">{auth.corp.name || auth.corp.id}</span> : null}
+                <MainLayoutDepartmentList
+                  departments={departments}
+                  corpId={auth.corp?.id}
+                  pending={profileLoading}
+                  className="max-w-[320px] text-xs text-gray-500"
+                  prefix="部门："
+                />
+              </>
+            )}
             <Link to="/" className="text-sm text-blue-600 hover:underline">返回导航页</Link>
             <Button size="sm" variant="outline" onClick={() => void handleLogout()}>
               <LogOut className="mr-1 h-3.5 w-3.5" />

@@ -5,6 +5,7 @@ import { ensureOpenDataReady } from "@/services/openDataService"
 const ROOT_REF = "group-ops-list-root"
 const GROUP_LIST_MIN_WIDTH = 1200
 const GROUP_ROW_HEIGHT = 96
+const GROUP_AVATAR_STACK_WIDTH = 96
 
 type GroupOperationsListPreviewMember = {
   key: string
@@ -155,6 +156,7 @@ function buildStyle(): string {
   min-height: 96px;
   border-bottom: 1px solid #f3f4f6;
   background: #ffffff;
+  cursor: pointer;
 }
 
 .group-ops-col {
@@ -215,7 +217,10 @@ function buildStyle(): string {
 .group-ops-avatars {
   display: flex;
   align-items: center;
+  width: ${GROUP_AVATAR_STACK_WIDTH}px;
+  flex: 0 0 ${GROUP_AVATAR_STACK_WIDTH}px;
   margin-right: 2px;
+  overflow: hidden;
 }
 
 .group-ops-member-avatar,
@@ -431,6 +436,10 @@ function primeFrameElement(instance: ww.OpenDataFrameInstance<FrameData>, host: 
   iframe.style.visibility = "hidden"
 }
 
+function placeholderRowCount(rows: GroupOperationsListOpenDataRow[]): number {
+  return Math.max(3, Math.min(5, rows.length || 3))
+}
+
 export function GroupOperationsListOpenDataFrame(props: {
   rows: GroupOperationsListOpenDataRow[]
   loading?: boolean
@@ -448,9 +457,8 @@ export function GroupOperationsListOpenDataFrame(props: {
     openDetailRef.current = props.onOpenDetail
   }, [props.onOpenDetail])
 
-  // BUGFIX: the loading branch does not render the frame host. If the first
-  // mount runs while hostRef is null, the OpenDataFrame will stay blank unless
-  // it is recreated when real rows arrive.
+  // Keep the frame host alive behind the unified placeholder so runtime
+  // initialization and first-page data loading converge into one reveal step.
   useEffect(() => {
     let cancelled = false
     let mountWatchTimer = 0
@@ -581,13 +589,9 @@ export function GroupOperationsListOpenDataFrame(props: {
     return () => observer.disconnect()
   }, [ready])
 
-  if (props.loading && props.rows.length === 0) {
-    return (
-      <div className="flex min-h-[320px] items-center justify-center text-sm text-gray-500">
-        正在读取群聊数据...
-      </div>
-    )
-  }
+  const loading = props.loading === true
+  const displayOpenDataFrame = !loading && ready
+  const displayFallbackList = !loading && fallbackMode
 
   const standardList = (
     <div className="w-full">
@@ -607,7 +611,7 @@ export function GroupOperationsListOpenDataFrame(props: {
             <div className="h-[14px] w-[14px] rounded border border-gray-300 bg-white" />
           </div>
           <div className="flex flex-1 items-center gap-3 px-6 py-4">
-            <div className="flex items-center">
+            <div className="flex w-[96px] shrink-0 items-center overflow-hidden">
               {(row.previewMembers.length > 0 ? row.previewMembers : [{ key: `${row.chatID}-fallback`, displayInitial: row.nameInitial }]).map((member, index) => (
                 <div
                   key={member.key}
@@ -663,9 +667,56 @@ export function GroupOperationsListOpenDataFrame(props: {
     </div>
   )
 
-  if (fallbackMode) return standardList
+  const placeholderList = (
+    <div className="w-full animate-pulse">
+      {Array.from({ length: placeholderRowCount(props.rows) }, (_, index) => (
+        <div
+          key={`group-ops-placeholder-${index}`}
+          className="flex min-h-[96px] w-full items-center border-b border-gray-100 bg-white"
+          aria-hidden="true"
+        >
+          <div className="w-14 px-6 py-4">
+            <div className="h-[14px] w-[14px] rounded border border-gray-200 bg-gray-100" />
+          </div>
+          <div className="flex flex-1 items-center gap-3 px-6 py-4">
+            <div className="flex w-[96px] shrink-0 items-center overflow-hidden">
+              <div className="h-[30px] w-[30px] rounded-full bg-gray-200" />
+              <div className="-ml-2 h-[30px] w-[30px] rounded-full bg-gray-100" />
+              <div className="-ml-2 h-[30px] w-[30px] rounded-full bg-gray-200" />
+            </div>
+            <div className="min-w-0 space-y-2">
+              <div className="h-4 w-32 rounded bg-gray-200" />
+              <div className="h-3 w-40 rounded bg-gray-100" />
+            </div>
+          </div>
+          <div className="w-[92px] px-3 py-4">
+            <div className="h-4 w-6 rounded bg-gray-200" />
+          </div>
+          <div className="w-[110px] px-3 py-4">
+            <div className="h-6 w-16 rounded-full bg-gray-100" />
+          </div>
+          <div className="flex w-[180px] gap-1.5 px-3 py-4">
+            <div className="h-5 w-16 rounded-full bg-gray-100" />
+            <div className="h-5 w-14 rounded-full bg-gray-200" />
+          </div>
+          <div className="w-[176px] px-3 py-4 space-y-2">
+            <div className="h-4 w-24 rounded bg-gray-200" />
+            <div className="h-3 w-20 rounded bg-gray-100" />
+          </div>
+          <div className="w-[180px] px-3 py-4">
+            <div className="h-4 w-16 rounded bg-gray-200" />
+          </div>
+          <div className="w-[84px] px-6 py-4">
+            <div className="ml-auto h-4 w-8 rounded bg-gray-100" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 
-  if (error) {
+  if (displayFallbackList) return standardList
+
+  if (!loading && error && !displayOpenDataFrame) {
     return (
       <div className="flex min-h-[160px] items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm text-amber-800">
         {error}
@@ -678,13 +729,13 @@ export function GroupOperationsListOpenDataFrame(props: {
       <div
         ref={hostRef}
         data-estimated-height={estimatedFrameHeight(props.rows)}
-        className={ready ? "w-full" : "pointer-events-none absolute inset-x-0 top-0 -z-10 w-full opacity-0"}
+        className={displayOpenDataFrame ? "w-full" : "pointer-events-none absolute inset-x-0 top-0 -z-10 w-full opacity-0"}
         style={{
-          minHeight: ready ? estimatedFrameHeight(props.rows) : 0,
+          minHeight: displayOpenDataFrame ? estimatedFrameHeight(props.rows) : 0,
           minWidth: GROUP_LIST_MIN_WIDTH,
         }}
       />
-      {ready ? null : standardList}
+      {displayOpenDataFrame ? null : placeholderList}
     </div>
   )
 }
