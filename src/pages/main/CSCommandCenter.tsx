@@ -66,6 +66,14 @@ type ActionKey = "send_to_queue" | "transfer_to_human" | "end_session";
 type DetailLoadMode = "reset" | "prepend_history" | "merge_incremental";
 type LiveRefreshRequest = { refreshView: boolean; refreshDetail: boolean };
 type MessageSenderKind = "customer" | "staff" | "assistant";
+type MessageRenderKind =
+  | "customer_chat"
+  | "staff_chat"
+  | "assistant_chat"
+  | "recalled_chat"
+  | "sync_gap_notice"
+  | "wecom_event_notice"
+  | "wecom_recall_notice";
 
 type SessionActionDescriptor = {
   key: ActionKey;
@@ -349,6 +357,152 @@ function resolveMessageSenderKind(
   return "customer";
 }
 
+// 会话详情消息区按正式消息类型分流展示，不再借 sender 字段猜消息类别。
+function resolveCommandCenterMessageRenderKind(
+  message?: CommandCenterMessage | null,
+): MessageRenderKind {
+  const msgType = (message?.type || "").trim().toLowerCase();
+  if (msgType === "sync_gap_notice") return "sync_gap_notice";
+  if (msgType === "wecom_recalled_message") return "recalled_chat";
+  if (msgType === "wecom_recall_notice") return "wecom_recall_notice";
+  if (msgType === "wecom_event_notice" || msgType === "event") {
+    return "wecom_event_notice";
+  }
+
+  switch (resolveMessageSenderKind(message)) {
+    case "assistant":
+      return "assistant_chat";
+    case "staff":
+      return "staff_chat";
+    default:
+      return "customer_chat";
+  }
+}
+
+function resolveCommandCenterNoticeMeta(kind: MessageRenderKind): {
+  containerClassName: string;
+  contentClassName: string;
+  timeClassName: string;
+  compactTimeInline: boolean;
+} {
+  if (kind === "sync_gap_notice") {
+    return {
+      containerClassName:
+        "border-amber-200 bg-amber-50/70 text-amber-950 shadow-amber-100/50",
+      contentClassName: "text-amber-950",
+      timeClassName: "text-amber-600/80",
+      compactTimeInline: false,
+    };
+  }
+  if (kind === "wecom_recall_notice") {
+    return {
+      containerClassName:
+        "border-slate-200 bg-slate-50/80 text-slate-700 shadow-slate-100/50",
+      contentClassName: "text-slate-600",
+      timeClassName: "text-slate-400",
+      compactTimeInline: false,
+    };
+  }
+  if (kind === "wecom_event_notice") {
+    return {
+      containerClassName: "bg-slate-100/85 text-slate-500",
+      contentClassName: "text-slate-500",
+      timeClassName: "text-slate-400/90",
+      compactTimeInline: true,
+    };
+  }
+  return {
+    containerClassName:
+      "border-slate-200 bg-white/80 text-slate-700 shadow-slate-100/60",
+    contentClassName: "text-slate-700",
+    timeClassName: "text-slate-400",
+    compactTimeInline: false,
+  };
+}
+
+function renderCommandCenterNoticeContent(
+  kind: MessageRenderKind,
+  content: string,
+): string {
+  if (content) return content;
+  if (kind === "sync_gap_notice") return "同步状态已更新";
+  if (kind === "wecom_recall_notice") return "一条消息已撤回";
+  return "企业微信事件已同步";
+}
+
+function resolveCommandCenterNoticeWrapperClass(
+  kind: MessageRenderKind,
+): string {
+  if (kind === "sync_gap_notice") return "w-full max-w-[540px]";
+  if (kind === "wecom_recall_notice") return "w-full max-w-[340px]";
+  if (kind === "wecom_event_notice") return "w-auto max-w-[280px]";
+  return "w-full max-w-[460px]";
+}
+
+function resolveCommandCenterNoticeRadius(kind: MessageRenderKind): string {
+  if (kind === "wecom_event_notice") return "rounded-full";
+  return kind === "wecom_recall_notice" ? "rounded-full" : "rounded-2xl";
+}
+
+function resolveCommandCenterNoticePadding(kind: MessageRenderKind): string {
+  if (kind === "sync_gap_notice") return "px-4 py-2.5";
+  if (kind === "wecom_recall_notice") return "px-3 py-2";
+  if (kind === "wecom_event_notice") return "px-2.5 py-1";
+  return "px-4 py-2";
+}
+
+function resolveCommandCenterNoticeTypography(kind: MessageRenderKind): string {
+  if (kind === "sync_gap_notice") return "text-[12px] leading-5 font-medium";
+  if (kind === "wecom_event_notice") return "text-[11px] leading-4";
+  return "text-[12px] leading-5";
+}
+
+function renderCommandCenterNoticeRow(input: {
+  message: CommandCenterMessage;
+  kind: MessageRenderKind;
+  index: number;
+}): ReactNode {
+  const meta = resolveCommandCenterNoticeMeta(input.kind);
+  const timeText = (input.message.timestamp || "")
+    .replace("T", " ")
+    .slice(0, 16);
+  const noticeContent = renderCommandCenterNoticeContent(
+    input.kind,
+    (input.message.content || "").trim(),
+  );
+  return (
+    <div
+      key={getCommandCenterMessageKey(input.message, input.index)}
+      data-sticky-scroll-item="true"
+      className="flex justify-center px-2"
+    >
+      <div
+        className={`${input.kind === "wecom_event_notice" ? "text-center" : "text-center shadow-sm"} ${resolveCommandCenterNoticeWrapperClass(input.kind)} ${resolveCommandCenterNoticeRadius(input.kind)} ${resolveCommandCenterNoticePadding(input.kind)} ${meta.containerClassName}`}
+      >
+        {meta.compactTimeInline ? (
+          <p
+            className={`whitespace-nowrap ${resolveCommandCenterNoticeTypography(input.kind)} ${meta.contentClassName}`}
+          >
+            <span>{noticeContent}</span>
+            {timeText ? (
+              <span className={`ml-1.5 ${meta.timeClassName}`}>{timeText}</span>
+            ) : null}
+          </p>
+        ) : (
+          <p
+            className={`whitespace-pre-wrap break-words ${resolveCommandCenterNoticeTypography(input.kind)} ${meta.contentClassName}`}
+          >
+            {noticeContent}
+          </p>
+        )}
+        {!meta.compactTimeInline && timeText ? (
+          <p className={`mt-1 text-[10px] ${meta.timeClassName}`}>{timeText}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function buildCommandCenterSessionKey(
   input?: {
     open_kfid?: string;
@@ -604,10 +758,7 @@ function SessionTimingBadge(props: {
   );
 }
 
-function CommandCenterStatusBadge(props: {
-  status: string;
-  label?: string;
-}) {
+function CommandCenterStatusBadge(props: { status: string; label?: string }) {
   const status = props.status.trim();
   if (status === "running" || status === "queued") {
     return (
@@ -724,10 +875,15 @@ export default function CSCommandCenter() {
   const refreshQueuedRef = useRef(false);
   const refreshViewRequestedRef = useRef(false);
   const refreshDetailRequestedRef = useRef(false);
-  const viewRefreshPromiseRef = useRef<Promise<CommandCenterViewModel> | null>(null);
+  const viewRefreshPromiseRef = useRef<Promise<CommandCenterViewModel> | null>(
+    null,
+  );
   const lastViewRefreshStartedAtRef = useRef(0);
   const trailingViewRefreshTimerRef = useRef<number | null>(null);
-  const lastDetailRefreshRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const lastDetailRefreshRef = useRef<{ key: string; at: number }>({
+    key: "",
+    at: 0,
+  });
 
   const [upgradeOwner, setUpgradeOwner] = useState("销售部-王经理");
   const [upgradeReason, setUpgradeReason] = useState("高意向潜客");
@@ -818,7 +974,8 @@ export default function CSCommandCenter() {
     const now = Date.now();
     if (
       viewRefreshPromiseRef.current &&
-      now - lastViewRefreshStartedAtRef.current < COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS
+      now - lastViewRefreshStartedAtRef.current <
+        COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS
     ) {
       return viewRefreshPromiseRef.current;
     }
@@ -942,7 +1099,8 @@ export default function CSCommandCenter() {
     // 列表是页级真相；详情只在当前选中会话命中更新时增量刷新，避免每次事件都双查。
     if (request.refreshView) {
       const elapsedMs = Date.now() - lastViewRefreshStartedAtRef.current;
-      const shouldRefreshView = elapsedMs >= COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS;
+      const shouldRefreshView =
+        elapsedMs >= COMMAND_CENTER_VIEW_REFRESH_MIN_INTERVAL_MS;
       if (shouldRefreshView) {
         latestViewData = await fetchViewSnapshot();
         const viewResult = applyViewSnapshot(latestViewData, currentSelected);
@@ -968,7 +1126,8 @@ export default function CSCommandCenter() {
     const now = Date.now();
     if (
       lastDetailRefreshRef.current.key === detailRefreshKey &&
-      now - lastDetailRefreshRef.current.at < COMMAND_CENTER_DETAIL_REFRESH_DEDUPE_MS
+      now - lastDetailRefreshRef.current.at <
+        COMMAND_CENTER_DETAIL_REFRESH_DEDUPE_MS
     ) {
       if (trailingViewRefreshDelayMs > 0) {
         scheduleTrailingViewRefresh(trailingViewRefreshDelayMs);
@@ -1047,10 +1206,13 @@ export default function CSCommandCenter() {
   const scheduleTrailingViewRefresh = (delayMs: number) => {
     if (typeof window === "undefined") return;
     if (trailingViewRefreshTimerRef.current !== null) return;
-    trailingViewRefreshTimerRef.current = window.setTimeout(() => {
-      trailingViewRefreshTimerRef.current = null;
-      queueLiveRefresh({ refreshView: true, refreshDetail: false });
-    }, Math.max(0, delayMs));
+    trailingViewRefreshTimerRef.current = window.setTimeout(
+      () => {
+        trailingViewRefreshTimerRef.current = null;
+        queueLiveRefresh({ refreshView: true, refreshDetail: false });
+      },
+      Math.max(0, delayMs),
+    );
   };
 
   useEffect(() => {
@@ -1159,7 +1321,9 @@ export default function CSCommandCenter() {
       applyDetailSnapshot(null, "reset", Date.now());
       return;
     }
-    const currentDetailKey = buildCommandCenterSessionKey(detail?.session || null);
+    const currentDetailKey = buildCommandCenterSessionKey(
+      detail?.session || null,
+    );
     if (currentDetailKey && currentDetailKey === selectedSessionKey) {
       setIsLoadingDetail(false);
       return;
@@ -1481,7 +1645,10 @@ export default function CSCommandCenter() {
       await runRefreshCycle({ refreshView: true, refreshDetail: true });
       return true;
     } catch (error) {
-      showFeedback({ message: describeSessionActionError(error), kind: "error" });
+      showFeedback({
+        message: describeSessionActionError(error),
+        kind: "error",
+      });
       return false;
     } finally {
       setIsSubmitting(false);
@@ -1527,7 +1694,10 @@ export default function CSCommandCenter() {
 
   const handleOpenInWeCom = async () => {
     if (!selectedSession?.open_kfid || !selectedSession?.external_userid) {
-      showFeedback({ message: "当前会话缺少企业微信跳转参数", kind: "warning" });
+      showFeedback({
+        message: "当前会话缺少企业微信跳转参数",
+        kind: "warning",
+      });
       return;
     }
     try {
@@ -2032,10 +2202,27 @@ export default function CSCommandCenter() {
                         </div>
                       ) : (
                         orderedMessages.map((message, index) => {
-                          const senderKind = resolveMessageSenderKind(message);
+                          const renderKind =
+                            resolveCommandCenterMessageRenderKind(message);
+                          if (
+                            renderKind === "sync_gap_notice" ||
+                            renderKind === "wecom_event_notice" ||
+                            renderKind === "wecom_recall_notice"
+                          ) {
+                            return renderCommandCenterNoticeRow({
+                              message,
+                              kind: renderKind,
+                              index,
+                            });
+                          }
+
+                          const senderKind =
+                            resolveMessageSenderKind(message);
                           const outgoing = senderKind !== "customer";
                           const isAssistantMessage = senderKind === "assistant";
                           const isStaffMessage = senderKind === "staff";
+                          const isRecalledMessage =
+                            renderKind === "recalled_chat";
                           return (
                             <div
                               key={getCommandCenterMessageKey(message, index)}
@@ -2074,17 +2261,43 @@ export default function CSCommandCenter() {
                                   </div>
                                 ) : null}
                                 <div
-                                  className={`min-w-0 px-4 py-2.5 shadow-sm rounded-2xl ${
-                                    outgoing
-                                      ? "bg-blue-600 text-white rounded-tr-none"
-                                      : "bg-white border border-gray-200 text-gray-800 rounded-tl-none"
+                                  className={`min-w-0 rounded-2xl px-4 py-2.5 shadow-sm ${
+                                    isRecalledMessage
+                                      ? outgoing
+                                        ? "rounded-tr-none border border-dashed border-slate-300 bg-slate-100 text-slate-600"
+                                        : "rounded-tl-none border border-dashed border-slate-300 bg-slate-50 text-slate-600"
+                                      : outgoing
+                                        ? "rounded-tr-none bg-blue-600 text-white"
+                                        : "rounded-tl-none border border-gray-200 bg-white text-gray-800"
                                   }`}
                                 >
-                                  <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">
+                                  <p
+                                    className={`whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere] ${
+                                      isRecalledMessage
+                                        ? "text-slate-500 line-through decoration-slate-300 decoration-[1.5px]"
+                                        : ""
+                                    }`}
+                                  >
                                     {(message.content || "").trim()}
                                   </p>
+                                  {isRecalledMessage ? (
+                                    <div className="mt-2 flex items-center justify-between gap-2">
+                                      <span className="inline-flex items-center rounded-full bg-slate-200/80 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                                        已撤回
+                                      </span>
+                                      <span className="text-[10px] text-slate-400">
+                                        原消息内容仅用于会话留痕
+                                      </span>
+                                    </div>
+                                  ) : null}
                                   <p
-                                    className={`mt-1 text-[10px] ${outgoing ? "text-blue-100" : "text-gray-400"}`}
+                                    className={`mt-1 text-[10px] ${
+                                      isRecalledMessage
+                                        ? "text-slate-400"
+                                        : outgoing
+                                          ? "text-blue-100"
+                                          : "text-gray-400"
+                                    }`}
                                   >
                                     {(message.timestamp || "")
                                       .replace("T", " ")
@@ -2239,12 +2452,14 @@ export default function CSCommandCenter() {
                           <div className="flex min-h-[22px] flex-wrap gap-1.5">
                             {activeMonitor?.summary_detail?.customer_intent ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
-                                诉求：{activeMonitor.summary_detail.customer_intent.trim()}
+                                诉求：
+                                {activeMonitor.summary_detail.customer_intent.trim()}
                               </Badge>
                             ) : null}
                             {activeMonitor?.summary_detail?.customer_goal ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
-                                目标：{activeMonitor.summary_detail.customer_goal.trim()}
+                                目标：
+                                {activeMonitor.summary_detail.customer_goal.trim()}
                               </Badge>
                             ) : null}
                             {activeMonitor?.summary_detail?.journey_stage ? (
@@ -2255,11 +2470,13 @@ export default function CSCommandCenter() {
                                 )}
                               </Badge>
                             ) : null}
-                            {activeMonitor?.summary_detail?.relationship_stage ? (
+                            {activeMonitor?.summary_detail
+                              ?.relationship_stage ? (
                               <Badge className="border-none bg-slate-100 px-1.5 py-0 text-[10px] text-slate-700">
                                 关系：
                                 {commandCenterRelationshipStageLabel(
-                                  activeMonitor.summary_detail.relationship_stage,
+                                  activeMonitor.summary_detail
+                                    .relationship_stage,
                                 )}
                               </Badge>
                             ) : null}
@@ -2298,7 +2515,8 @@ export default function CSCommandCenter() {
                             <div className="space-y-1 text-[11px] text-gray-500">
                               {analysisFacts.blockingIssues.length > 0 ? (
                                 <div>
-                                  阻塞点：{analysisFacts.blockingIssues.join("；")}
+                                  阻塞点：
+                                  {analysisFacts.blockingIssues.join("；")}
                                 </div>
                               ) : null}
                               {analysisFacts.decisionSignals.length > 0 ? (
@@ -2307,7 +2525,8 @@ export default function CSCommandCenter() {
                                   {analysisFacts.decisionSignals.join("；")}
                                 </div>
                               ) : null}
-                              {activeMonitor?.summary_detail?.opportunity_level ? (
+                              {activeMonitor?.summary_detail
+                                ?.opportunity_level ? (
                                 <div>
                                   机会等级：
                                   {commandCenterOpportunityLevelLabel(
@@ -2322,7 +2541,8 @@ export default function CSCommandCenter() {
                                   {analysisFacts.opportunitySignals.join("；")}
                                 </div>
                               ) : null}
-                              {activeMonitor?.summary_detail?.recommended_offer ? (
+                              {activeMonitor?.summary_detail
+                                ?.recommended_offer ? (
                                 <div>
                                   推荐策略：
                                   {activeMonitor.summary_detail.recommended_offer.trim()}
@@ -2337,7 +2557,8 @@ export default function CSCommandCenter() {
                         {analysisFacts.nextBestActions.length > 0 ||
                         analysisFacts.requiredInformation.length > 0 ||
                         analysisFacts.replyGuardrails.length > 0 ||
-                        activeMonitor?.summary_detail?.handoff_recommendation ? (
+                        activeMonitor?.summary_detail
+                          ?.handoff_recommendation ? (
                           <div className="min-h-[72px]">
                             <div className="mb-2 text-[11px] text-gray-500">
                               下一步动作
@@ -2361,7 +2582,8 @@ export default function CSCommandCenter() {
                                   {analysisFacts.replyGuardrails.join("；")}
                                 </div>
                               ) : null}
-                              {activeMonitor?.summary_detail?.handoff_recommendation ? (
+                              {activeMonitor?.summary_detail
+                                ?.handoff_recommendation ? (
                                 <div>
                                   转人工建议：
                                   {commandCenterHandoffLabel(
@@ -3074,7 +3296,8 @@ function buildSessionActionPanel(
     case 1:
       return {
         title: "当前由智能助手接待",
-        description: "需要人工介入时，可直接转给指定人工，送入待接入池，或直接结束当前会话。",
+        description:
+          "需要人工介入时，可直接转给指定人工，送入待接入池，或直接结束当前会话。",
         primaryAction: transferAction,
         secondaryActions: [queueAction, endAction],
         emptyHint:

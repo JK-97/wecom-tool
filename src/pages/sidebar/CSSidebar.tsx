@@ -90,7 +90,11 @@ function mergeToolbarHeader(
     session_status_code: next?.session_status_code || prev?.session_status_code,
     contact_name: next?.contact_name || prev?.contact_name,
     risk_tags: Array.from(
-      new Set([...(prev?.risk_tags || []), ...(next?.risk_tags || [])].filter(Boolean)),
+      new Set(
+        [...(prev?.risk_tags || []), ...(next?.risk_tags || [])].filter(
+          Boolean,
+        ),
+      ),
     ),
   };
 }
@@ -519,7 +523,7 @@ function hasBoundMuYuAIClient(
 ): boolean {
   return Boolean(
     (snapshot?.bound || automation?.bound) &&
-      readBoundMuYuAIClientID(snapshot, automation),
+    readBoundMuYuAIClientID(snapshot, automation),
   );
 }
 
@@ -824,13 +828,18 @@ function nextToolbarAnalysisRealtimeStatus(
     matchesToolbarRealtimeSession(event, openKFID, externalUserID),
   );
   const stateEvent = matched.find(
-    (event) => realtimeEventType(event) === "chat.session_analysis.state_changed",
+    (event) =>
+      realtimeEventType(event) === "chat.session_analysis.state_changed",
   );
-  const status = stateEvent ? readRealtimeEventString(stateEvent, "status") : "";
+  const status = stateEvent
+    ? readRealtimeEventString(stateEvent, "status")
+    : "";
   const normalized = normalizeToolbarSummaryStatus(status);
   if (normalized === "queued" || normalized === "running") return normalized;
   if (
-    matched.some((event) => realtimeEventType(event) === "chat.message.received")
+    matched.some(
+      (event) => realtimeEventType(event) === "chat.message.received",
+    )
   ) {
     return "queued";
   }
@@ -855,7 +864,11 @@ function matchingToolbarEventTypes(
   if (!targetOpenKFID || !targetExternalUserID) return [];
   return (payload.events || [])
     .filter((event) =>
-      matchesToolbarRealtimeSession(event, targetOpenKFID, targetExternalUserID),
+      matchesToolbarRealtimeSession(
+        event,
+        targetOpenKFID,
+        targetExternalUserID,
+      ),
     )
     .map((event) => realtimeEventType(event))
     .filter(Boolean);
@@ -900,12 +913,86 @@ function formatToolbarMessageTime(value?: string): string {
 
 function resolveToolbarMessageRole(
   message?: ToolbarConversationMessage | null,
-): "assistant" | "staff" | "customer" | "system" {
+): "assistant" | "staff" | "customer" {
   const sender = (message?.sender || "").trim().toLowerCase();
   if (sender === "assistant") return "assistant";
   if (sender === "staff") return "staff";
-  if (sender === "system" || sender === "event") return "system";
   return "customer";
+}
+
+// 侧边栏消息同样按正式消息类型分流，事件类消息不再走聊天气泡。
+function resolveToolbarMessageRenderKind(
+  message?: ToolbarConversationMessage | null,
+):
+  | "assistant"
+  | "staff"
+  | "customer"
+  | "recalled"
+  | "sync_gap_notice"
+  | "wecom_event_notice"
+  | "wecom_recall_notice" {
+  const msgType = (message?.type || "").trim().toLowerCase();
+  if (msgType === "sync_gap_notice") return "sync_gap_notice";
+  if (msgType === "wecom_recalled_message") return "recalled";
+  if (msgType === "wecom_recall_notice") return "wecom_recall_notice";
+  if (msgType === "wecom_event_notice" || msgType === "event") {
+    return "wecom_event_notice";
+  }
+  return resolveToolbarMessageRole(message);
+}
+
+function renderToolbarNoticeContent(
+  kind: ReturnType<typeof resolveToolbarMessageRenderKind>,
+  content: string,
+): string {
+  if (content) return content;
+  if (kind === "sync_gap_notice") return "同步状态已更新";
+  if (kind === "wecom_recall_notice") return "一条消息已撤回";
+  return "企业微信事件已同步";
+}
+
+function resolveToolbarNoticeMeta(
+  kind: ReturnType<typeof resolveToolbarMessageRenderKind>,
+): {
+  wrapperClassName: string;
+  contentClassName: string;
+  timeClassName: string;
+  compactTimeInline: boolean;
+} {
+  if (kind === "sync_gap_notice") {
+    return {
+      wrapperClassName:
+        "rounded-2xl border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-center shadow-sm",
+      contentClassName: "text-[12px] font-medium leading-5 text-amber-950",
+      timeClassName: "text-[10px] text-amber-600/80",
+      compactTimeInline: false,
+    };
+  }
+  if (kind === "wecom_recall_notice") {
+    return {
+      wrapperClassName:
+        "rounded-full border border-slate-200 bg-slate-50/80 px-3 py-2 text-center shadow-sm",
+      contentClassName: "text-[12px] leading-5 text-slate-600",
+      timeClassName: "text-[10px] text-slate-400",
+      compactTimeInline: false,
+    };
+  }
+  if (kind === "wecom_event_notice") {
+    return {
+      wrapperClassName:
+        "rounded-full bg-slate-100/85 px-2.5 py-1 text-center",
+      contentClassName: "text-[11px] leading-4 text-slate-500",
+      timeClassName: "text-[10px] text-slate-400/90",
+      compactTimeInline: true,
+    };
+  }
+  return {
+    wrapperClassName:
+      "rounded-2xl border border-slate-200 bg-white/80 px-3 py-2 text-center shadow-sm",
+    contentClassName: "text-[12px] leading-5 text-slate-700",
+    timeClassName: "text-[10px] text-slate-400",
+    compactTimeInline: false,
+  };
 }
 
 function summarizeToolbarStatusCopy(input?: {
@@ -1193,10 +1280,7 @@ export default function CSSidebar() {
     } catch (error) {
       if (!options?.silent) {
         setRPABindingNotice(
-          toMuYuAIClientNotice(
-            error,
-            "读取 MuYuAI 客户端ID失败，请稍后再试",
-          ),
+          toMuYuAIClientNotice(error, "读取 MuYuAI 客户端ID失败，请稍后再试"),
         );
       }
       return null;
@@ -1620,15 +1704,18 @@ export default function CSSidebar() {
       delays.push(analysisStatus === "queued" ? 900 : 1200);
     }
     if (delays.length === 0) return;
-    bootstrapProbeTimerRef.current = window.setTimeout(() => {
-      bootstrapProbeTimerRef.current = null;
-      void loadBootstrap({
-        preserveNotice: true,
-        silent: true,
-        preserveConversation: true,
-        light: true,
-      });
-    }, Math.min(...delays));
+    bootstrapProbeTimerRef.current = window.setTimeout(
+      () => {
+        bootstrapProbeTimerRef.current = null;
+        void loadBootstrap({
+          preserveNotice: true,
+          silent: true,
+          preserveConversation: true,
+          light: true,
+        });
+      },
+      Math.min(...delays),
+    );
     return () => {
       if (bootstrapProbeTimerRef.current !== null) {
         window.clearTimeout(bootstrapProbeTimerRef.current);
@@ -1774,7 +1861,10 @@ export default function CSSidebar() {
             : prev,
         );
       }
-      if (hasAnalysisReadyEvent || shouldRefreshToolbarImmediately(eventTypes)) {
+      if (
+        hasAnalysisReadyEvent ||
+        shouldRefreshToolbarImmediately(eventTypes)
+      ) {
         queueRefresh({ preserveConversation: !shouldRefreshConversation });
       }
     };
@@ -1929,14 +2019,12 @@ export default function CSSidebar() {
     ""
   ).trim();
   const humanOnlyPrompt =
-    !selectionState?.required &&
-    !suggestionPanelVisible &&
-    sessionStatusText
+    !selectionState?.required && !suggestionPanelVisible && sessionStatusText
       ? `当前为${sessionStatusText}，仅在人工接待状态下显示建议回复。`
       : "仅在人工接待状态下显示建议回复。";
   const hasStableToolbarContext = Boolean(
     (bootstrap?.open_kfid || "").trim() &&
-      (bootstrap?.external_userid || "").trim(),
+    (bootstrap?.external_userid || "").trim(),
   );
   const canOpenDebugView =
     !isResolvingContext &&
@@ -2144,7 +2232,11 @@ export default function CSSidebar() {
   const handleToggleChatHistory = () => {
     setIsChatHistoryOpen((open) => {
       const next = !open;
-      if (next && conversationMessages.length === 0 && !isRefreshingConversation) {
+      if (
+        next &&
+        conversationMessages.length === 0 &&
+        !isRefreshingConversation
+      ) {
         window.setTimeout(() => {
           void handleRefreshConversation();
         }, 0);
@@ -2262,10 +2354,7 @@ export default function CSSidebar() {
       }
     } catch (error) {
       setRPABindingNotice(
-        toMuYuAIClientNotice(
-          error,
-          "保存 MuYuAI 客户端ID失败，请稍后再试",
-        ),
+        toMuYuAIClientNotice(error, "保存 MuYuAI 客户端ID失败，请稍后再试"),
       );
     } finally {
       setIsSavingRPABinding(false);
@@ -2439,7 +2528,9 @@ export default function CSSidebar() {
     <Dialog
       isOpen={isRPABindingModalOpen}
       onClose={closeRPAClientBindingDialog}
-      title={hasBoundRPAClient ? "编辑 MuYuAI 客户端ID" : "绑定 MuYuAI 客户端ID"}
+      title={
+        hasBoundRPAClient ? "编辑 MuYuAI 客户端ID" : "绑定 MuYuAI 客户端ID"
+      }
       className="max-w-[360px]"
       footer={
         <>
@@ -2547,9 +2638,7 @@ export default function CSSidebar() {
           onOpenRPAClientBinding={() =>
             void openRPAClientBindingDialog({
               pendingEnable: false,
-              notice: hasBoundRPAClient
-                ? ""
-                : "绑定后才能开启自动发送。",
+              notice: hasBoundRPAClient ? "" : "绑定后才能开启自动发送。",
             })
           }
           onExitRPAMode={async () => {
@@ -2868,7 +2957,8 @@ export default function CSSidebar() {
                         <Lightbulb className="h-4 w-4 shrink-0 text-[#0052D9]" />
                         <div className="min-w-0">
                           <div className="truncate text-xs font-bold text-[#0052D9]">
-                            建议操作：{suggestedActionText || "继续安抚并确认下一步"}
+                            建议操作：
+                            {suggestedActionText || "继续安抚并确认下一步"}
                           </div>
                           {suggestionGeneratedAt ? (
                             <div className="mt-0.5 truncate text-[10px] font-bold text-blue-400">
@@ -2952,9 +3042,7 @@ export default function CSSidebar() {
                             <div
                               key={item.id}
                               className={`wecom-toolbar-enter ${
-                                idx > 0
-                                  ? "border-t border-gray-100 pt-3.5"
-                                  : ""
+                                idx > 0 ? "border-t border-gray-100 pt-3.5" : ""
                               } ${suggestionIsAnalyzing ? "opacity-75" : ""}`}
                               style={{ animationDelay: `${idx * 70}ms` }}
                             >
@@ -3143,7 +3231,8 @@ export default function CSSidebar() {
                           className="max-h-[320px] space-y-2 overflow-y-auto pr-1"
                         >
                           {conversationMessages.map((message, idx) => {
-                            const role = resolveToolbarMessageRole(message);
+                            const renderKind =
+                              resolveToolbarMessageRenderKind(message);
                             const timeText = formatToolbarMessageTime(
                               message?.timestamp,
                             );
@@ -3156,14 +3245,67 @@ export default function CSSidebar() {
                               message?.sender_userid ||
                               "人工客服"
                             ).trim();
+                            const isRecalledMessage =
+                              renderKind === "recalled";
+                            if (
+                              renderKind === "sync_gap_notice" ||
+                              renderKind === "wecom_event_notice" ||
+                              renderKind === "wecom_recall_notice"
+                            ) {
+                              const noticeMeta =
+                                resolveToolbarNoticeMeta(renderKind);
+                              return (
+                                <div
+                                  key={`${message?.id || "msg"}-${idx}`}
+                                  className={noticeMeta.wrapperClassName}
+                                >
+                                  {noticeMeta.compactTimeInline ? (
+                                    <div className={noticeMeta.contentClassName}>
+                                      <span>
+                                        {renderToolbarNoticeContent(
+                                          renderKind,
+                                          content,
+                                        )}
+                                      </span>
+                                      {timeText ? (
+                                        <span
+                                          className={`ml-1.5 ${noticeMeta.timeClassName}`}
+                                        >
+                                          {timeText}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div
+                                        className={noticeMeta.contentClassName}
+                                      >
+                                        {renderToolbarNoticeContent(
+                                          renderKind,
+                                          content,
+                                        )}
+                                      </div>
+                                      {timeText ? (
+                                        <div
+                                          className={`mt-1 ${noticeMeta.timeClassName}`}
+                                        >
+                                          {timeText}
+                                        </div>
+                                      ) : null}
+                                    </>
+                                  )}
+                                </div>
+                              );
+                            }
+
                             const roleClass =
-                              role === "assistant"
+                              isRecalledMessage
+                                ? "border-l-slate-300 bg-slate-50/90"
+                                : renderKind === "assistant"
                                 ? "border-l-violet-500 bg-violet-50/45"
-                                : role === "staff"
+                                : renderKind === "staff"
                                   ? "border-l-[#0052D9] bg-blue-50/50"
-                                  : role === "system"
-                                    ? "border-l-gray-300 bg-gray-50"
-                                    : "border-l-emerald-500 bg-emerald-50/45";
+                                  : "border-l-emerald-500 bg-emerald-50/45";
 
                             return (
                               <div
@@ -3172,12 +3314,12 @@ export default function CSSidebar() {
                               >
                                 <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
                                   <div className="min-w-0 truncate text-[11px] font-bold text-gray-700">
-                                    {role === "assistant" ? (
+                                    {renderKind === "assistant" ? (
                                       <span className="inline-flex items-center gap-1 text-violet-700">
                                         <Bot className="h-3 w-3" />
                                         AI 回复
                                       </span>
-                                    ) : role === "staff" ? (
+                                    ) : renderKind === "staff" ? (
                                       staffDisplayUserID ? (
                                         <WecomOpenDataName
                                           userid={staffDisplayUserID}
@@ -3190,13 +3332,15 @@ export default function CSSidebar() {
                                           {staffFallback}
                                         </span>
                                       )
-                                    ) : role === "system" ? (
-                                      <span className="text-gray-500">
-                                        系统事件
-                                      </span>
                                     ) : (
-                                      <span className="text-emerald-700">
-                                        客户
+                                      <span
+                                        className={
+                                          isRecalledMessage
+                                            ? "text-slate-600"
+                                            : "text-emerald-700"
+                                        }
+                                      >
+                                        {isRecalledMessage ? "已撤回消息" : "客户"}
                                       </span>
                                     )}
                                   </div>
@@ -3206,9 +3350,25 @@ export default function CSSidebar() {
                                     </span>
                                   ) : null}
                                 </div>
-                                <div className="wecom-toolbar-message-content text-[12px] font-medium leading-5 text-gray-800">
+                                <div
+                                  className={`wecom-toolbar-message-content text-[12px] font-medium leading-5 ${
+                                    isRecalledMessage
+                                      ? "text-slate-500 line-through decoration-slate-300 decoration-[1.5px]"
+                                      : "text-gray-800"
+                                  }`}
+                                >
                                   {content || "暂不支持展示该消息内容"}
                                 </div>
+                                {isRecalledMessage ? (
+                                  <div className="mt-2 flex items-center justify-between gap-2">
+                                    <span className="inline-flex items-center rounded-full bg-slate-200/80 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                                      已撤回
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">
+                                      原消息内容仅用于会话留痕
+                                    </span>
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           })}
