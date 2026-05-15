@@ -79,11 +79,15 @@ const COMPLETION_SOURCE_ACTION_TYPES = new Set([
   "wait_wecom_confirm",
   "review_auto_resend",
 ]);
-const WAIT_RPA_ACK_STATUSES = new Set(["waiting_rpa_ack"]);
-const WAIT_WECOM_CONFIRM_STATUSES = new Set([
-  "waiting_wecom_confirm",
-  "rpa_clicked_send",
+// Keep these sets aligned with svc-kf-rpa-automation MessageStatus* mapping.
+// The toolbar may refine a stale "navigate_to_chat" view when the current chat
+// already matches the target, but it must not invent a different business stage.
+const WAIT_RPA_ACK_STATUSES = new Set([
+  "dispatch_queued",
+  "dispatching",
+  "waiting_rpa_ack",
 ]);
+const WAIT_WECOM_CONFIRM_STATUSES = new Set(["waiting_wecom_confirm"]);
 const STREAM_STALE_FALLBACK_MS = 45_000;
 const STREAM_CONNECTING_FALLBACK_MS = 12_000;
 const REVIEW_AUTO_RESEND_STATUSES = new Set(["review_resend_pending"]);
@@ -92,12 +96,7 @@ const NEED_MANUAL_STATUSES = new Set([
   "failed",
   "confirm_uncertain",
 ]);
-const FILLABLE_STATUSES = new Set([
-  "pending",
-  "draft_filling",
-  "draft_filled",
-  "dispatching",
-]);
+const FILL_CURRENT_MESSAGE_STATUSES = new Set(["fill_pending"]);
 
 function snapshotRealtimeVersion(
   snapshot?: ToolbarRPABootstrap | null,
@@ -309,7 +308,7 @@ function deriveContextAwareAction(
       poll_after_ms: action.poll_after_ms || next.poll_after_ms || 3000,
     };
   }
-  if (!FILLABLE_STATUSES.has(messageStatus)) {
+  if (!FILL_CURRENT_MESSAGE_STATUSES.has(messageStatus)) {
     return withTarget;
   }
   if (!matchedCurrentTarget) {
@@ -385,7 +384,7 @@ function badgeVariant(
   value?: string,
 ): "default" | "secondary" | "success" | "warning" | "destructive" {
   const status = (value || "").toLowerCase();
-  if (status === "completed" || status === "sent_confirmed") return "success";
+  if (status === "completed") return "success";
   if (status === "need_manual" || status === "failed") return "destructive";
   if (
     status.includes("waiting") ||
