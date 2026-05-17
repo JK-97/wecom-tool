@@ -20,7 +20,7 @@ import {
   Star,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   CSCommandCenterMessageBuyerAvatarOpenDataFrame,
   type CSCommandCenterMessageBuyerAvatarRow,
@@ -872,6 +872,7 @@ function HeaderAssignedIdentity(props: {
 }
 
 export default function CSCommandCenter() {
+  const [searchParams] = useSearchParams();
   const auth = useAuth();
   const { showFeedback } = usePageFeedback();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -946,11 +947,7 @@ export default function CSCommandCenter() {
   const [upgradeTask, setUpgradeTask] = useState("");
   const [upgradeStars, setUpgradeStars] = useState(4);
 
-  const queryOpenKFID = useMemo(() => {
-    if (typeof window === "undefined") return "";
-    const params = new URLSearchParams(window.location.search);
-    return (params.get("open_kfid") || "").trim();
-  }, []);
+  const queryOpenKFID = (searchParams.get("open_kfid") || "").trim();
 
   const corpID = (auth.corp?.id || "").trim();
   const sessionServicerLookup = useMemo(

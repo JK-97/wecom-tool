@@ -55,7 +55,7 @@ function RouteFeedbackReset() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter unstable_useTransitions={false}>
       <PageFeedbackProvider>
         <RouteFeedbackReset />
         <AuthProvider>

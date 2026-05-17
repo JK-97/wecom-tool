@@ -2,17 +2,27 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { getChatDataPanel, initChatDataBootstrap, type ChatDataPanelView } from "@/services/chatdataService"
 import { normalizeErrorMessage } from "@/services/http"
 
+export type ChatDataRefreshPolicy = "manual" | "auto_5s"
+
+const CHATDATA_REFRESH_POLICY_STORAGE_KEY = "chatdata.refresh-policy.v1"
+
+function readRefreshPolicy(): ChatDataRefreshPolicy {
+  if (typeof window === "undefined") return "auto_5s"
+  const raw = window.localStorage.getItem(CHATDATA_REFRESH_POLICY_STORAGE_KEY)
+  return raw === "manual" ? "manual" : "auto_5s"
+}
+
 export function useChatDataPanel(params: {
   target_type: "external_userid" | "chat_id"
   target_id: string
   surface: "customer_360" | "group_detail"
   autoBootstrap?: boolean
-  refreshIntervalMs?: number
 }) {
   const [panel, setPanel] = useState<ChatDataPanelView | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [bootstrapping, setBootstrapping] = useState(false)
+  const [refreshPolicy, setRefreshPolicy] = useState<ChatDataRefreshPolicy>(() => readRefreshPolicy())
   const progressTimerRef = useRef<number | null>(null)
   const intervalTimerRef = useRef<number | null>(null)
   const bootstrappedTargetRef = useRef("")
@@ -116,27 +126,33 @@ export function useChatDataPanel(params: {
 
   useEffect(() => {
     const targetId = (params.target_id || "").trim()
-    const refreshIntervalMs = Math.max(8000, Number(params.refreshIntervalMs || 15000))
-    if (!targetId) return
+    if (!targetId || refreshPolicy !== "auto_5s") return
     if (intervalTimerRef.current !== null) {
       window.clearInterval(intervalTimerRef.current)
     }
     intervalTimerRef.current = window.setInterval(() => {
       void load()
-    }, refreshIntervalMs)
+    }, 5000)
     return () => {
       if (intervalTimerRef.current !== null) {
         window.clearInterval(intervalTimerRef.current)
         intervalTimerRef.current = null
       }
     }
-  }, [load, params.refreshIntervalMs, params.target_id])
+  }, [load, params.target_id, refreshPolicy])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(CHATDATA_REFRESH_POLICY_STORAGE_KEY, refreshPolicy)
+  }, [refreshPolicy])
 
   return {
     panel,
     loading,
     error,
     bootstrapping,
+    refreshPolicy,
+    setRefreshPolicy,
     reload: load,
     bootstrap,
   }

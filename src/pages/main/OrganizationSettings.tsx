@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
 import { useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { normalizeErrorMessage } from "@/services/http"
 import {
   executeOrganizationSettingsCommand,
@@ -41,13 +42,22 @@ type SettingsTab = (typeof SETTINGS_TABS)[number]
 type NoticeKind = "info" | "success" | "warning" | "error"
 type NoticeScope = SettingsTab | "global"
 
-function resolveInitialSettingsTab(): SettingsTab {
-  if (typeof window === "undefined") return "wecom"
-  const params = new URLSearchParams(window.location.search)
-  const tab = params.get("tab")
+function resolveSettingsTab(searchParams: URLSearchParams): SettingsTab {
+  const tab = searchParams.get("tab")
   if (SETTINGS_TABS.includes(tab as SettingsTab)) return tab as SettingsTab
-  if (params.get("muyuai_connected") === "1") return "connectors"
+  if (searchParams.get("muyuai_connected") === "1") return "connectors"
   return "wecom"
+}
+
+function buildSettingsSearchParams(searchParams: URLSearchParams, tab: SettingsTab): URLSearchParams {
+  const next = new URLSearchParams(searchParams)
+  if (tab === "wecom") {
+    next.delete("tab")
+  } else {
+    next.set("tab", tab)
+  }
+  next.delete("muyuai_connected")
+  return next
 }
 
 const INTERNAL_PERMISSION_META: Record<string, { label: string; group: string }> = {
@@ -215,8 +225,9 @@ function isObjectPassed(status: string): boolean {
 
 export default function OrganizationSettings() {
   const { showFeedback, clearFeedback } = usePageFeedback()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [view, setView] = useState<OrganizationSettingsView | null>(null)
-  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveInitialSettingsTab())
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveSettingsTab(searchParams))
   const [isLoading, setIsLoading] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [isRunningCheck, setIsRunningCheck] = useState(false)
@@ -256,6 +267,16 @@ export default function OrganizationSettings() {
   const [isClosingDataZoneDebugMode, setIsClosingDataZoneDebugMode] = useState(false)
   const [dataZoneDebugProgramID, setDataZoneDebugProgramID] = useState("")
   const [dataZoneDebugToken, setDataZoneDebugToken] = useState("")
+
+  useEffect(() => {
+    const nextTab = resolveSettingsTab(searchParams)
+    setActiveSettingsTab(nextTab)
+
+    const canonicalSearchParams = buildSettingsSearchParams(searchParams, nextTab)
+    if (canonicalSearchParams.toString() !== searchParams.toString()) {
+      setSearchParams(canonicalSearchParams, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   const showNotice = (_scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
     const text = (message || "").trim()
@@ -777,16 +798,21 @@ export default function OrganizationSettings() {
   }
 
   const deleteEditingRole = async () => {
-    const role = (editingRole?.role || "").trim()
-    if (!role || editingRole?.system_preset) {
+    const currentEditingRole = editingRole
+    if (!currentEditingRole) {
       setRoleEditorError("当前角色不可删除")
       return
     }
-    if (Number(editingRole.member_count || 0) > 0) {
+    const role = (currentEditingRole.role || "").trim()
+    if (!role || currentEditingRole.system_preset) {
+      setRoleEditorError("当前角色不可删除")
+      return
+    }
+    if (Number(currentEditingRole.member_count || 0) > 0) {
       setRoleEditorError("该角色仍有成员绑定，请先调整成员角色后再删除")
       return
     }
-    if (!window.confirm(`确定删除角色“${(editingRole.role_name || role).trim()}”吗？`)) return
+    if (!window.confirm(`确定删除角色“${(currentEditingRole.role_name || role).trim()}”吗？`)) return
     try {
       setIsDeletingRole(true)
       const message = await executeOrganizationSettingsCommand("delete_role", JSON.stringify({ role }))
@@ -875,10 +901,7 @@ export default function OrganizationSettings() {
     }
     setActiveSettingsTab(nextTab)
     clearFeedback()
-    if (typeof window === "undefined") return
-    const url = new URL(window.location.href)
-    url.searchParams.set("tab", nextTab)
-    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`)
+    setSearchParams(buildSettingsSearchParams(searchParams, nextTab), { replace: true })
   }
 
   const integration = view?.integration

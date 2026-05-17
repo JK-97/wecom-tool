@@ -31,6 +31,7 @@ export type ChatDataDisplayBootstrap = {
   secret_key_base64?: string
   encrypted_secret_key?: string
   raw_payload_json?: string
+  error?: string
 }
 
 export type ChatDataPanelView = {
@@ -52,6 +53,7 @@ export type ChatDataPanelView = {
   sync_reason?: string
   recovery_blocking?: boolean
   last_sync_time?: string
+  display_bootstraps?: ChatDataDisplayBootstrap[]
 }
 
 export async function getChatDataPanel(params: {
@@ -66,11 +68,6 @@ export async function getChatDataPanel(params: {
   }
   search.set("chat_id", params.target_id)
   const payload = await requestJSON<APIReply<ChatDataPanelView>>(`/api/v1/main/group-detail/chatdata-panel?${search.toString()}`)
-  return payload?.data || null
-}
-
-export async function getChatDataDisplayBootstrap(msgID: string): Promise<ChatDataDisplayBootstrap | null> {
-  const payload = await requestJSON<APIReply<ChatDataDisplayBootstrap>>(`/api/v1/main/data-zone/chatdata/messages/${encodeURIComponent(msgID)}/bootstrap`)
   return payload?.data || null
 }
 

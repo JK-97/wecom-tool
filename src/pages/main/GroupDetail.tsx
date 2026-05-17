@@ -398,6 +398,8 @@ export default function GroupDetail() {
               loading={chatdata.loading}
               bootstrapping={chatdata.bootstrapping}
               error={chatdata.error}
+              refreshPolicy={chatdata.refreshPolicy}
+              onRefreshPolicyChange={chatdata.setRefreshPolicy}
               onReload={() => void chatdata.reload()}
               onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
             />

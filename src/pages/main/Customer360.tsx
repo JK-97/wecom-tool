@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   ArrowUpRight,
   Calendar,
@@ -59,6 +59,7 @@ function trackIcon(category?: string) {
 
 export default function Customer360() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [isModifyModalOpen, setIsModifyModalOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<TimelineTab>("all")
   const [view, setView] = useState<Customer360ViewModel | null>(null)
@@ -69,11 +70,7 @@ export default function Customer360() {
   const [formTagInput, setFormTagInput] = useState("")
   const [formTags, setFormTags] = useState<string[]>([])
 
-  const externalUserID = useMemo(() => {
-    if (typeof window === "undefined") return ""
-    const params = new URLSearchParams(window.location.search)
-    return (params.get("external_userid") || "").trim()
-  }, [])
+  const externalUserID = (searchParams.get("external_userid") || "").trim()
 
   const loadView = async (timelineTab: TimelineTab) => {
     if (!externalUserID) {
@@ -299,6 +296,8 @@ export default function Customer360() {
                     loading={chatdata.loading}
                     bootstrapping={chatdata.bootstrapping}
                     error={chatdata.error}
+                    refreshPolicy={chatdata.refreshPolicy}
+                    onRefreshPolicyChange={chatdata.setRefreshPolicy}
                     onReload={() => void chatdata.reload()}
                     onBootstrap={() => void chatdata.bootstrap("manual_retry", true)}
                   />

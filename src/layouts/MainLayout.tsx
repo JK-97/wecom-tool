@@ -1,3 +1,4 @@
+import { Suspense } from "react"
 import { Outlet, Link, useLocation } from "react-router-dom"
 import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link as LinkIcon, GitBranch, HelpCircle, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -19,6 +20,23 @@ const navItems = [
   { name: "组织与设置", path: "/main/settings", icon: Settings },
   { name: "使用指南", path: "/main/guide", icon: HelpCircle },
 ]
+
+function matchNavItem(pathname: string) {
+  return [...navItems]
+    .sort((left, right) => right.path.length - left.path.length)
+    .find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`))
+}
+
+function MainContentFallback() {
+  return (
+    <div className="flex h-full min-h-[360px] items-center justify-center rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex items-center gap-2 text-sm text-gray-500">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+        内容加载中...
+      </div>
+    </div>
+  )
+}
 
 type LayoutDepartment = {
   departmentID: number
@@ -72,6 +90,7 @@ function MainLayoutDepartmentList({
 export default function MainLayout() {
   const location = useLocation()
   const auth = useAuth()
+  const activeNavItem = matchNavItem(location.pathname)
 
   const handleLogout = async () => {
     await auth.logout()
@@ -95,11 +114,12 @@ export default function MainLayout() {
         </div>
         <nav className="flex-1 space-y-1 p-4">
           {navItems.map((item) => {
-            const isActive = location.pathname.startsWith(item.path) && item.path !== "#"
+            const isActive = activeNavItem?.path === item.path
             return (
               <Link
                 key={item.name}
                 to={item.path}
+                aria-current={isActive ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                   isActive
@@ -156,10 +176,7 @@ export default function MainLayout() {
 
       {/* Main Content */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-8">
-          <h1 className="text-lg font-medium text-gray-900">
-            {navItems.find(item => location.pathname.startsWith(item.path))?.name || "工作台"}
-          </h1>
+        <header className="flex h-16 shrink-0 items-center justify-end border-b border-gray-200 bg-white px-8">
           <div className="flex items-center gap-4">
             {profileLoading ? (
               <>
@@ -186,7 +203,9 @@ export default function MainLayout() {
           </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto p-8">
-          <Outlet />
+          <Suspense fallback={<MainContentFallback />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

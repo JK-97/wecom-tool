@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   ChevronLeft,
   ChevronRight,
@@ -51,11 +51,18 @@ function formatDateTime(value?: string): string {
   return new Date(parsed).toLocaleString("zh-CN", { hour12: false })
 }
 
-function readInitialFilters() {
-  if (typeof window === "undefined") {
-    return { tab: "all" as CustomerTab, query: "", stage: "", tag: "", owner: "", chatDataSync: "", page: 1, pageSize: DEFAULT_PAGE_SIZE }
-  }
-  const search = new URLSearchParams(window.location.search)
+type CustomerListRouteState = {
+  tab: CustomerTab
+  query: string
+  stage: string
+  tag: string
+  owner: string
+  chatDataSync: string
+  page: number
+  pageSize: number
+}
+
+function parseRouteState(search: URLSearchParams): CustomerListRouteState {
   const tab = (search.get("tab") || "all").trim()
   const page = Number(search.get("page") || 1)
   const pageSize = Number(search.get("page_size") || DEFAULT_PAGE_SIZE)
@@ -71,17 +78,7 @@ function readInitialFilters() {
   }
 }
 
-function replaceURL(input: {
-  tab: CustomerTab
-  query: string
-  stage: string
-  tag: string
-  owner: string
-  chatDataSync: string
-  page: number
-  pageSize: number
-}) {
-  if (typeof window === "undefined") return
+function buildRouteSearchParams(input: CustomerListRouteState): URLSearchParams {
   const search = new URLSearchParams()
   if (input.tab !== "all") search.set("tab", input.tab)
   if (input.query.trim()) search.set("query", input.query.trim())
@@ -91,8 +88,7 @@ function replaceURL(input: {
   if (input.chatDataSync.trim()) search.set("chatdata_sync", input.chatDataSync.trim())
   if (input.page > 1) search.set("page", String(input.page))
   if (input.pageSize !== DEFAULT_PAGE_SIZE) search.set("page_size", String(input.pageSize))
-  const nextURL = `${window.location.pathname}${search.toString() ? `?${search.toString()}` : ""}${window.location.hash}`
-  window.history.replaceState({}, "", nextURL)
+  return search
 }
 
 function displayOptionLabel(option: CustomerListFilterOption): string {
@@ -143,30 +139,43 @@ function customerLink(externalUserID?: string): string {
 }
 
 export default function CustomerList() {
-  const initial = useMemo(() => readInitialFilters(), [])
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { showFeedback } = usePageFeedback()
+  const routeState = useMemo(() => parseRouteState(searchParams), [searchParams])
 
   const [view, setView] = useState<CustomerListViewModel | null>(null)
   const [syncOverview, setSyncOverview] = useState<CRMSyncOverview | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isAssigning, setIsAssigning] = useState(false)
-  const [activeTab, setActiveTab] = useState<CustomerTab>(initial.tab)
-  const [queryInput, setQueryInput] = useState(initial.query)
-  const [query, setQuery] = useState(initial.query)
-  const [stage, setStage] = useState(initial.stage)
-  const [tag, setTag] = useState(initial.tag)
-  const [owner, setOwner] = useState(initial.owner)
-  const [chatDataSync, setChatDataSync] = useState(initial.chatDataSync)
-  const [page, setPage] = useState(initial.page)
-  const [pageSize, setPageSize] = useState(initial.pageSize)
+  const [activeTab, setActiveTab] = useState<CustomerTab>(routeState.tab)
+  const [queryInput, setQueryInput] = useState(routeState.query)
+  const [query, setQuery] = useState(routeState.query)
+  const [stage, setStage] = useState(routeState.stage)
+  const [tag, setTag] = useState(routeState.tag)
+  const [owner, setOwner] = useState(routeState.owner)
+  const [chatDataSync, setChatDataSync] = useState(routeState.chatDataSync)
+  const [page, setPage] = useState(routeState.page)
+  const [pageSize, setPageSize] = useState(routeState.pageSize)
   const [selectedIDs, setSelectedIDs] = useState<string[]>([])
   const [batchOwner, setBatchOwner] = useState("")
   const [editingRow, setEditingRow] = useState<CustomerListRow | null>(null)
   const [editOwner, setEditOwner] = useState("")
   const [editStage, setEditStage] = useState("")
   const [editTagsText, setEditTagsText] = useState("")
+
+  useEffect(() => {
+    setActiveTab(routeState.tab)
+    setQueryInput(routeState.query)
+    setQuery(routeState.query)
+    setStage(routeState.stage)
+    setTag(routeState.tag)
+    setOwner(routeState.owner)
+    setChatDataSync(routeState.chatDataSync)
+    setPage(routeState.page)
+    setPageSize(routeState.pageSize)
+  }, [routeState])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -180,8 +189,19 @@ export default function CustomerList() {
   }, [queryInput])
 
   useEffect(() => {
-    replaceURL({ tab: activeTab, query, stage, tag, owner, chatDataSync, page, pageSize })
-  }, [activeTab, chatDataSync, owner, page, pageSize, query, stage, tag])
+    const nextSearchParams = buildRouteSearchParams({
+      tab: activeTab,
+      query,
+      stage,
+      tag,
+      owner,
+      chatDataSync,
+      page,
+      pageSize,
+    })
+    if (nextSearchParams.toString() === searchParams.toString()) return
+    setSearchParams(nextSearchParams, { replace: true })
+  }, [activeTab, chatDataSync, owner, page, pageSize, query, searchParams, setSearchParams, stage, tag])
 
   const loadPage = useCallback(async () => {
     try {

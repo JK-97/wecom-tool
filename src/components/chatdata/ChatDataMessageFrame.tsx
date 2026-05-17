@@ -1,7 +1,7 @@
 import * as ww from "@wecom/jssdk"
 import { useEffect, useRef, useState } from "react"
 import { ensureOpenDataReady } from "@/services/openDataService"
-import { getChatDataDisplayBootstrap, type ChatDataMessageSummary } from "@/services/chatdataService"
+import { type ChatDataDisplayBootstrap, type ChatDataMessageSummary } from "@/services/chatdataService"
 import { normalizeErrorMessage } from "@/services/http"
 
 const MESSAGE_SHELL_REF = "message-shell"
@@ -118,6 +118,24 @@ function buildOpenDataStyle(
   background: #3b82f6;
   color: #ffffff;
   border-radius: 16px 16px 6px 16px;
+}
+
+.chatdata-meta {
+  display: block;
+  font-size: 11px;
+  line-height: 1.25;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+
+.chatdata-meta--incoming {
+  margin-left: 4px;
+  text-align: left;
+}
+
+.chatdata-meta--outgoing {
+  margin-right: 4px;
+  text-align: right;
 }
 
 .chatdata-message-node {
@@ -243,6 +261,7 @@ function buildOpenDataTemplate(props: {
   msgID: string
   secretKey: string
   tone: "incoming" | "outgoing"
+  footerTimeLabel: string
   senderOpenID: string
   senderNameType: ChatMessageOpenDataNameType
   senderAvatarType: ChatMessageOpenDataAvatarType
@@ -267,6 +286,7 @@ function buildOpenDataTemplate(props: {
         ></ww-open-message>
       </view>
     </view>
+    <view class="chatdata-meta chatdata-meta--${props.tone}">${escapeText(props.footerTimeLabel)}</view>
   </view>
   ${props.tone === "outgoing" ? avatarNode : ""}
 </view>
@@ -303,13 +323,18 @@ async function syncFrameSize(instance: ww.OpenDataFrameInstance, msgID: string) 
   console.info("[chatdata/open-data] frame resized", { msgID, width, height, bestWidth, bestHeight })
 }
 
+export type ChatDataMessageRenderState = "loading" | "ready" | "error"
+
 export function ChatDataMessageFrame(props: {
   message: ChatDataMessageSummary
+  displayBootstrap?: ChatDataDisplayBootstrap | null
   tone?: "incoming" | "outgoing"
+  footerTimeLabel?: string
   senderOpenID?: string
   senderNameType?: ChatMessageOpenDataNameType
   senderAvatarType?: ChatMessageOpenDataAvatarType
   senderFallbackName?: string
+  onRenderStateChange?: (msgID: string, state: ChatDataMessageRenderState) => void
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const instanceRef = useRef<ww.OpenDataFrameInstance<{ messageId: string; secretKey: string }> | null>(null)
@@ -322,6 +347,23 @@ export function ChatDataMessageFrame(props: {
   const senderNameType = props.senderNameType || "userName"
   const senderAvatarType = props.senderAvatarType || "userAvatar"
   const senderFallbackName = (props.senderFallbackName || "").trim() || "成员"
+  const footerTimeLabel = (props.footerTimeLabel || "").trim()
+  const displayBootstrap = props.displayBootstrap || null
+  const displayBootstrapError = (displayBootstrap?.error || "").trim()
+  const displaySecretKey = (displayBootstrap?.secret_key || "").trim()
+
+  useEffect(() => {
+    if (!props.onRenderStateChange || !msgID) return
+    if (error) {
+      props.onRenderStateChange(msgID, "error")
+      return
+    }
+    if (ready && !loading) {
+      props.onRenderStateChange(msgID, "ready")
+      return
+    }
+    props.onRenderStateChange(msgID, "loading")
+  }, [error, loading, msgID, props.onRenderStateChange, ready])
 
   useEffect(() => {
     let cancelled = false
@@ -344,33 +386,32 @@ export function ChatDataMessageFrame(props: {
       setError("")
       dispose()
       try {
+        if (displayBootstrapError) {
+          throw new Error(displayBootstrapError)
+        }
         console.info("[chatdata/open-data] message mount begin", {
           msgID,
           chatID: (props.message.chat_id || "").trim(),
           publicKeyVer: props.message.public_key_ver || 0,
           sendTime: props.message.send_time || 0,
         })
-        const [runtime, bootstrap] = await Promise.all([
-          ensureOpenDataReady(),
-          getChatDataDisplayBootstrap(msgID),
-        ])
+        const runtime = await ensureOpenDataReady()
         if (cancelled) return
         console.info("[chatdata/open-data] message bootstrap result", {
           msgID,
-          hasBootstrap: Boolean(bootstrap),
-          bootstrapMsgID: bootstrap?.msg_id || "",
-          bootstrapChatID: bootstrap?.chat_id || "",
-          hasSecretKey: Boolean((bootstrap?.secret_key || "").trim()),
-          secretKeyLength: (bootstrap?.secret_key || "").trim().length,
-          hasSecretKeyBase64: Boolean((bootstrap?.secret_key_base64 || "").trim()),
-          secretKeyBase64Length: (bootstrap?.secret_key_base64 || "").trim().length,
+          hasBootstrap: Boolean(displayBootstrap),
+          bootstrapMsgID: displayBootstrap?.msg_id || "",
+          bootstrapChatID: displayBootstrap?.chat_id || "",
+          hasSecretKey: Boolean(displaySecretKey),
+          secretKeyLength: displaySecretKey.length,
+          hasSecretKeyBase64: Boolean((displayBootstrap?.secret_key_base64 || "").trim()),
+          secretKeyBase64Length: (displayBootstrap?.secret_key_base64 || "").trim().length,
         })
         if (!runtime.canUseOpenData) {
           throw new Error(runtime.reason || "当前环境暂不支持会话展示组件。")
         }
-        const secretKey = (bootstrap?.secret_key || "").trim()
-        if (!secretKey) {
-          throw new Error("会话展示组件缺少 secret_key。")
+        if (!displaySecretKey) {
+          throw new Error("会话展示数据缺失，无法渲染消息内容。")
         }
         const host = hostRef.current
         if (!host) return
@@ -403,12 +444,13 @@ export function ChatDataMessageFrame(props: {
           el: host,
           data: {
             messageId: msgID,
-            secretKey,
+            secretKey: displaySecretKey,
           },
           template: buildOpenDataTemplate({
             msgID,
-            secretKey,
+            secretKey: displaySecretKey,
             tone,
+            footerTimeLabel,
             senderOpenID,
             senderNameType,
             senderAvatarType,
@@ -484,7 +526,20 @@ export function ChatDataMessageFrame(props: {
       cancelled = true
       dispose()
     }
-  }, [msgID, senderAvatarType, senderFallbackName, senderNameType, senderOpenID, tone])
+  }, [
+    displayBootstrap?.chat_id,
+    displayBootstrap?.msg_id,
+    displayBootstrap?.public_key_ver,
+    displayBootstrapError,
+    displaySecretKey,
+    footerTimeLabel,
+    msgID,
+    senderAvatarType,
+    senderFallbackName,
+    senderNameType,
+    senderOpenID,
+    tone,
+  ])
 
   return (
     <div className="inline-block max-w-full align-top">

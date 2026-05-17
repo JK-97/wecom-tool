@@ -39,6 +39,16 @@ type GroupTab = "all" | "active" | "todo"
 const DEFAULT_PAGE_SIZE = 20
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 
+type GroupOperationsRouteState = {
+  tab: GroupTab
+  query: string
+  owner: string
+  status: string
+  chatDataSync: string
+  page: number
+  pageSize: number
+}
+
 function formatDateTime(value?: string): string {
   const text = (value || "").trim()
   if (!text) return "-"
@@ -64,18 +74,20 @@ function readTab(value: string | null): GroupTab {
   }
 }
 
-function replaceSearchParams(
-  setSearchParams: ReturnType<typeof useSearchParams>[1],
-  input: {
-    tab: GroupTab
-    query: string
-    owner: string
-    status: string
-    chatDataSync: string
-    page: number
-    pageSize: number
-  },
-) {
+function parseRouteState(searchParams: URLSearchParams): GroupOperationsRouteState {
+  const parsedPageSize = readPositive(searchParams.get("page_size"), DEFAULT_PAGE_SIZE)
+  return {
+    tab: readTab(searchParams.get("tab")),
+    query: (searchParams.get("query") || "").trim(),
+    owner: (searchParams.get("owner_userid") || "").trim(),
+    status: (searchParams.get("status") || "").trim(),
+    chatDataSync: (searchParams.get("chatdata_sync") || "").trim(),
+    page: readPositive(searchParams.get("page"), 1),
+    pageSize: PAGE_SIZE_OPTIONS.includes(parsedPageSize) ? parsedPageSize : DEFAULT_PAGE_SIZE,
+  }
+}
+
+function buildRouteSearchParams(input: GroupOperationsRouteState): URLSearchParams {
   const next = new URLSearchParams()
   if (input.tab !== "all") next.set("tab", input.tab)
   if (input.query.trim()) next.set("query", input.query.trim())
@@ -84,7 +96,7 @@ function replaceSearchParams(
   if (input.chatDataSync.trim()) next.set("chatdata_sync", input.chatDataSync.trim())
   if (input.page > 1) next.set("page", String(input.page))
   if (input.pageSize !== DEFAULT_PAGE_SIZE) next.set("page_size", String(input.pageSize))
-  setSearchParams(next, { replace: true })
+  return next
 }
 
 function shouldRefreshGroupRows(prev?: CRMSyncScopeCard | null, next?: CRMSyncScopeCard | null): boolean {
@@ -157,21 +169,30 @@ export default function GroupOperations() {
   const { showFeedback } = usePageFeedback()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const routeState = useMemo(() => parseRouteState(searchParams), [searchParams])
   const [pageData, setPageData] = useState<GroupOperationListPage | null>(null)
   const [syncOverview, setSyncOverview] = useState<CRMSyncOverview | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
-  const [activeTab, setActiveTab] = useState<GroupTab>(readTab(searchParams.get("tab")))
-  const [queryInput, setQueryInput] = useState((searchParams.get("query") || "").trim())
-  const [query, setQuery] = useState((searchParams.get("query") || "").trim())
-  const [owner, setOwner] = useState((searchParams.get("owner_userid") || "").trim())
-  const [status, setStatus] = useState((searchParams.get("status") || "").trim())
-  const [chatDataSync, setChatDataSync] = useState((searchParams.get("chatdata_sync") || "").trim())
-  const [page, setPage] = useState(readPositive(searchParams.get("page"), 1))
-  const [pageSize, setPageSize] = useState(() => {
-    const parsed = readPositive(searchParams.get("page_size"), DEFAULT_PAGE_SIZE)
-    return PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : DEFAULT_PAGE_SIZE
-  })
+  const [activeTab, setActiveTab] = useState<GroupTab>(routeState.tab)
+  const [queryInput, setQueryInput] = useState(routeState.query)
+  const [query, setQuery] = useState(routeState.query)
+  const [owner, setOwner] = useState(routeState.owner)
+  const [status, setStatus] = useState(routeState.status)
+  const [chatDataSync, setChatDataSync] = useState(routeState.chatDataSync)
+  const [page, setPage] = useState(routeState.page)
+  const [pageSize, setPageSize] = useState(routeState.pageSize)
+
+  useEffect(() => {
+    setActiveTab(routeState.tab)
+    setQueryInput(routeState.query)
+    setQuery(routeState.query)
+    setOwner(routeState.owner)
+    setStatus(routeState.status)
+    setChatDataSync(routeState.chatDataSync)
+    setPage(routeState.page)
+    setPageSize(routeState.pageSize)
+  }, [routeState])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -185,8 +206,10 @@ export default function GroupOperations() {
   }, [queryInput])
 
   useEffect(() => {
-    replaceSearchParams(setSearchParams, { tab: activeTab, query, owner, status, chatDataSync, page, pageSize })
-  }, [activeTab, chatDataSync, owner, page, pageSize, query, setSearchParams, status])
+    const nextSearchParams = buildRouteSearchParams({ tab: activeTab, query, owner, status, chatDataSync, page, pageSize })
+    if (nextSearchParams.toString() === searchParams.toString()) return
+    setSearchParams(nextSearchParams, { replace: true })
+  }, [activeTab, chatDataSync, owner, page, pageSize, query, searchParams, setSearchParams, status])
 
   const loadPage = useCallback(async () => {
     try {
