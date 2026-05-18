@@ -7,9 +7,9 @@ import { InlineFeedbackSlot, usePageFeedback } from "@/components/ui/PageFeedbac
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs"
 import {
   Settings, Users, Shield, CheckCircle2, RefreshCw,
-  Plus, Globe, MessageSquare, User, ShieldAlert,
+  Plus, MessageSquare, User,
   AlertTriangle, Zap, ExternalLink, Loader2,
-  Search, Trash2, KeyRound, Webhook,
+  Search, Trash2, KeyRound,
 } from "lucide-react"
 import { Switch } from "@/components/ui/Switch"
 import { useEffect, useMemo, useState } from "react"
@@ -307,12 +307,6 @@ export default function OrganizationSettings() {
   const [testingConnectorKey, setTestingConnectorKey] = useState("")
   const [refreshingConnectorKey, setRefreshingConnectorKey] = useState("")
   const [connectingConnectorKey, setConnectingConnectorKey] = useState("")
-  const [isSettingDataZoneCallback, setIsSettingDataZoneCallback] = useState(false)
-  const [dataZoneCallbackProgramID, setDataZoneCallbackProgramID] = useState("")
-  const [dataZoneSyncMsgAbilityID, setDataZoneSyncMsgAbilityID] = useState("sync_msg")
-  const [dataZoneCallbackFetchAbilityID, setDataZoneCallbackFetchAbilityID] = useState("do_async_job")
-  const [dataZoneLogLevel, setDataZoneLogLevel] = useState("2")
-  const [isConfiguringDataZoneProgram, setIsConfiguringDataZoneProgram] = useState(false)
   const [capabilityCommandRunning, setCapabilityCommandRunning] = useState<CapabilityCommand | "">("")
 
   const [isRoleEditorOpen, setIsRoleEditorOpen] = useState(false)
@@ -330,11 +324,9 @@ export default function OrganizationSettings() {
   const [createRoleTemplate, setCreateRoleTemplate] = useState("blank")
   const [createRoleError, setCreateRoleError] = useState("")
   const [isCreatingRole, setIsCreatingRole] = useState(false)
-  const [isSettingDataZoneKey, setIsSettingDataZoneKey] = useState(false)
   const [updatingDebugKey, setUpdatingDebugKey] = useState("")
   const [isOpeningDataZoneDebugMode, setIsOpeningDataZoneDebugMode] = useState(false)
   const [isClosingDataZoneDebugMode, setIsClosingDataZoneDebugMode] = useState(false)
-  const [dataZoneDebugProgramID, setDataZoneDebugProgramID] = useState("")
   const [dataZoneDebugToken, setDataZoneDebugToken] = useState("")
 
   useEffect(() => {
@@ -491,11 +483,6 @@ export default function OrganizationSettings() {
       setIsLoading(true)
       const data = await getOrganizationSettingsView()
       setView(data || null)
-      setDataZoneCallbackProgramID((data?.data_zone?.receive_callback_program_id || "").trim())
-      setDataZoneSyncMsgAbilityID((data?.data_zone?.sync_msg_ability_id || "sync_msg").trim() || "sync_msg")
-      setDataZoneCallbackFetchAbilityID((data?.data_zone?.callback_fetch_ability_id || "do_async_job").trim() || "do_async_job")
-      setDataZoneLogLevel(`${data?.data_zone?.log_level || 2}`.trim() || "2")
-      setDataZoneDebugProgramID((data?.data_zone_debug_mode?.program_id || "").trim())
       const nextDraft = buildMemberRoleDraft(data)
       if (options.preserveMemberDraft) {
         setMemberRoleDraft((prev) => {
@@ -589,70 +576,8 @@ export default function OrganizationSettings() {
     }
   }
 
-  const setupDataZonePublicKey = async () => {
-    try {
-      setIsSettingDataZoneKey(true)
-      const message = await executeOrganizationSettingsCommand("setup_data_zone_public_key")
-      showNotice("wecom", message || "已生成并上传数据专区公钥", "success")
-      await loadView()
-    } catch (error) {
-      showNotice("wecom", normalizeErrorMessage(error), "error")
-    } finally {
-      setIsSettingDataZoneKey(false)
-    }
-  }
-
-  const setupDataZoneReceiveCallback = async () => {
-    const programID = dataZoneCallbackProgramID.trim()
-    if (!programID) {
-      showNotice("wecom", "请输入专区程序 program_id", "warning")
-      return
-    }
-    try {
-      setIsSettingDataZoneCallback(true)
-      const message = await executeOrganizationSettingsCommand("setup_data_zone_receive_callback", JSON.stringify({ program_id: programID }))
-      showNotice("wecom", message || "已设置数据专区回调接收程序", "success")
-      await loadView()
-    } catch (error) {
-      showNotice("wecom", normalizeErrorMessage(error), "error")
-    } finally {
-      setIsSettingDataZoneCallback(false)
-    }
-  }
-
-  const configureDataZoneProgram = async () => {
-    const programID = dataZoneCallbackProgramID.trim()
-    const syncMsgAbilityID = dataZoneSyncMsgAbilityID.trim() || "sync_msg"
-    const callbackFetchAbilityID = dataZoneCallbackFetchAbilityID.trim() || "do_async_job"
-    const logLevel = Number.parseInt(dataZoneLogLevel.trim() || "2", 10)
-    if (!programID) {
-      showNotice("wecom", "请输入专区程序 program_id", "warning")
-      return
-    }
-    try {
-      setIsConfiguringDataZoneProgram(true)
-      const message = await executeOrganizationSettingsCommand("configure_data_zone_program", JSON.stringify({
-        program_id: programID,
-        sync_msg_ability_id: syncMsgAbilityID,
-        callback_fetch_ability_id: callbackFetchAbilityID,
-        log_level: Number.isFinite(logLevel) ? logLevel : 2,
-      }))
-      showNotice("wecom", message || "已保存数据专区程序能力配置", "success")
-      await loadView()
-    } catch (error) {
-      showNotice("wecom", normalizeErrorMessage(error), "error")
-    } finally {
-      setIsConfiguringDataZoneProgram(false)
-    }
-  }
-
   const openDataZoneDebugMode = async () => {
-    const programID = dataZoneDebugProgramID.trim()
     const debugToken = dataZoneDebugToken.trim()
-    if (!programID) {
-      showNotice("debug", "请输入数据与智能专区 program_id", "warning")
-      return
-    }
     if (!debugToken) {
       showNotice("debug", "请输入 debug_token", "warning")
       return
@@ -660,7 +585,6 @@ export default function OrganizationSettings() {
     try {
       setIsOpeningDataZoneDebugMode(true)
       const message = await executeOrganizationSettingsCommand("open_data_zone_debug_mode", JSON.stringify({
-        program_id: programID,
         debug_token: debugToken,
       }))
       setDataZoneDebugToken("")
@@ -674,16 +598,9 @@ export default function OrganizationSettings() {
   }
 
   const closeDataZoneDebugMode = async () => {
-    const programID = dataZoneDebugProgramID.trim() || (view?.data_zone_debug_mode?.program_id || "").trim()
-    if (!programID) {
-      showNotice("debug", "缺少 program_id，无法关闭数据专区调试模式", "warning")
-      return
-    }
     try {
       setIsClosingDataZoneDebugMode(true)
-      const message = await executeOrganizationSettingsCommand("close_data_zone_debug_mode", JSON.stringify({
-        program_id: programID,
-      }))
+      const message = await executeOrganizationSettingsCommand("close_data_zone_debug_mode")
       setDataZoneDebugToken("")
       showNotice("debug", message || "已关闭数据专区调试模式", "success")
       await loadView()
@@ -975,7 +892,6 @@ export default function OrganizationSettings() {
 
   const integration = view?.integration
   const dataZone = view?.data_zone
-  const currentDataZoneCallbackProgramID = (dataZone?.receive_callback_program_id || "").trim()
   const dataZoneAuthEditions = dataZone?.auth_editions || []
   const dataZoneAuthUserPreview = dataZone?.auth_user_preview || []
   const memberOpenUserIDMap = useMemo(() => {
@@ -1002,101 +918,39 @@ export default function OrganizationSettings() {
   const integrationLicenseAccounts = view?.integration_license_accounts || []
   const permissionChecks = view?.permission_checks || []
   const objectChecks = view?.object_checks || []
-  const permissionStatusByCode = new Map<string, string>(
-    permissionChecks.map((item) => [((item.code || "").trim()), ((item.status || "").trim())]),
-  )
-  const objectByCode = new Map<string, { status: string; availableCount: number; totalCount: number }>(
-    objectChecks.map((item) => [
-      ((item.code || "").trim()),
-      {
-        status: ((item.status || "").trim()),
-        availableCount: Number(item.available_count || 0),
-        totalCount: Number(item.total_count || 0),
-      },
-    ]),
-  )
-  const capabilityCheckTree = (capabilityCode: string): Array<{ label: string; passed: boolean; count?: string }> => {
-    const objectRow = (code: string): { status: string; count: string } => {
-      const row = objectByCode.get(code)
-      if (!row) return { status: "", count: "-" }
-      return { status: row.status, count: `${row.availableCount}/${row.totalCount}` }
-    }
-    const sidebarPrereq = objectRow("sidebar_prerequisites")
-    const kfAccounts = objectRow("kf_accounts")
-    const appAdmin = objectRow("app_admin")
-    const contactDomain = objectRow("contact_domain")
-    const orgDirectory = objectRow("org_directory")
-    const chatDataAuthScope = objectRow("chatdata_auth_scope")
-    const chatDataPublicKey = objectRow("chatdata_public_key")
-    const chatDataReceiveCallback = objectRow("chatdata_receive_callback")
-    switch ((capabilityCode || "").trim()) {
-      case "kf_conversation":
-        return [
-          { label: "权限：微信客服能力", passed: isPermissionGranted(permissionStatusByCode.get("kf_account_access") || "") },
-          { label: "对象：客服账号可用性", passed: isObjectPassed(kfAccounts.status), count: kfAccounts.count },
-          { label: "对象：应用管理员检查", passed: isObjectPassed(appAdmin.status), count: appAdmin.count },
-        ]
-      case "contact_crm":
-        return [
-          { label: "权限：客户联系能力", passed: isPermissionGranted(permissionStatusByCode.get("contact_capability") || "") },
-          { label: "权限：客户基础信息", passed: isPermissionGranted(permissionStatusByCode.get("customer_basic_info") || "") },
-          { label: "对象：客户联系能力就绪", passed: isObjectPassed(contactDomain.status), count: contactDomain.count },
-        ]
-      case "toolbar_runtime":
-        return [
-          { label: "权限：侧边栏运行前提", passed: isPermissionGranted(permissionStatusByCode.get("sidebar_runtime") || "") },
-          { label: "对象：工具栏/JSSDK 前提", passed: isObjectPassed(sidebarPrereq.status), count: sidebarPrereq.count },
-        ]
-      case "jssdk_runtime":
-        return [
-          { label: "权限：JSSDK 运行能力", passed: isPermissionGranted(permissionStatusByCode.get("jssdk_runtime") || "") },
-          { label: "对象：工具栏/JSSDK 前提", passed: isObjectPassed(sidebarPrereq.status), count: sidebarPrereq.count },
-        ]
-      case "org_sync":
-        return [
-          { label: "权限：通讯录/组织同步能力", passed: isPermissionGranted(permissionStatusByCode.get("org_sync") || "") },
-          { label: "对象：通讯录与组织目录", passed: isObjectPassed(orgDirectory.status), count: orgDirectory.count },
-        ]
-      case "data_zone_chat_archive":
-        return [
-          { label: "权限：数据专区权限", passed: isPermissionGranted(permissionStatusByCode.get("data_zone_permission") || "") },
-          { label: "对象：会话内容授权范围", passed: isObjectPassed(chatDataAuthScope.status), count: chatDataAuthScope.count },
-          { label: "对象：数据专区公钥配置", passed: isObjectPassed(chatDataPublicKey.status), count: chatDataPublicKey.count },
-          { label: "对象：回调接收程序", passed: isObjectPassed(chatDataReceiveCallback.status), count: chatDataReceiveCallback.count },
-        ]
+  const dataZoneDebugMode = view?.data_zone_debug_mode
+  const dataZoneDebugStatus = resolveDataZoneDebugModeStatus(dataZoneDebugMode?.debug_mode_status)
+  const isDataZoneDebugEnabled = Boolean(dataZoneDebugMode?.enabled)
+  const dataZoneDebugExpiredNote = (dataZoneDebugMode?.last_check_error || "").trim()
+  const isDataZoneDebugExpired =
+    !isDataZoneDebugEnabled &&
+    Boolean(dataZoneDebugExpiredNote) &&
+    /过期|自动关闭|自动切换为关闭状态/.test(dataZoneDebugExpiredNote)
+  const managedDataZoneProgramID = ((dataZoneDebugMode?.program_id || dataZone?.receive_callback_program_id || "").trim())
+  const canOpenDataZoneDebugMode = !isDataZoneDebugEnabled && Boolean(managedDataZoneProgramID)
+  const canCloseDataZoneDebugMode = isDataZoneDebugEnabled && Boolean(managedDataZoneProgramID)
+  const isDataZoneDebugLocked = isDataZoneDebugEnabled
+  const dataZoneDebugTokenPlaceholder = isDataZoneDebugLocked
+    ? "********（已提交，关闭后可修改）"
+    : "输入企业微信下发的 debug_token"
+
+  const productBadgeClass = (tone: "green" | "blue" | "orange" | "amber" | "red" | "gray"): string => {
+    switch (tone) {
+      case "green":
+        return "bg-green-100 text-green-700 border-none"
+      case "blue":
+        return "bg-blue-100 text-blue-700 border-none"
+      case "orange":
+        return "bg-orange-100 text-orange-700 border-none"
+      case "amber":
+        return "bg-amber-100 text-amber-700 border-none"
+      case "red":
+        return "bg-red-100 text-red-700 border-none"
       default:
-        return []
+        return "bg-gray-100 text-gray-600 border-none"
     }
   }
-  const issueItems = (() => {
-    const out: Array<{ kind: "permission" | "object"; code: string; name: string; status: string; summary: string; suggestion: string; count?: string }> = []
-    for (const item of permissionChecks) {
-      const status = (item.status || "").trim()
-      if (status === "granted") continue
-      out.push({
-        kind: "permission",
-        code: (item.code || "").trim(),
-        name: (item.name || item.code || "-").trim(),
-        status,
-        summary: (item.impact || "-").trim(),
-        suggestion: (item.suggestion || "-").trim(),
-      })
-    }
-    for (const item of objectChecks) {
-      const status = (item.status || "").trim()
-      if (status === "ok") continue
-      out.push({
-        kind: "object",
-        code: (item.code || "").trim(),
-        name: (item.name || item.code || "-").trim(),
-        status,
-        summary: (item.summary || "-").trim(),
-        suggestion: (item.suggestion || "-").trim(),
-        count: `${Number(item.available_count || 0)}/${Number(item.total_count || 0)}`,
-      })
-    }
-    return out
-  })()
+
   const permissionTree = (() => {
     const tree = new Map<string, Map<string, Array<{ code: string; expire_time?: number }>>>()
     for (const item of integrationPermissions) {
@@ -1117,53 +971,418 @@ export default function OrganizationSettings() {
       })),
     }))
   })()
-  const capabilityCards = [
+  const capabilityCards = (() => {
+    type CapabilityCard = {
+      key: string
+      title: string
+      badgeLabel: string
+      badgeTone: "green" | "blue" | "orange" | "amber" | "red" | "gray"
+      summary: string
+      detail: string
+      actionLabel: string
+      command: CapabilityCommand
+      lastCheckedAt: string
+      lastReadyAt: string
+      issue?: {
+        priority: number
+        title: string
+        impact: string
+        owner: string
+        nextStep: string
+      }
+    }
+    const cards: CapabilityCard[] = []
+
     {
-      key: "install" as const,
+      const status = (installCapability?.status || "unknown").trim()
+      const blockedReason = (installCapability?.blocked_reason || "").trim()
+      const card: CapabilityCard = {
+        key: "install",
+        title: "安装授权",
+        badgeLabel: "配置中",
+        badgeTone: "blue" as const,
+        summary: "平台正在确认当前企业的安装授权状态。",
+        detail: "安装授权就绪后，通讯录范围、会话专区和 CRM 初始化会继续自动推进。",
+        actionLabel: "重新检查",
+        command: "recheck_all_capabilities" as CapabilityCommand,
+        lastCheckedAt: formatDateTime((installCapability?.last_checked_at || "").trim()),
+        lastReadyAt: formatDateTime((installCapability?.last_ready_at || "").trim()),
+      }
+      switch (status) {
+        case "ready":
+          card.badgeLabel = "已就绪"
+          card.badgeTone = "green"
+          card.summary = "企业安装授权有效，平台已进入后续能力收敛流程。"
+          card.detail = "无需重复安装应用，后续能力会按各自前置条件继续收敛。"
+          break
+        case "blocked":
+          card.badgeLabel = "待管理员确认"
+          card.badgeTone = "orange"
+          card.summary = "当前没有检测到有效的企业安装授权。"
+          card.detail = "未重新完成授权前，企业微信接入能力不会生效。"
+          card.issue = {
+            priority: 10,
+            title: "待企业管理员完成应用安装授权",
+            impact: "企业微信相关能力不会进入后续收敛流程。",
+            owner: "企业管理员",
+            nextStep: blockedReason === "authorization_revoked" ? "请企业管理员重新授权安装当前应用。" : "请企业管理员确认当前企业已完成应用安装授权。",
+          }
+          break
+        case "error":
+          card.badgeLabel = "需排查"
+          card.badgeTone = "red"
+          card.summary = "平台暂时无法确认安装授权状态。"
+          card.detail = "这通常表示接入链路或服务调用异常，需要平台侧排查。"
+          card.issue = {
+            priority: 100,
+            title: "安装授权状态检查异常",
+            impact: "平台暂时无法确认企业安装授权状态，相关接入能力会继续受影响。",
+            owner: "平台研发排查",
+            nextStep: "请平台支持检查安装授权同步链路和服务状态。",
+          }
+          break
+      }
+      cards.push(card)
+    }
+
+    {
+      const status = (orgScopeCapability?.status || "unknown").trim()
+      const blockedReason = (orgScopeCapability?.blocked_reason || "").trim()
+      const scopeKind = (orgScopeCapability?.scope_kind || "unknown").trim()
+      const isLimitedScope = status === "ready" && scopeKind !== "" && scopeKind !== "full_corp" && scopeKind !== "none"
+      const card: CapabilityCard = {
+        key: "org_scope",
+        title: "通讯录范围",
+        badgeLabel: "配置中",
+        badgeTone: "blue" as const,
+        summary: "平台正在确认通讯录权限和组织范围。",
+        detail: "组织架构同步、成员分配和可见范围计算依赖这一项结果。",
+        actionLabel: "重新检查",
+        command: "recheck_org_scope" as CapabilityCommand,
+        lastCheckedAt: formatDateTime((orgScopeCapability?.last_checked_at || "").trim()),
+        lastReadyAt: formatDateTime((orgScopeCapability?.last_ready_at || "").trim()),
+      }
+      switch (status) {
+        case "ready":
+          if (isLimitedScope) {
+            card.badgeLabel = "部分可用"
+            card.badgeTone = "amber"
+            card.summary = "通讯录范围已生效，但当前只覆盖部分部门或成员。"
+            card.detail = `当前范围：成员 ${Number(orgScopeCapability?.member_count || 0)}，部门 ${Number(orgScopeCapability?.department_count || 0)}。`
+            card.issue = {
+              priority: 30,
+              title: "通讯录范围为部分授权",
+              impact: "只有已授权的成员和部门会参与组织同步与权限计算。",
+              owner: "企业管理员",
+              nextStep: "如需扩大覆盖范围，请在企业微信后台调整当前应用的通讯录可见范围。",
+            }
+          } else {
+            card.badgeLabel = "已就绪"
+            card.badgeTone = "green"
+            card.summary = "通讯录范围已确认，组织架构同步和成员权限计算可以正常推进。"
+            card.detail = `当前范围：成员 ${Number(orgScopeCapability?.member_count || 0)}，部门 ${Number(orgScopeCapability?.department_count || 0)}。`
+          }
+          break
+        case "blocked":
+          card.badgeLabel = "待管理员确认"
+          card.badgeTone = "orange"
+          card.summary = "企业管理员尚未完成通讯录权限确认。"
+          card.detail = "确认完成前，组织架构同步、成员范围和部分 CRM 能力会继续受限。"
+          card.issue = {
+            priority: 20,
+            title: "待企业管理员确认通讯录权限",
+            impact: "组织架构同步、成员分配和权限计算暂不可完整生效。",
+            owner: "企业管理员",
+            nextStep: blockedReason === "authorized_scope_empty"
+              ? "请在企业微信后台为当前应用配置有效的通讯录可见范围。"
+              : "请企业管理员在企业微信后台确认当前应用的通讯录权限和可见范围。",
+          }
+          break
+        case "error":
+          card.badgeLabel = "需排查"
+          card.badgeTone = "red"
+          card.summary = "平台暂时无法确认通讯录范围。"
+          card.detail = "这通常表示通讯录同步链路或权限探测出现了异常。"
+          card.issue = {
+            priority: 100,
+            title: "通讯录范围检查异常",
+            impact: "平台暂时无法确认通讯录权限状态，组织同步和成员权限计算会继续受影响。",
+            owner: "平台研发排查",
+            nextStep: "请平台支持检查组织范围探测和通讯录同步链路。",
+          }
+          break
+      }
+      cards.push(card)
+    }
+
+    {
+      const status = (openDataCapability?.status || "unknown").trim()
+      const blockedReason = (openDataCapability?.blocked_reason || "").trim()
+      const card: CapabilityCard = {
+        key: "open_data",
+        title: "会话专区",
+        badgeLabel: "配置中",
+        badgeTone: "blue" as const,
+        summary: "平台正在确认专区授权并自动收敛公钥与回调配置。",
+        detail: "会话展示、专区程序通知和相关 CRM 能力都依赖这一项完成。",
+        actionLabel: "重新检查",
+        command: "recheck_open_data" as CapabilityCommand,
+        lastCheckedAt: formatDateTime((openDataCapability?.last_checked_at || "").trim()),
+        lastReadyAt: formatDateTime((openDataCapability?.last_ready_at || "").trim()),
+      }
+      switch (status) {
+        case "ready":
+          card.badgeLabel = "已就绪"
+          card.badgeTone = "green"
+          card.summary = "会话专区授权、授权范围、公钥和回调接收程序均已就绪。"
+          card.detail = `当前已识别授权成员 ${Number(openDataCapability?.auth_user_count || 0)} 人。`
+          break
+        case "blocked":
+          if (blockedReason === "data_zone_not_authorized" || blockedReason === "chatdata_no_auth_members") {
+            card.badgeLabel = "待管理员确认"
+            card.badgeTone = "orange"
+            card.summary = "企业管理员尚未完成数据专区授权或会话内容授权范围配置。"
+            card.detail = "完成企业微信后台授权后，平台会继续自动收敛剩余配置。"
+            card.issue = {
+              priority: 20,
+              title: blockedReason === "data_zone_not_authorized" ? "待开通数据与智能专区权限" : "待确认会话内容授权范围",
+              impact: "会话展示、专区程序通知和依赖专区的能力暂不可用。",
+              owner: "企业管理员",
+              nextStep: blockedReason === "data_zone_not_authorized"
+                ? "请企业管理员在企业微信后台为当前应用开通数据与智能专区权限。"
+                : "请企业管理员在数据与智能专区中选择会话内容授权成员或范围。",
+            }
+          } else {
+            card.badgeLabel = "配置中"
+            card.badgeTone = "blue"
+            card.summary = "平台正在自动完成专区运行配置。"
+            card.detail = "公钥、回调接收程序和程序运行配置由平台自动托管，不需要手工保存。"
+            card.issue = {
+              priority: 40,
+              title: "等待平台自动完成专区配置",
+              impact: "会话专区尚未完全可用，前端会继续使用降级展示。",
+              owner: "平台自动收敛",
+              nextStep: "通常会在短时间内自动完成；若长时间停留，请联系平台支持排查。",
+            }
+          }
+          break
+        case "error":
+          card.badgeLabel = "需排查"
+          card.badgeTone = "red"
+          card.summary = "平台暂时无法完成会话专区检查或自动配置。"
+          card.detail = "这通常表示专区接口、平台配置或服务调用出现异常。"
+          card.issue = {
+            priority: 100,
+            title: "会话专区检查或自动配置异常",
+            impact: "平台暂时无法完成会话专区能力收敛，会话展示和依赖专区的功能会继续受影响。",
+            owner: "平台研发排查",
+            nextStep: "请平台支持检查专区接口调用、平台程序配置和公钥托管链路。",
+          }
+          break
+      }
+      cards.push(card)
+    }
+
+    {
+      const status = (receptionChannelCapability?.status || "unknown").trim()
+      const blockedReason = (receptionChannelCapability?.blocked_reason || "").trim()
+      const activeCount = Number(receptionChannelCapability?.active_count || 0)
+      const card: CapabilityCard = {
+        key: "reception_channel",
+        title: "接待渠道",
+        badgeLabel: "配置中",
+        badgeTone: "blue" as const,
+        summary: "平台正在确认客服账号和接待渠道可用性。",
+        detail: "接待渠道就绪后，客服消息才能稳定进入接待与路由流程。",
+        actionLabel: "重新检查",
+        command: "recheck_reception_channel" as CapabilityCommand,
+        lastCheckedAt: formatDateTime((receptionChannelCapability?.last_checked_at || "").trim()),
+        lastReadyAt: formatDateTime((receptionChannelCapability?.last_ready_at || "").trim()),
+      }
+      switch (status) {
+        case "ready":
+          card.badgeLabel = "已就绪"
+          card.badgeTone = "green"
+          card.summary = `当前有 ${activeCount} 个可用接待渠道。`
+          card.detail = "客服账号、渠道绑定和消息接入前提已满足。"
+          break
+        case "degraded":
+          card.badgeLabel = "部分可用"
+          card.badgeTone = "amber"
+          card.summary = `当前只检测到 ${activeCount} 个可用接待渠道。`
+          card.detail = "部分客服账号或渠道配置未完全生效，但已有渠道可继续使用。"
+          card.issue = {
+            priority: 35,
+            title: "接待渠道仅部分可用",
+            impact: "部分客服账号或渠道可能无法接待新会话。",
+            owner: "企业管理员",
+            nextStep: "请确认企业微信客服账号、接待人员和渠道启用状态。",
+          }
+          break
+        case "blocked":
+          card.badgeLabel = "待管理员确认"
+          card.badgeTone = "orange"
+          card.summary = "当前还没有可用的接待渠道。"
+          card.detail = "客服账号或渠道未准备好前，新的接待会话无法正常进入系统。"
+          card.issue = {
+            priority: 25,
+            title: blockedReason === "kf_account_not_available" ? "客服账号暂不可用" : "当前没有可用接待渠道",
+            impact: "新的客服会话无法稳定进入接待与路由流程。",
+            owner: "企业管理员",
+            nextStep: "请在企业微信后台确认客服账号、接待人员和渠道启用状态。",
+          }
+          break
+        case "error":
+          card.badgeLabel = "需排查"
+          card.badgeTone = "red"
+          card.summary = "平台暂时无法确认接待渠道状态。"
+          card.detail = "这通常表示客服账号同步或渠道探测链路出现异常。"
+          card.issue = {
+            priority: 100,
+            title: "接待渠道检查异常",
+            impact: "平台暂时无法确认接待渠道状态，新的客服会话接入可能会继续受影响。",
+            owner: "平台研发排查",
+            nextStep: "请平台支持检查客服账号同步和渠道探测链路。",
+          }
+          break
+      }
+      cards.push(card)
+    }
+
+    {
+      const status = (crmBootstrapCapability?.status || "unknown").trim()
+      const blockedReason = (crmBootstrapCapability?.blocked_reason || "").trim()
+      const card: CapabilityCard = {
+        key: "crm_bootstrap",
+        title: "CRM 数据初始化",
+        badgeLabel: "配置中",
+        badgeTone: "blue" as const,
+        summary: "平台会在组织范围与会话专区满足前置条件后自动推进 CRM 初始化。",
+        detail: `当前范围：${((crmBootstrapCapability?.scope || "all").trim() || "all").toUpperCase()}`,
+        actionLabel: "重新检查",
+        command: "recheck_crm_bootstrap" as CapabilityCommand,
+        lastCheckedAt: formatDateTime((crmBootstrapCapability?.last_checked_at || "").trim()),
+        lastReadyAt: formatDateTime((crmBootstrapCapability?.last_ready_at || "").trim()),
+      }
+      switch (status) {
+        case "ready":
+          card.badgeLabel = "已就绪"
+          card.badgeTone = "green"
+          card.summary = "CRM 初始化已完成，企业客户与群聊相关基础数据可以继续推进。"
+          break
+        case "blocked":
+        case "idle":
+        case "queued":
+        case "running":
+          card.badgeLabel = "配置中"
+          card.badgeTone = "blue"
+          card.summary = "CRM 初始化正在等待前置能力就绪或执行完成。"
+          card.detail = blockedReason === "waiting_org_scope_ready"
+            ? "通讯录范围就绪后会自动启动。"
+            : blockedReason === "waiting_open_data_ready"
+              ? "会话专区就绪后会自动启动。"
+              : "平台会在前置条件满足后自动继续执行。"
+          card.issue = {
+            priority: 45,
+            title: "CRM 初始化等待前置能力完成",
+            impact: "部分 CRM 基础数据暂未进入初始化流程。",
+            owner: "平台自动收敛",
+            nextStep: "请先确认通讯录范围和会话专区状态；前置能力就绪后会自动继续执行。",
+          }
+          break
+        case "error":
+          card.badgeLabel = "需排查"
+          card.badgeTone = "red"
+          card.summary = "平台暂时无法完成 CRM 初始化。"
+          card.detail = "这通常表示 CRM 服务、调用链路或初始化任务本身出现异常。"
+          card.issue = {
+            priority: 100,
+            title: "CRM 初始化异常",
+            impact: "平台暂时无法完成 CRM 初始化，客户与群聊相关基础数据初始化会继续受影响。",
+            owner: "平台研发排查",
+            nextStep: "请平台支持检查 CRM 服务可达性和初始化任务执行状态。",
+          }
+          break
+      }
+      cards.push(card)
+    }
+
+    return cards
+  })()
+
+  const pendingIssues = capabilityCards
+    .map((item) => item.issue)
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .sort((left, right) => right.priority - left.priority)
+
+  const headerSummary = capabilityCards.map((item) => `${item.title}${item.badgeLabel}`).join("，")
+  const dataZoneSummary = (() => {
+    if (dataZone?.data_zone_ready) {
+      return "会话专区已完成授权与运行前置配置，可用于会话展示和专区程序通知。"
+    }
+    if ((dataZone?.data_zone_permission_status || "").trim() === "not_authorized") {
+      return "当前企业尚未开通数据与智能专区权限，平台会在授权完成后继续自动配置。"
+    }
+    if ((dataZone?.chatdata_auth_scope_status || "").trim() === "no_auth_members") {
+      return "数据专区已开通，但会话内容授权范围尚未覆盖成员。"
+    }
+    if ((openDataCapability?.status || "").trim() === "error") {
+      return "会话专区检查或自动配置出现异常，请联系平台支持排查。"
+    }
+    return "平台正在自动完成会话专区所需的托管配置。"
+  })()
+
+  const capabilityDiagnostics = [
+    {
+      key: "install",
       title: "安装授权",
-      description: "应用是否仍处于已安装授权状态。",
       axis: installCapability,
-      command: "recheck_all_capabilities" as CapabilityCommand,
-      actionLabel: "重新检查全部",
-      meta: `最近更新：${(corpCapabilityState?.updated_at || "").trim() || "-"}`,
+      meta: [] as Array<{ label: string; value: string }>,
+      detailsJSON: "",
     },
     {
-      key: "org_scope" as const,
-      title: "通讯录权限",
-      description: "企业管理员确认后，组织范围与成员同步能力才会真正可用。",
+      key: "org_scope",
+      title: "通讯录范围",
       axis: orgScopeCapability,
-      command: "recheck_org_scope" as CapabilityCommand,
-      actionLabel: "重新检查通讯录",
-      meta: `scope=${(orgScopeCapability?.scope_kind || "unknown").trim() || "unknown"} · 成员 ${Number(orgScopeCapability?.member_count || 0)} / 部门 ${Number(orgScopeCapability?.department_count || 0)}`,
+      meta: [
+        { label: "scope_kind", value: (orgScopeCapability?.scope_kind || "unknown").trim() || "unknown" },
+        { label: "成员数量", value: String(Number(orgScopeCapability?.member_count || 0)) },
+        { label: "部门数量", value: String(Number(orgScopeCapability?.department_count || 0)) },
+        { label: "visibility_hash", value: (orgScopeCapability?.visibility_hash || "-").trim() || "-" },
+        { label: "auth_snapshot_hash", value: (orgScopeCapability?.auth_snapshot_hash || "-").trim() || "-" },
+      ],
+      detailsJSON: (orgScopeCapability?.details_json || "").trim(),
     },
     {
-      key: "open_data" as const,
-      title: "数据专区",
-      description: "会话展示、公钥与回调接收程序等专区能力收敛状态。",
+      key: "open_data",
+      title: "会话专区",
       axis: openDataCapability,
-      command: "recheck_open_data" as CapabilityCommand,
-      actionLabel: "重新检查专区",
-      meta: `授权成员 ${Number(openDataCapability?.auth_user_count || 0)}`,
+      meta: [
+        { label: "授权成员数量", value: String(Number(openDataCapability?.auth_user_count || 0)) },
+      ],
+      detailsJSON: (openDataCapability?.details_json || "").trim(),
     },
     {
-      key: "reception_channel" as const,
+      key: "reception_channel",
       title: "接待渠道",
-      description: "客服账号刷新、渠道激活与消息同步入口状态。",
       axis: receptionChannelCapability,
-      command: "recheck_reception_channel" as CapabilityCommand,
-      actionLabel: "重新检查渠道",
-      meta: `active=${Number(receptionChannelCapability?.active_count || 0)}`,
+      meta: [
+        { label: "可用渠道数量", value: String(Number(receptionChannelCapability?.active_count || 0)) },
+        { label: "channel_hash", value: (receptionChannelCapability?.channel_hash || "-").trim() || "-" },
+      ],
+      detailsJSON: (receptionChannelCapability?.details_json || "").trim(),
     },
     {
-      key: "crm_bootstrap" as const,
-      title: "CRM Bootstrap",
-      description: "组织范围与专区能力满足后，CRM 初始化才会推进。",
+      key: "crm_bootstrap",
+      title: "CRM 初始化",
       axis: crmBootstrapCapability,
-      command: "recheck_crm_bootstrap" as CapabilityCommand,
-      actionLabel: "重新检查 CRM",
-      meta: `scope=${(crmBootstrapCapability?.scope || "all").trim() || "all"}`,
+      meta: [
+        { label: "scope", value: ((crmBootstrapCapability?.scope || "all").trim() || "all").toUpperCase() },
+      ],
+      detailsJSON: (crmBootstrapCapability?.details_json || "").trim(),
     },
   ]
+
   const toolbarRuntime = view?.toolbar_runtime || []
   const toolbarEntries = (() => {
     const hasKF = toolbarRuntime.some((item) => (item.entry_path || "").trim() === "/sidebar/kf")
@@ -1203,20 +1422,6 @@ export default function OrganizationSettings() {
         return { label: "不可用", className: "bg-orange-50 text-orange-700 border-orange-200" }
     }
   }
-  const dataZoneDebugMode = view?.data_zone_debug_mode
-  const dataZoneDebugStatus = resolveDataZoneDebugModeStatus(dataZoneDebugMode?.debug_mode_status)
-  const isDataZoneDebugEnabled = Boolean(dataZoneDebugMode?.enabled)
-  const dataZoneDebugExpiredNote = (dataZoneDebugMode?.last_check_error || "").trim()
-  const isDataZoneDebugExpired =
-    !isDataZoneDebugEnabled &&
-    Boolean(dataZoneDebugExpiredNote) &&
-    /过期|自动关闭|自动切换为关闭状态/.test(dataZoneDebugExpiredNote)
-  const canOpenDataZoneDebugMode = !isDataZoneDebugEnabled
-  const canCloseDataZoneDebugMode = isDataZoneDebugEnabled
-  const isDataZoneDebugLocked = isDataZoneDebugEnabled
-  const dataZoneDebugTokenPlaceholder = isDataZoneDebugLocked
-    ? "********（已提交，关闭后可修改）"
-    : "输入企业微信下发的 debug_token"
   const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
   const memberRoleOptions = (() => {
     const roles = view?.roles || []
@@ -1286,544 +1491,287 @@ export default function OrganizationSettings() {
           ) : null}
           {hasLoaded ? (
           <>
-          <TabsContent value="wecom" className="mt-0 space-y-8 max-w-3xl">
-            <div className={`flex items-center justify-between p-5 border rounded-xl shadow-sm ${
-              (integration?.health_status || "").trim() === "healthy"
-                ? "bg-green-50 border-green-100"
-                : "bg-orange-50 border-orange-100"
-            }`}>
-              <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-inner ${
-                  (integration?.health_status || "").trim() === "healthy"
-                    ? "bg-green-100"
-                    : "bg-orange-100"
-                }`}>
-                  {(integration?.health_status || "").trim() === "healthy" ? (
-                    <CheckCircle2 className="w-7 h-7 text-green-600" />
-                  ) : (
-                    <ShieldAlert className="w-7 h-7 text-orange-600" />
-                  )}
-                </div>
-                <div>
-                  <div className="text-base font-bold text-gray-900">企业微信集成检查</div>
-                  <div className="text-xs text-gray-600 mt-0.5">
-                    CorpID: {(integration?.corp_id || "-").trim() || "-"} |
-                    授权状态: {(integration?.authorization_status || "-").trim() || "-"} |
-                    健康度: {(integration?.health_status || "-").trim() || "-"}
-                  </div>
-                </div>
-              </div>
-              <Button variant="outline" size="sm" className="bg-white font-semibold" onClick={() => void runIntegrationCheck()} disabled={isRunningCheck}>
-                {isRunningCheck ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                重新执行检查
-              </Button>
-            </div>
-
-            <Card className="border-gray-200 shadow-sm">
-              <CardHeader className="p-5 border-b border-gray-50">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <CardTitle className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                      <Zap className="h-4 w-4 text-blue-600" />
-                      企业 Capability Readiness
-                    </CardTitle>
-                    <div className="mt-1 text-xs text-gray-500">只读 sync-orchestrator 的 capability projection，不再用错误文案推测状态。</div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="bg-white font-semibold"
-                    onClick={() => void recheckCapability("recheck_all_capabilities", "wecom", "已发起企业能力重新检查")}
-                    disabled={capabilityCommandRunning === "recheck_all_capabilities"}
-                  >
-                    {capabilityCommandRunning === "recheck_all_capabilities" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                    重新检查全部
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
-                {capabilityCards.map((item) => {
-                  const axis = item.axis
-                  const status = (axis?.status || "unknown").trim() || "unknown"
-                  const blockedReason = capabilityReasonLabel((axis?.blocked_reason || "").trim())
-                  const lastError = (axis?.last_error || "").trim()
-                  const lastCheckedAt = (axis?.last_checked_at || "").trim()
-                  const lastReadyAt = (axis?.last_ready_at || "").trim()
-                  const running = capabilityCommandRunning === item.command
-                  return (
-                    <div key={item.key} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-bold text-gray-900">{item.title}</div>
-                          <div className="mt-1 text-xs leading-5 text-gray-500">{item.description}</div>
+          <TabsContent value="wecom" className="mt-0">
+            <div className="max-w-6xl space-y-8">
+              <Card className="overflow-hidden border-gray-200 shadow-sm">
+                <CardContent className="p-0">
+                  <div className="bg-gradient-to-r from-blue-50 via-cyan-50 to-white px-6 py-6">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
+                            <Shield className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <div className="text-lg font-bold text-gray-900">企业微信接入状态</div>
+                            <div className="text-sm text-gray-500">
+                              {(integration?.corp_name || "").trim() ? `当前企业：${(integration?.corp_name || "").trim()}` : "用于查看当前企业接入进度与下一步处理事项。"}
+                            </div>
+                          </div>
                         </div>
-                        <Badge className={capabilityBadgeClass(status)}>{capabilityStatusLabel(status)}</Badge>
+                        <div className="rounded-2xl border border-blue-100 bg-white/90 px-4 py-3">
+                          <div className="text-sm font-semibold text-gray-900">{headerSummary}</div>
+                          <div className="mt-1 text-xs leading-5 text-gray-500">
+                            安装授权、通讯录范围、会话专区、接待渠道与 CRM 初始化会按前置条件逐步自动收敛。
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-4 text-[11px] text-gray-500">
+                          <span>最近状态刷新：{formatDateTime((corpCapabilityState?.updated_at || integration?.last_checked_at || "").trim())}</span>
+                          <span>企业微信授权状态：{(integration?.authorization_status || "待检查").trim() || "待检查"}</span>
+                        </div>
                       </div>
-                      <div className="mt-3 text-[11px] text-gray-500">{item.meta}</div>
-                      {blockedReason ? (
-                        <div className="mt-3 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs text-orange-800">
-                          {blockedReason}
-                        </div>
-                      ) : null}
-                      {lastError ? (
-                        <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
-                          {lastError}
-                        </div>
-                      ) : null}
-                      <div className="mt-3 space-y-1 text-[11px] text-gray-500">
-                        <div>最近检查：{formatDateTime(lastCheckedAt)}</div>
-                        <div>最近就绪：{formatDateTime(lastReadyAt)}</div>
-                      </div>
-                      <div className="mt-4 flex justify-end">
+                      <div className="flex shrink-0 flex-wrap gap-3">
                         <Button
                           variant="outline"
-                          size="sm"
-                          className="bg-white text-xs font-semibold"
-                          onClick={() => void recheckCapability(item.command, "wecom", item.actionLabel)}
-                          disabled={running}
+                          className="bg-white font-semibold"
+                          onClick={() => void loadView()}
+                          disabled={isLoading}
                         >
-                          {running ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-                          {item.actionLabel}
+                          {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                          刷新状态
                         </Button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </CardContent>
-            </Card>
-
-            <div className="space-y-6">
-              <div className="grid gap-6 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-gray-400" /> 企业 ID (CorpID)
-                  </label>
-                  <Input value={(integration?.corp_id || "").trim()} disabled className="bg-gray-50 border-gray-200 font-mono" />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <Settings className="w-4 h-4 text-gray-400" /> 授权有效性
-                  </label>
-                  <Input
-                    value={`${integration?.authorization_valid ? "有效" : "无效"} / ${(integration?.authorization_status || "-").trim() || "-"}`}
-                    disabled
-                    className="bg-gray-50 border-gray-200 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-gray-400" /> 企业名称
-                </label>
-                <Input value={(integration?.corp_name || "-").trim() || "-"} disabled className="bg-gray-50 border-gray-200" />
-                <p className="text-[11px] text-gray-400">最近检查时间：{formatDateTime((integration?.last_checked_at || "").trim())}</p>
-              </div>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <CardTitle className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                        <KeyRound className="h-4 w-4 text-blue-600" />
-                        数据与智能专区
-                      </CardTitle>
-                      <div className="mt-1 text-xs text-gray-500">会话存档初始化状态：权限、授权范围、公钥配置与回调接收程序需同时就绪。</div>
-                    </div>
-                    <Badge className={dataZone?.data_zone_ready ? "bg-green-100 text-green-700 border-none" : "bg-orange-100 text-orange-700 border-none"}>
-                      {dataZone?.data_zone_ready ? "已就绪" : "待初始化"}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-5 space-y-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    {([
-                      {
-                        key: "permission",
-                        title: "数据专区权限",
-                        value: dataZone?.data_zone_permission_status,
-                        meta: "应用是否具备数据与智能专区权限",
-                      },
-                      {
-                        key: "scope",
-                        title: "会话内容授权范围",
-                        value: dataZone?.chatdata_auth_scope_status,
-                        meta: Number(dataZone?.auth_user_count || 0) > 0 ? `授权人数：${Number(dataZone?.auth_user_count || 0)}` : "未检测到授权成员",
-                      },
-                      {
-                        key: "key",
-                        title: "公钥配置",
-                        value: dataZone?.chatdata_public_key_status,
-                        meta: Number(dataZone?.public_key_ver || 0) > 0 ? `版本：${Number(dataZone?.public_key_ver || 0)}` : "版本：-",
-                      },
-                      {
-                        key: "callback",
-                        title: "回调接收程序",
-                        value: dataZone?.chatdata_receive_callback_status,
-                        meta: currentDataZoneCallbackProgramID ? `program_id：${currentDataZoneCallbackProgramID}` : "program_id：-",
-                      },
-                    ] as const).map((item) => {
-                      const resolved = resolveDataZoneStatus(item.key, item.value)
-                      return (
-                        <div key={item.key} className="rounded-lg border border-gray-100 p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-xs font-bold text-gray-900">{item.title}</div>
-                            <Badge className={`${dataZoneBadgeClass(resolved.tone)} text-[10px] px-1.5 py-0`}>{resolved.label}</Badge>
-                          </div>
-                          <div className="mt-1 text-[11px] text-gray-500">{item.meta}</div>
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  {dataZoneAuthEditions.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="text-xs font-bold text-gray-900">授权版本</div>
-                      <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
-                        {dataZoneAuthEditions.map((edition, index) => {
-                          const status = chatDataEditionStatus(edition.status)
-                          return (
-                            <div key={`${edition.edition || 0}-${index}`} className="rounded-lg border border-gray-100 p-3">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className="truncate text-xs font-bold text-gray-900">{chatDataEditionLabel(edition.edition)}</div>
-                                  <div className="mt-1 text-[11px] text-gray-500">{formatChatDataScopeSummary(edition.auth_scope)}</div>
-                                </div>
-                                <Badge className={`${dataZoneBadgeClass(status.tone)} shrink-0 text-[10px] px-1.5 py-0`}>{status.label}</Badge>
-                              </div>
-                              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-500">
-                                <div>去重人数：{Number(edition.auth_user_count || 0)}</div>
-                                <div>存档周期：{Number(edition.msg_duration_days || 0) || "-"} 天</div>
-                                <div className="col-span-2">有效期：{formatUnix(edition.begin_time)} 至 {formatUnix(edition.end_time)}</div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {dataZoneAuthUserPreview.length > 0 ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs font-bold text-gray-900">生效授权成员预览</div>
-                        <div className="text-[11px] text-gray-400">前 {dataZoneAuthUserPreview.length} 人</div>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {dataZoneAuthUserPreview.map((user) => {
-                          const userID = (user.userid || "").trim()
-                          if (!userID) return null
-                          return (
-                            <div key={userID} className="min-w-0 rounded-lg border border-gray-100 p-3">
-                              <WecomDirectoryOpenDataName
-                                openID={(memberOpenUserIDMap.get(userID) || "").trim()}
-                                corpId={view?.integration?.corp_id}
-                                fallback={userID}
-                                className="block truncate text-xs font-bold text-gray-900"
-                                hintClassName="text-[10px] text-gray-400"
-                              />
-                              <div className="mt-1 truncate font-mono text-[10px] text-gray-400">{userID}</div>
-                              <div className="mt-1 text-[11px] text-gray-500">{formatChatDataEditionList(user.edition_list)}</div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ) : Number(dataZone?.auth_user_count || 0) > 0 ? (
-                    <div className="rounded-lg border border-orange-100 bg-orange-50 p-3 text-xs text-orange-800">
-                      授权范围存在，但实际生效成员预览为空。请结合购买席位与成员授权范围继续确认。
-                    </div>
-                  ) : null}
-
-                  {!dataZone?.public_key_ready && dataZone?.data_zone_permission_status === "authorized" ? (
-                    <div className="rounded-lg border border-orange-100 bg-orange-50 p-3 text-xs text-orange-800">
-                      已授权数据专区，但尚未设置公钥。设置后新消息才会开始存档，设置前的消息不会自动补齐。
-                    </div>
-                  ) : null}
-                  {(dataZone?.last_check_error || "").trim() ? (
-                    <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs text-red-700">{(dataZone?.last_check_error || "").trim()}</div>
-                  ) : null}
-
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-50 pt-4">
-                    <div className="text-[11px] text-gray-500">
-                      公钥指纹：{(dataZone?.public_key_fingerprint || "-").trim() || "-"}
-                      <span className="mx-2 text-gray-300">|</span>
-                      设置时间：{formatUnix(dataZone?.public_key_set_at)}
-                    </div>
-                    <Button
-                      size="sm"
-                      className="bg-blue-600 hover:bg-blue-700 font-semibold"
-                      onClick={() => void setupDataZonePublicKey()}
-                      disabled={isSettingDataZoneKey || dataZone?.public_key_ready || dataZone?.data_zone_permission_status !== "authorized"}
-                    >
-                      {isSettingDataZoneKey ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />}
-                      生成并上传公钥
-                    </Button>
-                  </div>
-                  <div className="space-y-1 border-t border-gray-50 pt-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-gray-900">专区程序 program_id</label>
-                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-                        <Input
-                          value={dataZoneCallbackProgramID}
-                          onChange={(event) => setDataZoneCallbackProgramID(event.target.value)}
-                          placeholder="输入企业微信数据专区程序 ID"
-                          className="font-mono"
-                          disabled={isSettingDataZoneCallback}
-                        />
                         <Button
-                          size="sm"
-                          className="h-10 bg-blue-600 px-4 font-semibold hover:bg-blue-700"
-                          onClick={() => void setupDataZoneReceiveCallback()}
-                          disabled={
-                            isSettingDataZoneCallback ||
-                            !dataZone?.public_key_ready ||
-                            (dataZone?.receive_callback_ready && dataZoneCallbackProgramID.trim() === currentDataZoneCallbackProgramID) ||
-                            dataZone?.data_zone_permission_status !== "authorized" ||
-                            !dataZoneCallbackProgramID.trim()
-                          }
+                          className="bg-blue-600 font-semibold hover:bg-blue-700"
+                          onClick={() => void recheckCapability("recheck_all_capabilities", "wecom", "已发起企业能力重新检查")}
+                          disabled={capabilityCommandRunning === "recheck_all_capabilities"}
                         >
-                          {isSettingDataZoneCallback ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Webhook className="w-4 h-4 mr-2" />}
-                          设置回调接收程序
+                          {capabilityCommandRunning === "recheck_all_capabilities" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                          重新检查全部
                         </Button>
                       </div>
-                      <div className="text-[11px] text-gray-500">
-                        回调设置时间：{formatUnix(dataZone?.receive_callback_set_at)}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3 md:items-end">
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-gray-900">sync_msg ability_id</label>
-                        <Input
-                          value={dataZoneSyncMsgAbilityID}
-                          onChange={(event) => setDataZoneSyncMsgAbilityID(event.target.value)}
-                          placeholder="sync_msg"
-                          className="font-mono"
-                          disabled={isConfiguringDataZoneProgram}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-gray-900">回调读取 ability_id</label>
-                        <Input
-                          value={dataZoneCallbackFetchAbilityID}
-                          onChange={(event) => setDataZoneCallbackFetchAbilityID(event.target.value)}
-                          placeholder="do_async_job"
-                          className="font-mono"
-                          disabled={isConfiguringDataZoneProgram}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-gray-900">日志级别</label>
-                        <select
-                          value={dataZoneLogLevel}
-                          onChange={(event) => setDataZoneLogLevel(event.target.value)}
-                          className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                          disabled={isConfiguringDataZoneProgram}
-                        >
-                          <option value="1">ERR</option>
-                          <option value="2">INFO</option>
-                          <option value="3">DBG</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                      <div className="text-[11px] text-gray-500">
-                        当前能力：sync_msg = {(dataZone?.sync_msg_ability_id || "sync_msg").trim() || "sync_msg"}
-                        <span className="mx-2 text-gray-300">|</span>
-                        回调读取 = {(dataZone?.callback_fetch_ability_id || "do_async_job").trim() || "do_async_job"}
-                        <span className="mx-2 text-gray-300">|</span>
-                        日志级别：{Number(dataZone?.log_level || 2) === 1 ? "ERR" : Number(dataZone?.log_level || 2) === 3 ? "DBG" : "INFO"}
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className="h-10 px-4 font-semibold"
-                        onClick={() => void configureDataZoneProgram()}
-                        disabled={isConfiguringDataZoneProgram || !dataZoneCallbackProgramID.trim()}
-                      >
-                        {isConfiguringDataZoneProgram ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
-                        保存程序能力配置
-                      </Button>
                     </div>
                   </div>
                 </CardContent>
               </Card>
 
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold text-gray-900">能力检查</CardTitle>
-                </CardHeader>
-                <CardContent className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {(view?.capabilities || []).map((item) => (
-                    <div key={(item.code || item.name || "").trim()} className="group relative rounded-lg border border-gray-100 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-bold text-gray-900">{(item.name || item.code || "-").trim()}</div>
-                        {item.available ? (
-                          <Badge className="bg-green-100 text-green-700 border-none text-[10px] px-1.5 py-0">可用</Badge>
+              <section className="space-y-4">
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-gray-900">企业接入状态</h3>
+                  <p className="text-sm text-gray-500">每一项都会独立收敛。未就绪不代表系统故障，只有需要处理的问题才会进入下方问题清单。</p>
+                </div>
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                  {capabilityCards.map((item) => {
+                    const running = capabilityCommandRunning === item.command
+                    return (
+                      <Card key={item.key} className="border-gray-200 shadow-sm">
+                        <CardContent className="space-y-4 p-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="text-sm font-bold text-gray-900">{item.title}</div>
+                              <div className="text-xs leading-5 text-gray-500">{item.summary}</div>
+                            </div>
+                            <Badge className={`${productBadgeClass(item.badgeTone)} shrink-0 px-2.5 py-1 text-[10px] font-bold`}>
+                              {item.badgeLabel}
+                            </Badge>
+                          </div>
+                          <div className="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-3 text-xs leading-5 text-gray-600">
+                            {item.detail}
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 text-[11px] text-gray-500">
+                            <div>
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400">最近检查</div>
+                              <div className="mt-1 text-xs font-medium text-gray-700">{item.lastCheckedAt}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] uppercase tracking-wider text-gray-400">最近就绪</div>
+                              <div className="mt-1 text-xs font-medium text-gray-700">{item.lastReadyAt}</div>
+                            </div>
+                          </div>
+                          <div className="flex justify-end border-t border-gray-100 pt-4">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="bg-white text-xs font-semibold"
+                              onClick={() => void recheckCapability(item.command, "wecom", `${item.title}已发起重新检查`)}
+                              disabled={running}
+                            >
+                              {running ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                              {item.actionLabel}
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-gray-900">会话专区状态</h3>
+                  <p className="text-sm text-gray-500">会话专区相关配置由平台自动托管。这里仅展示当前是否已生效，以及会影响到的授权范围。</p>
+                </div>
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-50 p-5">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-1">
+                        <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900">
+                          <KeyRound className="h-4 w-4 text-blue-600" />
+                          会话专区就绪情况
+                        </CardTitle>
+                        <div className="text-xs leading-5 text-gray-500">{dataZoneSummary}</div>
+                      </div>
+                      <Badge className={`${productBadgeClass(dataZone?.data_zone_ready ? "green" : (openDataCapability?.status || "").trim() === "error" ? "red" : "orange")} px-2.5 py-1 text-[10px] font-bold`}>
+                        {dataZone?.data_zone_ready ? "已就绪" : (openDataCapability?.status || "").trim() === "error" ? "需排查" : "配置中"}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-5 p-5">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      {([
+                        {
+                          key: "permission",
+                          title: "专区权限",
+                          value: dataZone?.data_zone_permission_status,
+                          meta: "企业微信是否已为当前应用开通数据与智能专区权限。",
+                        },
+                        {
+                          key: "scope",
+                          title: "会话授权范围",
+                          value: dataZone?.chatdata_auth_scope_status,
+                          meta: Number(dataZone?.auth_user_count || 0) > 0 ? `当前已识别授权成员 ${Number(dataZone?.auth_user_count || 0)} 人。` : "当前还未识别到会话内容授权成员。",
+                        },
+                        {
+                          key: "key",
+                          title: "公钥配置",
+                          value: dataZone?.chatdata_public_key_status,
+                          meta: Number(dataZone?.public_key_ver || 0) > 0 ? `当前公钥版本 ${Number(dataZone?.public_key_ver || 0)}。` : "平台尚未完成公钥配置。",
+                        },
+                        {
+                          key: "callback",
+                          title: "回调接收",
+                          value: dataZone?.chatdata_receive_callback_status,
+                          meta: dataZone?.receive_callback_ready ? "会话专区回调接收程序已生效。" : "平台正在自动确认回调接收程序。",
+                        },
+                      ] as const).map((item) => {
+                        const resolved = resolveDataZoneStatus(item.key, item.value)
+                        return (
+                          <div key={item.key} className="rounded-xl border border-gray-100 bg-white p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-semibold text-gray-900">{item.title}</div>
+                              <Badge className={`${dataZoneBadgeClass(resolved.tone)} px-2 py-0.5 text-[10px] font-bold`}>{resolved.label}</Badge>
+                            </div>
+                            <div className="mt-2 text-xs leading-5 text-gray-500">{item.meta}</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+                      <div className="space-y-3 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-bold text-gray-900">授权版本摘要</div>
+                          <div className="text-[11px] text-gray-400">{dataZoneAuthEditions.length > 0 ? `共 ${dataZoneAuthEditions.length} 个版本` : "暂无版本信息"}</div>
+                        </div>
+                        {dataZoneAuthEditions.length > 0 ? (
+                          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                            {dataZoneAuthEditions.map((edition, index) => {
+                              const editionStatus = chatDataEditionStatus(edition.status)
+                              return (
+                                <div key={`${edition.edition || 0}-${index}`} className="rounded-xl border border-gray-100 bg-white p-3">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <div className="text-xs font-semibold text-gray-900">{chatDataEditionLabel(edition.edition)}</div>
+                                      <div className="mt-1 text-[11px] text-gray-500">{formatChatDataScopeSummary(edition.auth_scope)}</div>
+                                    </div>
+                                    <Badge className={`${dataZoneBadgeClass(editionStatus.tone)} px-1.5 py-0 text-[10px] font-bold`}>
+                                      {editionStatus.label}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-3 space-y-1 text-[11px] text-gray-500">
+                                    <div>去重成员：{Number(edition.auth_user_count || 0)}</div>
+                                    <div>存档周期：{Number(edition.msg_duration_days || 0) || "-"} 天</div>
+                                    <div>有效期：{formatUnix(edition.begin_time)} 至 {formatUnix(edition.end_time)}</div>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
                         ) : (
-                          <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">不可用</Badge>
+                          <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-5 text-sm text-gray-500">
+                            当前还没有读取到专区授权版本信息。完成授权后，平台会自动更新这里的摘要。
+                          </div>
                         )}
                       </div>
-                      <div className="mt-1 text-[11px] text-gray-600">{(item.reason || "-").trim()}</div>
-                      <div className="mt-1 text-[10px] text-gray-500">影响：{(item.impact_scope || "-").trim()}</div>
-                      {item.available ? null : (
-                        <div className="mt-0.5 text-[10px] text-blue-600">建议：{(item.next_step || "-").trim()}</div>
-                      )}
-                      {capabilityCheckTree((item.code || "").trim()).length > 0 ? (
-                        <div className="pointer-events-none absolute left-3 top-[calc(100%+8px)] z-20 hidden min-w-[260px] rounded-lg border border-gray-200 bg-white p-2 shadow-lg group-hover:block">
-                          <div className="mb-1 text-[10px] font-bold text-gray-700">检查明细</div>
-                          <div className="space-y-1">
-                            {capabilityCheckTree((item.code || "").trim()).map((row) => (
-                              <div key={`${(item.code || "").trim()}-${row.label}`} className="flex items-center justify-between gap-2 text-[10px]">
-                                <span className="text-gray-600">{row.label}{row.count ? `（${row.count}）` : ""}</span>
-                                {row.passed ? (
-                                  <Badge className="bg-green-100 text-green-700 border-none text-[9px] px-1.5 py-0">通过</Badge>
-                                ) : (
-                                  <Badge className="bg-red-100 text-red-700 border-none text-[9px] px-1.5 py-0">不通过</Badge>
-                                )}
-                              </div>
-                            ))}
-                          </div>
+
+                      <div className="space-y-3 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-bold text-gray-900">生效成员预览</div>
+                          <div className="text-[11px] text-gray-400">{dataZoneAuthUserPreview.length > 0 ? `前 ${dataZoneAuthUserPreview.length} 人` : "暂无成员预览"}</div>
                         </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold text-gray-900">问题清单</CardTitle>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3">
-                  {issueItems.length === 0 ? (
-                    <div className="rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-xs text-green-700">当前无异常，权限与业务对象均已就绪。</div>
-                  ) : issueItems.map((item) => (
-                    <div key={`${item.kind}-${item.code}`} className="rounded-lg border border-gray-100 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-bold text-gray-900">{item.name}</div>
-                        <div className="flex items-center gap-2">
-                          {item.count ? (
-                            <Badge className="bg-gray-100 text-gray-600 border-none text-[9px] px-1.5 py-0">{item.count}</Badge>
-                          ) : null}
-                          {(item.status || "").trim() === "partial" || (item.status || "").trim() === "warning" ? (
-                            <Badge className="bg-orange-100 text-orange-700 border-none text-[10px] px-1.5 py-0">待完善</Badge>
-                          ) : (
-                            <Badge className="bg-red-100 text-red-700 border-none text-[10px] px-1.5 py-0">异常</Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="mt-1 text-[11px] text-gray-600">{item.summary}</div>
-                      <div className="mt-0.5 text-[10px] text-blue-600">建议：{item.suggestion}</div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold text-gray-900">应用管理员</CardTitle>
-                </CardHeader>
-                <CardContent className="p-5 space-y-2">
-                  {integrationAdmins.length === 0 ? (
-                    <div className="text-xs text-gray-500">暂无管理员数据，请重试集成检查</div>
-                  ) : integrationAdmins.map((item) => (
-                    <div key={`${item.userid || ""}-${String(item.auth_type || 0)}`} className="rounded-lg border border-gray-100 p-3 flex items-center justify-between">
-                      <div className="text-xs text-gray-800 font-semibold">{(item.userid || "-").trim() || "-"}</div>
-                      <Badge className="bg-blue-100 text-blue-700 border-none text-[10px] px-1.5 py-0">auth_type: {Number(item.auth_type || 0)}</Badge>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold text-gray-900">应用权限</CardTitle>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3">
-                  <div className="text-xs text-gray-600">已获取权限项：{integrationPermissions.length}</div>
-                  {permissionTree.length === 0 ? (
-                    <div className="text-xs text-gray-500">暂未获取权限明细</div>
-                  ) : (
-                    <div className="max-h-80 overflow-y-auto pr-1 space-y-2">
-                      {permissionTree.map((categoryNode) => (
-                        <details key={categoryNode.category} open className="rounded border border-gray-100 bg-white">
-                          <summary className="cursor-pointer list-none select-none px-3 py-2 text-xs font-bold text-gray-800 border-b border-gray-50">
-                            {categoryNode.category}
-                          </summary>
-                          <div className="p-2 space-y-2">
-                            {categoryNode.groups.map((groupNode) => (
-                              <details key={`${categoryNode.category}-${groupNode.group}`} open className="rounded border border-gray-100 bg-gray-50/40">
-                                <summary className="cursor-pointer list-none select-none px-2 py-1.5 text-[11px] font-semibold text-gray-700 border-b border-gray-100">
-                                  {groupNode.group}
-                                </summary>
-                                <div className="p-2 space-y-1.5">
-                                  {groupNode.items.map((row) => (
-                                    <div key={`${groupNode.group}-${row.code}`} className="rounded border border-gray-100 bg-white px-2 py-1.5">
-                                      <div className="text-[11px] font-semibold text-gray-800">{renderPermissionDisplay(row.code)}</div>
-                                      {typeof row.expire_time === "number" && row.expire_time > 0 ? (
-                                        <div className="text-[10px] text-orange-600">到期：{formatUnix(row.expire_time)}</div>
-                                      ) : null}
-                                    </div>
-                                  ))}
+                        {dataZoneAuthUserPreview.length > 0 ? (
+                          <div className="space-y-2">
+                            {dataZoneAuthUserPreview.map((user) => {
+                              const userID = (user.userid || "").trim()
+                              if (!userID) return null
+                              return (
+                                <div key={userID} className="rounded-xl border border-gray-100 bg-white p-3">
+                                  <WecomDirectoryOpenDataName
+                                    openID={(memberOpenUserIDMap.get(userID) || "").trim()}
+                                    corpId={view?.integration?.corp_id}
+                                    fallback={userID}
+                                    className="block truncate text-xs font-bold text-gray-900"
+                                    hintClassName="text-[10px] text-gray-400"
+                                  />
+                                  <div className="mt-1 truncate font-mono text-[10px] text-gray-400">{userID}</div>
+                                  <div className="mt-1 text-[11px] text-gray-500">{formatChatDataEditionList(user.edition_list)}</div>
                                 </div>
-                              </details>
-                            ))}
+                              )
+                            })}
                           </div>
-                        </details>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold text-gray-900">接口账号许可</CardTitle>
-                </CardHeader>
-                <CardContent className="p-5 space-y-3">
-                  <div className="text-xs text-gray-600">
-                    激活账号：{Number(integrationLicenseSummary?.active_total || 0)} / {Number(integrationLicenseSummary?.total || 0)}
-                    {integrationLicenseSummary?.has_more ? "（还有更多）" : ""}
-                  </div>
-                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                    {integrationLicenseAccounts.slice(0, 80).map((item) => (
-                      <div key={`${item.userid || ""}-${String(item.active_time || 0)}`} className="rounded border border-gray-100 p-2">
-                        <div className="text-[11px] font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
-                        <div className="text-[10px] text-gray-500">类型：{Number(item.type || 0)}</div>
-                        <div className="text-[10px] text-gray-500">激活时间：{formatUnix(item.active_time)}</div>
-                        <div className="text-[10px] text-gray-500">到期时间：{formatUnix(item.expire_time)}</div>
+                        ) : Number(dataZone?.auth_user_count || 0) > 0 ? (
+                          <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-4 text-xs leading-5 text-orange-800">
+                            已识别到授权范围，但成员预览暂未返回。平台会继续自动刷新，如长时间不更新请联系平台支持排查。
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-5 text-sm text-gray-500">
+                            当前还没有可展示的授权成员。企业管理员完成成员或部门授权后，这里会自动出现预览。
+                          </div>
+                        )}
                       </div>
-                    ))}
-                    {integrationLicenseAccounts.length === 0 ? (
-                      <div className="text-xs text-gray-500">暂无激活账号许可数据</div>
-                    ) : null}
-                  </div>
-                </CardContent>
-              </Card>
+                    </div>
+                  </CardContent>
+                </Card>
+              </section>
 
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="p-5 border-b border-gray-50">
-                  <CardTitle className="text-sm font-bold text-gray-900">修复建议</CardTitle>
-                </CardHeader>
-                <CardContent className="p-5">
-                  <ul className="space-y-2">
-                    {(view?.recommendations || []).map((item, index) => (
-                      <li key={`${item}-${index}`} className="text-xs text-blue-700 leading-relaxed">• {item}</li>
-                    ))}
-                    {(view?.recommendations || []).length === 0 ? (
-                      <li className="text-xs text-gray-500">当前暂无修复建议</li>
-                    ) : null}
-                  </ul>
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="pt-6 border-t border-gray-100 flex justify-end gap-3">
-              <Button variant="outline" className="font-semibold" onClick={() => void loadView()}>刷新结果</Button>
-              <Button className="bg-blue-600 hover:bg-blue-700 px-10 font-semibold shadow-sm transition-all" onClick={() => void runIntegrationCheck()} disabled={isRunningCheck}>
-                执行全量检查
-              </Button>
+              <section className="space-y-4">
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-gray-900">待处理问题</h3>
+                  <p className="text-sm text-gray-500">这里只保留真正需要处理的阻塞项，方便快速判断是等管理员操作、等平台自动收敛，还是需要平台排查。</p>
+                </div>
+                <Card className="border-gray-200 shadow-sm">
+                  <CardContent className="p-5">
+                    {pendingIssues.length === 0 ? (
+                      <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-4 text-sm leading-6 text-green-800">
+                        当前没有需要人工处理的问题。平台会继续自动保持接入状态，并在能力变化后同步更新这里的结果。
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                        {pendingIssues.map((item, index) => (
+                          <div key={`${item.title}-${index}`} className="rounded-2xl border border-gray-100 bg-white p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="text-sm font-bold text-gray-900">{item.title}</div>
+                              <Badge className={`${productBadgeClass(item.owner === "平台研发排查" ? "red" : item.owner === "平台自动收敛" ? "blue" : "orange")} shrink-0 px-2 py-0.5 text-[10px] font-bold`}>
+                                {item.owner}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 space-y-3 text-xs leading-5 text-gray-600">
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400">当前影响</div>
+                                <div className="mt-1">{item.impact}</div>
+                              </div>
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-400">下一步</div>
+                                <div className="mt-1">{item.nextStep}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </section>
             </div>
           </TabsContent>
 
@@ -2265,14 +2213,14 @@ export default function OrganizationSettings() {
           </TabsContent>
 
           <TabsContent value="debug" className="mt-0">
-            <div className="max-w-4xl space-y-6">
+            <div className="max-w-6xl space-y-6">
               <div className="rounded-xl border border-orange-100 bg-orange-50 p-5">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-orange-500" />
                   <div className="space-y-1">
-                    <div className="text-sm font-bold text-orange-900">数据与智能专区调试模式</div>
+                    <div className="text-sm font-bold text-orange-900">调试与开发开关</div>
                     <p className="text-xs leading-relaxed text-orange-700">
-                      按企业微信官方专区调试链路开启。需要填写 `program_id` 和 `debug_token`；开启成功后会展示当前企业 `access_token`，供专区程序本地联调用。
+                      本页用于平台侧排查和联调。主页面只展示面向企业管理员的状态，这里才承载原始检查结果、程序配置摘要和调试入口。
                     </p>
                   </div>
                 </div>
@@ -2282,7 +2230,7 @@ export default function OrganizationSettings() {
                 <CardHeader className="border-b border-gray-50 p-6">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="flex items-center gap-2 text-sm font-bold">
-                      <Zap className="h-4 w-4 text-blue-600" /> 调试与开发
+                      <Zap className="h-4 w-4 text-blue-600" /> 数据专区调试模式
                     </CardTitle>
                     <Badge className={`${dataZoneBadgeClass(dataZoneDebugStatus.tone)} px-2.5 py-1 text-[10px] font-bold`}>
                       {dataZoneDebugStatus.label}
@@ -2292,16 +2240,14 @@ export default function OrganizationSettings() {
                 <CardContent className="space-y-5 p-6">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <div className="text-xs font-bold text-gray-900">专区程序 `program_id`</div>
-                      <Input
-                        value={dataZoneDebugProgramID}
-                        onChange={(event) => setDataZoneDebugProgramID(event.target.value)}
-                        placeholder="输入数据与智能专区 program_id"
-                        disabled={isDataZoneDebugLocked}
-                      />
+                      <div className="text-xs font-bold text-gray-900">平台托管程序 ID</div>
+                      <Input value={managedDataZoneProgramID} disabled className="bg-gray-50 font-mono" />
+                      <div className="text-[11px] leading-5 text-gray-500">
+                        `program_id` 由后端平台配置统一托管，不再由企业侧手工保存。
+                      </div>
                     </div>
                     <div className="space-y-2">
-                      <div className="text-xs font-bold text-gray-900">调试 `debug_token`</div>
+                      <div className="text-xs font-bold text-gray-900">调试 token</div>
                       <Input
                         type="password"
                         value={dataZoneDebugToken}
@@ -2310,6 +2256,9 @@ export default function OrganizationSettings() {
                         disabled={isDataZoneDebugLocked}
                         autoComplete="off"
                       />
+                      <div className="text-[11px] leading-5 text-gray-500">
+                        仅在需要联调企业微信数据专区程序时填写，开启成功后会返回当前企业的调试 access token。
+                      </div>
                     </div>
                   </div>
 
@@ -2327,6 +2276,12 @@ export default function OrganizationSettings() {
                       <div className="mt-1 text-xs font-semibold text-gray-900">{((integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</div>
                     </div>
                   </div>
+
+                  {!managedDataZoneProgramID ? (
+                    <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+                      当前环境尚未配置平台托管的专区程序 ID，调试模式暂时不可开启，需要平台侧先完成后端配置。
+                    </div>
+                  ) : null}
 
                   {dataZoneDebugMode?.last_check_error && !isDataZoneDebugExpired ? (
                     <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-700">
@@ -2347,10 +2302,8 @@ export default function OrganizationSettings() {
                   {isDataZoneDebugEnabled && dataZoneDebugMode?.corp_access_token ? (
                     <div className="space-y-2 rounded-xl border border-green-100 bg-green-50 p-4">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs font-bold text-green-900">企业 `access_token`</div>
-                        <div className="text-[10px] text-green-700">
-                          过期时间：{formatUnix(dataZoneDebugMode.corp_access_token_expires_at)}
-                        </div>
+                        <div className="text-xs font-bold text-green-900">企业 access token</div>
+                        <div className="text-[10px] text-green-700">过期时间：{formatUnix(dataZoneDebugMode.corp_access_token_expires_at)}</div>
                       </div>
                       <div className="break-all rounded-lg border border-green-100 bg-white px-3 py-2 font-mono text-[11px] text-gray-700">
                         {dataZoneDebugMode.corp_access_token}
@@ -2363,15 +2316,12 @@ export default function OrganizationSettings() {
                       {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                       刷新状态
                     </Button>
-                    <div className="w-full text-[11px] leading-relaxed text-gray-500 md:order-first md:w-auto md:flex-1">
-                      刷新状态会重新检查调试模式，并拉取当前企业最新的 `access_token`。
-                    </div>
                     {canCloseDataZoneDebugMode ? (
                       <Button
                         variant="outline"
                         className="bg-white text-xs font-bold"
                         onClick={() => void closeDataZoneDebugMode()}
-                        disabled={isClosingDataZoneDebugMode || !dataZoneDebugProgramID.trim()}
+                        disabled={isClosingDataZoneDebugMode || !managedDataZoneProgramID}
                       >
                         {isClosingDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                         关闭调试模式
@@ -2381,7 +2331,7 @@ export default function OrganizationSettings() {
                       <Button
                         className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700"
                         onClick={() => void openDataZoneDebugMode()}
-                        disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked}
+                        disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked || !managedDataZoneProgramID}
                       >
                         {isOpeningDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                         开启调试模式
@@ -2390,6 +2340,244 @@ export default function OrganizationSettings() {
                   </div>
                 </CardContent>
               </Card>
+
+              <Card className="border-gray-200 shadow-sm">
+                <CardHeader className="border-b border-gray-50 p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                      <KeyRound className="h-4 w-4 text-gray-700" /> 专区程序与密钥信息
+                    </CardTitle>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="bg-white text-xs font-semibold"
+                      onClick={() => void runIntegrationCheck()}
+                      disabled={isRunningCheck}
+                    >
+                      {isRunningCheck ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                      重新执行底层检查
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    { label: "program_id", value: managedDataZoneProgramID || "-" },
+                    { label: "sync_msg ability", value: (dataZone?.sync_msg_ability_id || "-").trim() || "-" },
+                    { label: "callback_fetch ability", value: (dataZone?.callback_fetch_ability_id || "-").trim() || "-" },
+                    { label: "log_level", value: Number(dataZone?.log_level || 0) > 0 ? String(dataZone?.log_level) : "-" },
+                    { label: "public_key_ver", value: Number(dataZone?.public_key_ver || 0) > 0 ? String(dataZone?.public_key_ver) : "-" },
+                    { label: "public_key_fingerprint", value: (dataZone?.public_key_fingerprint || "-").trim() || "-" },
+                    { label: "public_key_set_at", value: formatUnix(dataZone?.public_key_set_at) },
+                    { label: "private_key_stored", value: dataZone?.private_key_stored ? "是" : "否" },
+                    { label: "private_key_encrypt_version", value: (dataZone?.private_key_encrypt_version || "-").trim() || "-" },
+                    { label: "receive_callback_set_at", value: formatUnix(dataZone?.receive_callback_set_at) },
+                    { label: "last_check_at", value: formatUnix(dataZone?.last_check_at) },
+                    { label: "last_check_error", value: (dataZone?.last_check_error || "-").trim() || "-" },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.label}</div>
+                      <div className="mt-2 break-all font-mono text-xs text-gray-800">{item.value}</div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card className="border-gray-200 shadow-sm">
+                <CardHeader className="border-b border-gray-50 p-6">
+                  <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                    <Shield className="h-4 w-4 text-gray-700" /> 原始 Capability 诊断
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 p-6">
+                  {capabilityDiagnostics.map((item) => {
+                    const axis = item.axis
+                    return (
+                      <div key={item.key} className="rounded-2xl border border-gray-100 bg-white p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="text-sm font-bold text-gray-900">{item.title}</div>
+                          <Badge className={`${capabilityBadgeClass((axis?.status || "unknown").trim())} px-2 py-0.5 text-[10px] font-bold`}>
+                            {capabilityStatusLabel((axis?.status || "unknown").trim())}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 grid gap-3 text-[11px] text-gray-500 md:grid-cols-2 xl:grid-cols-4">
+                          <div>blocked_reason：{capabilityReasonLabel((axis?.blocked_reason || "").trim()) || "-"}</div>
+                          <div>last_checked_at：{formatDateTime((axis?.last_checked_at || "").trim())}</div>
+                          <div>last_ready_at：{formatDateTime((axis?.last_ready_at || "").trim())}</div>
+                          <div>last_error：{(axis?.last_error || "-").trim() || "-"}</div>
+                        </div>
+                        {item.meta.length > 0 ? (
+                          <div className="mt-3 grid gap-3 rounded-xl border border-gray-100 bg-gray-50 p-3 text-[11px] text-gray-600 md:grid-cols-2 xl:grid-cols-3">
+                            {item.meta.map((meta) => (
+                              <div key={`${item.key}-${meta.label}`}>
+                                <span className="text-gray-400">{meta.label}：</span>
+                                <span className="break-all font-mono text-gray-700">{meta.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                        {item.detailsJSON ? (
+                          <pre className="mt-3 overflow-x-auto rounded-xl border border-gray-100 bg-gray-50 p-3 text-[11px] leading-5 text-gray-700">{item.detailsJSON}</pre>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </CardContent>
+              </Card>
+
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-50 p-6">
+                    <CardTitle className="text-sm font-bold text-gray-900">应用权限</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 p-6">
+                    <div className="text-xs text-gray-600">已获取权限项：{integrationPermissions.length}</div>
+                    {permissionTree.length === 0 ? (
+                      <div className="text-xs text-gray-500">暂未获取权限明细</div>
+                    ) : (
+                      <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+                        {permissionTree.map((categoryNode) => (
+                          <details key={categoryNode.category} open className="rounded border border-gray-100 bg-white">
+                            <summary className="cursor-pointer list-none select-none border-b border-gray-50 px-3 py-2 text-xs font-bold text-gray-800">
+                              {categoryNode.category}
+                            </summary>
+                            <div className="space-y-2 p-2">
+                              {categoryNode.groups.map((groupNode) => (
+                                <details key={`${categoryNode.category}-${groupNode.group}`} open className="rounded border border-gray-100 bg-gray-50/40">
+                                  <summary className="cursor-pointer list-none select-none border-b border-gray-100 px-2 py-1.5 text-[11px] font-semibold text-gray-700">
+                                    {groupNode.group}
+                                  </summary>
+                                  <div className="space-y-1.5 p-2">
+                                    {groupNode.items.map((row) => (
+                                      <div key={`${groupNode.group}-${row.code}`} className="rounded border border-gray-100 bg-white px-2 py-1.5">
+                                        <div className="text-[11px] font-semibold text-gray-800">{renderPermissionDisplay(row.code)}</div>
+                                        {typeof row.expire_time === "number" && row.expire_time > 0 ? (
+                                          <div className="text-[10px] text-orange-600">到期：{formatUnix(row.expire_time)}</div>
+                                        ) : null}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-50 p-6">
+                    <CardTitle className="text-sm font-bold text-gray-900">应用管理员</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 p-6">
+                    {integrationAdmins.length === 0 ? (
+                      <div className="text-xs text-gray-500">暂无管理员数据，请重新执行底层检查。</div>
+                    ) : (
+                      integrationAdmins.map((item) => (
+                        <div key={`${item.userid || ""}-${String(item.auth_type || 0)}`} className="flex items-center justify-between rounded-xl border border-gray-100 p-3">
+                          <div className="text-xs font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
+                          <Badge className="bg-blue-100 px-1.5 py-0 text-[10px] text-blue-700 border-none">auth_type: {Number(item.auth_type || 0)}</Badge>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-50 p-6">
+                    <CardTitle className="text-sm font-bold text-gray-900">接口账号许可</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 p-6">
+                    <div className="text-xs text-gray-600">
+                      激活账号：{Number(integrationLicenseSummary?.active_total || 0)} / {Number(integrationLicenseSummary?.total || 0)}
+                      {integrationLicenseSummary?.has_more ? "（还有更多）" : ""}
+                    </div>
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                      {integrationLicenseAccounts.slice(0, 80).map((item) => (
+                        <div key={`${item.userid || ""}-${String(item.active_time || 0)}`} className="rounded border border-gray-100 p-2">
+                          <div className="text-[11px] font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
+                          <div className="text-[10px] text-gray-500">类型：{Number(item.type || 0)}</div>
+                          <div className="text-[10px] text-gray-500">激活时间：{formatUnix(item.active_time)}</div>
+                          <div className="text-[10px] text-gray-500">到期时间：{formatUnix(item.expire_time)}</div>
+                        </div>
+                      ))}
+                      {integrationLicenseAccounts.length === 0 ? (
+                        <div className="text-xs text-gray-500">暂无激活账号许可数据</div>
+                      ) : null}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-gray-200 shadow-sm">
+                  <CardHeader className="border-b border-gray-50 p-6">
+                    <CardTitle className="text-sm font-bold text-gray-900">旧检查输出</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4 p-6">
+                    <div>
+                      <div className="mb-2 text-xs font-bold text-gray-900">permission_checks</div>
+                      <div className="space-y-2">
+                        {permissionChecks.length === 0 ? (
+                          <div className="text-xs text-gray-500">暂无检查结果</div>
+                        ) : permissionChecks.map((item) => (
+                          <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
+                              <Badge className={`${(item.status || "").trim() === "ok" || (item.status || "").trim() === "granted" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"} border-none px-1.5 py-0 text-[10px]`}>
+                                {(item.status || "-").trim() || "-"}
+                              </Badge>
+                            </div>
+                            <div className="mt-2 text-[11px] text-gray-500">影响：{(item.impact || "-").trim() || "-"}</div>
+                            <div className="mt-1 text-[11px] text-gray-500">建议：{(item.suggestion || "-").trim() || "-"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-xs font-bold text-gray-900">object_checks</div>
+                      <div className="space-y-2">
+                        {objectChecks.length === 0 ? (
+                          <div className="text-xs text-gray-500">暂无检查结果</div>
+                        ) : objectChecks.map((item) => (
+                          <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
+                              <Badge className={`${isObjectPassed((item.status || "").trim()) ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"} border-none px-1.5 py-0 text-[10px]`}>
+                                {(item.status || "-").trim() || "-"}
+                              </Badge>
+                            </div>
+                            <div className="mt-2 text-[11px] text-gray-500">摘要：{(item.summary || "-").trim() || "-"}</div>
+                            <div className="mt-1 text-[11px] text-gray-500">影响：{(item.impact || "-").trim() || "-"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-xs font-bold text-gray-900">capabilities</div>
+                      <div className="space-y-2">
+                        {(view?.capabilities || []).length === 0 ? (
+                          <div className="text-xs text-gray-500">暂无检查结果</div>
+                        ) : (view?.capabilities || []).map((item) => (
+                          <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
+                              <Badge className={`${item.available ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"} border-none px-1.5 py-0 text-[10px]`}>
+                                {item.available ? "available" : "unavailable"}
+                              </Badge>
+                            </div>
+                            <div className="mt-2 text-[11px] text-gray-500">reason：{(item.reason || "-").trim() || "-"}</div>
+                            <div className="mt-1 text-[11px] text-gray-500">next_step：{(item.next_step || "-").trim() || "-"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
 
               <Card className="border-gray-200 shadow-sm">
                 <CardHeader className="border-b border-gray-50 p-6">
