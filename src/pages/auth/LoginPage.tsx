@@ -9,6 +9,7 @@ import {
   getSSOStartConfig,
   type SSOStartPanelConfig,
 } from "@/services/authService"
+import { resolveAdminSSORelay } from "@/services/adminSSO"
 import { normalizeErrorMessage } from "@/services/http"
 import { presentLoginError } from "@/lib/loginErrorPresentation"
 import { cn } from "@/lib/utils"
@@ -101,6 +102,7 @@ export default function LoginPage() {
     const raw = (searchParams.get("next") || "").trim()
     return raw || "/main/dashboard"
   }, [searchParams])
+  const adminSSORelay = useMemo(() => resolveAdminSSORelay(next), [next])
   const forceReauth = (searchParams.get("reauth") || "").trim() === "1"
   const urlError = useMemo(() => (searchParams.get("error") || "").trim(), [searchParams])
   const isWeComWebview = useMemo(() => {
@@ -109,6 +111,16 @@ export default function LoginPage() {
   }, [])
 
   useEffect(() => {
+    if (loading || (authenticated && !forceReauth) || !adminSSORelay) {
+      return
+    }
+    window.location.replace(adminSSORelay.redirectURL)
+  }, [adminSSORelay, authenticated, forceReauth, loading])
+
+  useEffect(() => {
+    if (adminSSORelay) {
+      return
+    }
     if (!isWeComWebview || loading || (authenticated && !forceReauth)) {
       return
     }
@@ -131,9 +143,12 @@ export default function LoginPage() {
     return () => {
       cancelled = true
     }
-  }, [authenticated, forceReauth, isWeComWebview, loading, next, retryToken])
+  }, [adminSSORelay, authenticated, forceReauth, isWeComWebview, loading, next, retryToken])
 
   useEffect(() => {
+    if (adminSSORelay) {
+      return
+    }
     if (isWeComWebview || loading || (authenticated && !forceReauth)) {
       return
     }
@@ -161,9 +176,12 @@ export default function LoginPage() {
     return () => {
       cancelled = true
     }
-  }, [authenticated, forceReauth, isWeComWebview, loading, next, retryToken])
+  }, [adminSSORelay, authenticated, forceReauth, isWeComWebview, loading, next, retryToken])
 
   useEffect(() => {
+    if (adminSSORelay) {
+      return
+    }
     if (isWeComWebview || loading || (authenticated && !forceReauth) || !panelConfig) {
       return
     }
@@ -230,7 +248,7 @@ export default function LoginPage() {
       cancelled = true
       clearPanel()
     }
-  }, [authenticated, forceReauth, isWeComWebview, loading, panelConfig])
+  }, [adminSSORelay, authenticated, forceReauth, isWeComWebview, loading, panelConfig])
 
   if (!loading && authenticated && !forceReauth) {
     return <Navigate to={next} replace />
@@ -241,7 +259,11 @@ export default function LoginPage() {
     if (!visibleError) return null
     return presentLoginError(visibleError)
   }, [visibleError])
-  const showLoading = loading || webviewRedirecting || panelLoading || (Boolean(panelConfig) && !panelReady && !visibleError)
+  const showLoading = loading ||
+    Boolean(adminSSORelay) ||
+    webviewRedirecting ||
+    panelLoading ||
+    (Boolean(panelConfig) && !panelReady && !visibleError)
 
   const handleRetry = () => {
     setError("")
@@ -272,11 +294,15 @@ export default function LoginPage() {
           {showLoading ? (
             <div className="flex items-center justify-center rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              {isWeComWebview ? "检测到企业微信环境，正在自动跳转登录..." : "正在加载企业微信登录面板..."}
+              {adminSSORelay
+                ? "正在完成企业微信管理后台登录..."
+                : isWeComWebview
+                  ? "检测到企业微信环境，正在自动跳转登录..."
+                  : "正在加载企业微信登录面板..."}
             </div>
           ) : null}
 
-          {!isWeComWebview ? (
+          {!isWeComWebview && !adminSSORelay ? (
             <div className="mx-auto flex min-h-[416px] w-full max-w-[480px] items-center justify-center overflow-hidden rounded-md bg-white">
               <div
                 ref={panelHostRef}

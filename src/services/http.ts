@@ -1,3 +1,5 @@
+import { resolveAdminSSORelay } from "./adminSSO"
+
 export class APIRequestError extends Error {
   status: number
   payload: unknown
@@ -135,6 +137,11 @@ function redirectToLogin(): void {
   }
   redirectingToLogin = true
   const next = `${window.location.pathname}${window.location.search}`
+  const adminSSORelay = resolveAdminSSORelay(next)
+  if (adminSSORelay) {
+    window.location.assign(adminSSORelay.redirectURL)
+    return
+  }
   window.location.assign(`/login?next=${encodeURIComponent(next)}`)
 }
 
