@@ -1,4 +1,4 @@
-import { Suspense } from "react"
+import { Suspense, useRef } from "react"
 import { Outlet, Link, useLocation } from "react-router-dom"
 import { MessageSquare, Users, CheckSquare, Settings, BarChart2, BookOpen, Link as LinkIcon, GitBranch, HelpCircle, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -91,10 +91,23 @@ export default function MainLayout() {
   const location = useLocation()
   const auth = useAuth()
   const activeNavItem = matchNavItem(location.pathname)
+  const logoTapCountRef = useRef(0)
+  const lastLogoTapAtRef = useRef(0)
 
   const handleLogout = async () => {
     await auth.logout()
     window.location.assign("/login")
+  }
+
+  const handleLogoHiddenEntry = () => {
+    const now = Date.now()
+    const withinSequence = now-lastLogoTapAtRef.current <= 1800
+    logoTapCountRef.current = withinSequence ? logoTapCountRef.current + 1 : 1
+    lastLogoTapAtRef.current = now
+    if (logoTapCountRef.current < 5) return
+    logoTapCountRef.current = 0
+    lastLogoTapAtRef.current = 0
+    window.dispatchEvent(new CustomEvent("callfay:organization-settings-debug-entry"))
   }
 
   const departments = auth.user?.departments || []
@@ -105,12 +118,17 @@ export default function MainLayout() {
       {/* Sidebar Navigation */}
       <div className="flex w-64 flex-col border-r border-gray-200 bg-white">
         <div className="flex h-16 shrink-0 items-center px-6 border-b border-gray-100">
-          <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="flex items-center gap-2 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+            onClick={handleLogoHiddenEntry}
+            aria-label="CallFay 微信平台"
+          >
             <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white ring-1 ring-slate-200">
               <img src="/favicon-32.png?v=callfay-2" alt="CallFay" className="h-full w-full object-cover" />
             </div>
             <span className="text-lg font-semibold text-gray-900">CallFay 微信平台</span>
-          </div>
+          </button>
         </div>
         <nav className="flex-1 space-y-1 p-4">
           {navItems.map((item) => {

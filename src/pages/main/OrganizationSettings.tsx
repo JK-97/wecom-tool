@@ -14,10 +14,15 @@ import {
 import { Switch } from "@/components/ui/Switch"
 import { useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "react-router-dom"
-import { normalizeErrorMessage } from "@/services/http"
+import { APIRequestError, normalizeErrorMessage } from "@/services/http"
 import {
+  closeOrganizationSettingsDebugAccess,
   executeOrganizationSettingsCommand,
+  getOrganizationSettingsDebugAccessStatus,
+  getOrganizationSettingsDebugView,
   getOrganizationSettingsView,
+  openOrganizationSettingsDebugAccess,
+  type OrganizationSettingsDebugView,
   type OrganizationSettingsView,
 } from "@/services/organizationSettingsService"
 import {
@@ -37,14 +42,17 @@ const ROLE_OPTIONS = [
   { key: "staff", label: "一线销售" },
 ]
 
-const SETTINGS_TABS = ["wecom", "org", "roles", "toolbar", "connectors", "debug"] as const
+const BASE_SETTINGS_TABS = ["wecom", "org", "roles", "toolbar", "connectors"] as const
+const DEBUG_SETTINGS_TAB = "debug" as const
+const SETTINGS_TABS = [...BASE_SETTINGS_TABS, DEBUG_SETTINGS_TAB] as const
 type SettingsTab = (typeof SETTINGS_TABS)[number]
 type NoticeKind = "info" | "success" | "warning" | "error"
 type NoticeScope = SettingsTab | "global"
 type CapabilityCommand = "recheck_all_capabilities" | "recheck_org_scope" | "recheck_open_data" | "recheck_reception_channel" | "recheck_crm_bootstrap"
 
-function resolveSettingsTab(searchParams: URLSearchParams): SettingsTab {
+function resolveSettingsTab(searchParams: URLSearchParams, debugAccessEnabled: boolean): SettingsTab {
   const tab = searchParams.get("tab")
+  if (tab === DEBUG_SETTINGS_TAB && !debugAccessEnabled) return "wecom"
   if (SETTINGS_TABS.includes(tab as SettingsTab)) return tab as SettingsTab
   if (searchParams.get("muyuai_connected") === "1") return "connectors"
   return "wecom"
@@ -292,11 +300,48 @@ function capabilityReasonLabel(reason: string): string {
   return mapping[normalized] || normalized
 }
 
+function renderIntegrationAuthorizationStatus(status: string): string {
+  switch ((status || "").trim()) {
+    case "authorized":
+      return "已完成安装授权"
+    case "revoked":
+      return "授权已失效"
+    case "unauthorized":
+      return "未完成授权"
+    case "expired":
+      return "授权已过期"
+    default:
+      return "待检查"
+  }
+}
+
+function renderCRMScopeSummary(scope: string): string {
+  switch ((scope || "").trim()) {
+    case "all":
+      return "当前覆盖全部已授权范围"
+    case "incremental":
+      return "当前按增量范围推进"
+    case "selected":
+      return "当前覆盖指定范围"
+    default:
+      return "当前按已授权范围推进"
+  }
+}
+
 export default function OrganizationSettings() {
   const { showFeedback, clearFeedback } = usePageFeedback()
   const [searchParams, setSearchParams] = useSearchParams()
   const [view, setView] = useState<OrganizationSettingsView | null>(null)
-  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveSettingsTab(searchParams))
+  const [debugView, setDebugView] = useState<OrganizationSettingsDebugView | null>(null)
+  const [debugAccessEnabled, setDebugAccessEnabled] = useState(false)
+  const [debugAccessExpiresAt, setDebugAccessExpiresAt] = useState(0)
+  const [isDebugAccessDialogOpen, setIsDebugAccessDialogOpen] = useState(false)
+  const [isOpeningDebugAccess, setIsOpeningDebugAccess] = useState(false)
+  const [isClosingDebugAccess, setIsClosingDebugAccess] = useState(false)
+  const [debugAccessSecret, setDebugAccessSecret] = useState("")
+  const [debugAccessError, setDebugAccessError] = useState("")
+  const [isLoadingDebugView, setIsLoadingDebugView] = useState(false)
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveSettingsTab(searchParams, false))
   const [isLoading, setIsLoading] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [isRunningCheck, setIsRunningCheck] = useState(false)
@@ -328,16 +373,17 @@ export default function OrganizationSettings() {
   const [isOpeningDataZoneDebugMode, setIsOpeningDataZoneDebugMode] = useState(false)
   const [isClosingDataZoneDebugMode, setIsClosingDataZoneDebugMode] = useState(false)
   const [dataZoneDebugToken, setDataZoneDebugToken] = useState("")
+  const visibleSettingsTabs = debugAccessEnabled ? SETTINGS_TABS : BASE_SETTINGS_TABS
 
   useEffect(() => {
-    const nextTab = resolveSettingsTab(searchParams)
+    const nextTab = resolveSettingsTab(searchParams, debugAccessEnabled)
     setActiveSettingsTab(nextTab)
 
     const canonicalSearchParams = buildSettingsSearchParams(searchParams, nextTab)
     if (canonicalSearchParams.toString() !== searchParams.toString()) {
       setSearchParams(canonicalSearchParams, { replace: true })
     }
-  }, [searchParams, setSearchParams])
+  }, [debugAccessEnabled, searchParams, setSearchParams])
 
   const showNotice = (_scope: NoticeScope, message: string, kind: NoticeKind = "info") => {
     const text = (message || "").trim()
@@ -527,10 +573,76 @@ export default function OrganizationSettings() {
     }
   }
 
+  const loadDebugView = async () => {
+    try {
+      setIsLoadingDebugView(true)
+      const data = await getOrganizationSettingsDebugView()
+      setDebugView(data || null)
+    } catch (error) {
+      if (error instanceof APIRequestError && error.status === 403) {
+        setDebugAccessEnabled(false)
+        setDebugAccessExpiresAt(0)
+        setDebugView(null)
+        if (activeSettingsTab === "debug") {
+          setActiveSettingsTab("wecom")
+          setSearchParams(buildSettingsSearchParams(searchParams, "wecom"), { replace: true })
+        }
+        showFeedback({ message: "调试访问已失效，请重新通过隐藏入口进入。", kind: "warning" })
+        return
+      }
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
+    } finally {
+      setIsLoadingDebugView(false)
+    }
+  }
+
+  const loadDebugAccessStatus = async (options: { loadDebugView?: boolean } = {}) => {
+    try {
+      const status = await getOrganizationSettingsDebugAccessStatus()
+      const enabled = status.enabled === true
+      setDebugAccessEnabled(enabled)
+      setDebugAccessExpiresAt(Number(status.expires_at || 0))
+      if (!enabled) {
+        setDebugView(null)
+        return
+      }
+      if (options.loadDebugView !== false) {
+        await loadDebugView()
+      }
+    } catch (error) {
+      setDebugAccessEnabled(false)
+      setDebugAccessExpiresAt(0)
+      setDebugView(null)
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
+    }
+  }
+
   useEffect(() => {
     void loadView()
     void loadConnectors()
+    void loadDebugAccessStatus()
   }, [])
+
+  useEffect(() => {
+    const handleHiddenDebugEntry = () => {
+      clearFeedback()
+      setDebugAccessError("")
+      setDebugAccessSecret("")
+      if (debugAccessEnabled) {
+        setActiveSettingsTab("debug")
+        setSearchParams(buildSettingsSearchParams(searchParams, "debug"), { replace: true })
+        if (!debugView) {
+          void loadDebugView()
+        }
+        return
+      }
+      setIsDebugAccessDialogOpen(true)
+    }
+    window.addEventListener("callfay:organization-settings-debug-entry", handleHiddenDebugEntry)
+    return () => {
+      window.removeEventListener("callfay:organization-settings-debug-entry", handleHiddenDebugEntry)
+    }
+  }, [clearFeedback, debugAccessEnabled, debugView, searchParams, setSearchParams])
 
   const runIntegrationCheck = async () => {
     try {
@@ -542,6 +654,9 @@ export default function OrganizationSettings() {
       const message = await executeOrganizationSettingsCommand("run_integration_check", payload)
       showNotice("wecom", message || "已重新执行集成检查", "success")
       await loadView()
+      if (debugAccessEnabled) {
+        await loadDebugView()
+      }
     } catch (error) {
       showNotice("wecom", normalizeErrorMessage(error), "error")
     } finally {
@@ -589,7 +704,7 @@ export default function OrganizationSettings() {
       }))
       setDataZoneDebugToken("")
       showNotice("debug", message || "已开启数据专区调试模式", "success")
-      await loadView()
+      await loadDebugView()
     } catch (error) {
       showNotice("debug", normalizeErrorMessage(error), "error")
     } finally {
@@ -603,7 +718,7 @@ export default function OrganizationSettings() {
       const message = await executeOrganizationSettingsCommand("close_data_zone_debug_mode")
       setDataZoneDebugToken("")
       showNotice("debug", message || "已关闭数据专区调试模式", "success")
-      await loadView()
+      await loadDebugView()
     } catch (error) {
       showNotice("debug", normalizeErrorMessage(error), "error")
     } finally {
@@ -616,11 +731,57 @@ export default function OrganizationSettings() {
       setUpdatingDebugKey(key)
       const message = await executeOrganizationSettingsCommand("update_debug_switch", JSON.stringify({ key, enabled }))
       showNotice("debug", message || "内部调试入口已更新", "success")
-      await loadView()
+      await loadDebugView()
     } catch (error) {
       showNotice("debug", normalizeErrorMessage(error), "error")
     } finally {
       setUpdatingDebugKey("")
+    }
+  }
+
+  const openDebugAccess = async () => {
+    const secret = debugAccessSecret.trim()
+    if (!secret) {
+      setDebugAccessError("请输入平台调试访问密钥")
+      return
+    }
+    try {
+      setIsOpeningDebugAccess(true)
+      setDebugAccessError("")
+      const status = await openOrganizationSettingsDebugAccess(secret)
+      setDebugAccessEnabled(true)
+      setDebugAccessExpiresAt(Number(status.expires_at || 0))
+      setDebugAccessSecret("")
+      setIsDebugAccessDialogOpen(false)
+      await loadDebugView()
+      setActiveSettingsTab("debug")
+      setSearchParams(buildSettingsSearchParams(searchParams, "debug"), { replace: true })
+      showFeedback({ message: "已进入调试与开发。完成排查后请及时退出。", kind: "success" })
+    } catch (error) {
+      setDebugAccessError(normalizeErrorMessage(error))
+    } finally {
+      setIsOpeningDebugAccess(false)
+    }
+  }
+
+  const closeDebugAccess = async () => {
+    try {
+      setIsClosingDebugAccess(true)
+      await closeOrganizationSettingsDebugAccess()
+      setDebugAccessEnabled(false)
+      setDebugAccessExpiresAt(0)
+      setDebugView(null)
+      setDebugAccessSecret("")
+      setDebugAccessError("")
+      if (activeSettingsTab === "debug") {
+        setActiveSettingsTab("wecom")
+        setSearchParams(buildSettingsSearchParams(searchParams, "wecom"), { replace: true })
+      }
+      showFeedback({ message: "已退出调试与开发。", kind: "success" })
+    } catch (error) {
+      showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
+    } finally {
+      setIsClosingDebugAccess(false)
     }
   }
 
@@ -836,6 +997,13 @@ export default function OrganizationSettings() {
     setCreateRoleError("")
   }
 
+  const closeDebugAccessDialog = () => {
+    if (isOpeningDebugAccess) return
+    setIsDebugAccessDialogOpen(false)
+    setDebugAccessSecret("")
+    setDebugAccessError("")
+  }
+
   const closeRoleEditor = () => {
     if (isSavingRole || isDeletingRole) return
     setIsRoleEditorOpen(false)
@@ -879,19 +1047,24 @@ export default function OrganizationSettings() {
   }
 
   const handleSettingsTabChange = (value: string) => {
-    if (!SETTINGS_TABS.includes(value as SettingsTab)) return
+    if (!(visibleSettingsTabs as readonly string[]).includes(value)) return
     const nextTab = value as SettingsTab
     if (activeSettingsTab === "roles" && nextTab !== "roles" && hasDirtyMemberRoleDraft()) {
       if (!window.confirm("成员角色还有未保存的修改，切换后将丢弃这些草稿。确定继续吗？")) return
       setMemberRoleDraft(buildMemberRoleDraft(view))
     }
+    if (nextTab === "debug" && !debugAccessEnabled) return
     setActiveSettingsTab(nextTab)
     clearFeedback()
     setSearchParams(buildSettingsSearchParams(searchParams, nextTab), { replace: true })
+    if (nextTab === "debug" && !debugView) {
+      void loadDebugView()
+    }
   }
 
   const integration = view?.integration
   const dataZone = view?.data_zone
+  const debugDataZone = debugView?.data_zone
   const dataZoneAuthEditions = dataZone?.auth_editions || []
   const dataZoneAuthUserPreview = dataZone?.auth_user_preview || []
   const memberOpenUserIDMap = useMemo(() => {
@@ -912,13 +1085,13 @@ export default function OrganizationSettings() {
   const openDataCapability = corpCapabilityState?.open_data
   const receptionChannelCapability = corpCapabilityState?.reception_channel
   const crmBootstrapCapability = corpCapabilityState?.crm_bootstrap
-  const integrationAdmins = view?.integration_admins || []
-  const integrationPermissions = view?.integration_permissions || []
-  const integrationLicenseSummary = view?.integration_license_summary
-  const integrationLicenseAccounts = view?.integration_license_accounts || []
-  const permissionChecks = view?.permission_checks || []
-  const objectChecks = view?.object_checks || []
-  const dataZoneDebugMode = view?.data_zone_debug_mode
+  const integrationAdmins = debugView?.integration_admins || []
+  const integrationPermissions = debugView?.integration_permissions || []
+  const integrationLicenseSummary = debugView?.integration_license_summary
+  const integrationLicenseAccounts = debugView?.integration_license_accounts || []
+  const permissionChecks = debugView?.permission_checks || []
+  const objectChecks = debugView?.object_checks || []
+  const dataZoneDebugMode = debugView?.data_zone_debug_mode
   const dataZoneDebugStatus = resolveDataZoneDebugModeStatus(dataZoneDebugMode?.debug_mode_status)
   const isDataZoneDebugEnabled = Boolean(dataZoneDebugMode?.enabled)
   const dataZoneDebugExpiredNote = (dataZoneDebugMode?.last_check_error || "").trim()
@@ -926,7 +1099,7 @@ export default function OrganizationSettings() {
     !isDataZoneDebugEnabled &&
     Boolean(dataZoneDebugExpiredNote) &&
     /过期|自动关闭|自动切换为关闭状态/.test(dataZoneDebugExpiredNote)
-  const managedDataZoneProgramID = ((dataZoneDebugMode?.program_id || dataZone?.receive_callback_program_id || "").trim())
+  const managedDataZoneProgramID = ((dataZoneDebugMode?.program_id || debugView?.data_zone?.receive_callback_program_id || "").trim())
   const canOpenDataZoneDebugMode = !isDataZoneDebugEnabled && Boolean(managedDataZoneProgramID)
   const canCloseDataZoneDebugMode = isDataZoneDebugEnabled && Boolean(managedDataZoneProgramID)
   const isDataZoneDebugLocked = isDataZoneDebugEnabled
@@ -1258,7 +1431,7 @@ export default function OrganizationSettings() {
         badgeLabel: "配置中",
         badgeTone: "blue" as const,
         summary: "平台会在组织范围与会话专区满足前置条件后自动推进 CRM 初始化。",
-        detail: `当前范围：${((crmBootstrapCapability?.scope || "all").trim() || "all").toUpperCase()}`,
+        detail: renderCRMScopeSummary((crmBootstrapCapability?.scope || "all").trim() || "all"),
         actionLabel: "重新检查",
         command: "recheck_crm_bootstrap" as CapabilityCommand,
         lastCheckedAt: formatDateTime((crmBootstrapCapability?.last_checked_at || "").trim()),
@@ -1332,54 +1505,56 @@ export default function OrganizationSettings() {
     return "平台正在自动完成会话专区所需的托管配置。"
   })()
 
+  const debugCorpCapabilityState = debugView?.corp_capability_state
+
   const capabilityDiagnostics = [
     {
       key: "install",
       title: "安装授权",
-      axis: installCapability,
+      axis: debugCorpCapabilityState?.install,
       meta: [] as Array<{ label: string; value: string }>,
       detailsJSON: "",
     },
     {
       key: "org_scope",
       title: "通讯录范围",
-      axis: orgScopeCapability,
+      axis: debugCorpCapabilityState?.org_scope,
       meta: [
-        { label: "scope_kind", value: (orgScopeCapability?.scope_kind || "unknown").trim() || "unknown" },
-        { label: "成员数量", value: String(Number(orgScopeCapability?.member_count || 0)) },
-        { label: "部门数量", value: String(Number(orgScopeCapability?.department_count || 0)) },
-        { label: "visibility_hash", value: (orgScopeCapability?.visibility_hash || "-").trim() || "-" },
-        { label: "auth_snapshot_hash", value: (orgScopeCapability?.auth_snapshot_hash || "-").trim() || "-" },
+        { label: "scope_kind", value: (debugCorpCapabilityState?.org_scope?.scope_kind || "unknown").trim() || "unknown" },
+        { label: "成员数量", value: String(Number(debugCorpCapabilityState?.org_scope?.member_count || 0)) },
+        { label: "部门数量", value: String(Number(debugCorpCapabilityState?.org_scope?.department_count || 0)) },
+        { label: "visibility_hash", value: (debugCorpCapabilityState?.org_scope?.visibility_hash || "-").trim() || "-" },
+        { label: "auth_snapshot_hash", value: (debugCorpCapabilityState?.org_scope?.auth_snapshot_hash || "-").trim() || "-" },
       ],
-      detailsJSON: (orgScopeCapability?.details_json || "").trim(),
+      detailsJSON: (debugCorpCapabilityState?.org_scope?.details_json || "").trim(),
     },
     {
       key: "open_data",
       title: "会话专区",
-      axis: openDataCapability,
+      axis: debugCorpCapabilityState?.open_data,
       meta: [
-        { label: "授权成员数量", value: String(Number(openDataCapability?.auth_user_count || 0)) },
+        { label: "授权成员数量", value: String(Number(debugCorpCapabilityState?.open_data?.auth_user_count || 0)) },
       ],
-      detailsJSON: (openDataCapability?.details_json || "").trim(),
+      detailsJSON: (debugCorpCapabilityState?.open_data?.details_json || "").trim(),
     },
     {
       key: "reception_channel",
       title: "接待渠道",
-      axis: receptionChannelCapability,
+      axis: debugCorpCapabilityState?.reception_channel,
       meta: [
-        { label: "可用渠道数量", value: String(Number(receptionChannelCapability?.active_count || 0)) },
-        { label: "channel_hash", value: (receptionChannelCapability?.channel_hash || "-").trim() || "-" },
+        { label: "可用渠道数量", value: String(Number(debugCorpCapabilityState?.reception_channel?.active_count || 0)) },
+        { label: "channel_hash", value: (debugCorpCapabilityState?.reception_channel?.channel_hash || "-").trim() || "-" },
       ],
-      detailsJSON: (receptionChannelCapability?.details_json || "").trim(),
+      detailsJSON: (debugCorpCapabilityState?.reception_channel?.details_json || "").trim(),
     },
     {
       key: "crm_bootstrap",
       title: "CRM 初始化",
-      axis: crmBootstrapCapability,
+      axis: debugCorpCapabilityState?.crm_bootstrap,
       meta: [
-        { label: "scope", value: ((crmBootstrapCapability?.scope || "all").trim() || "all").toUpperCase() },
+        { label: "scope", value: ((debugCorpCapabilityState?.crm_bootstrap?.scope || "all").trim() || "all").toUpperCase() },
       ],
-      detailsJSON: (crmBootstrapCapability?.details_json || "").trim(),
+      detailsJSON: (debugCorpCapabilityState?.crm_bootstrap?.details_json || "").trim(),
     },
   ]
 
@@ -1422,7 +1597,7 @@ export default function OrganizationSettings() {
         return { label: "不可用", className: "bg-orange-50 text-orange-700 border-orange-200" }
     }
   }
-  const toolbarDebugSwitch = (view?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
+  const toolbarDebugSwitch = (debugView?.debug_switches || []).find((item) => (item.key || "").trim() === "enable_toolbar_debug_entry")
   const memberRoleOptions = (() => {
     const roles = view?.roles || []
     if (roles.length === 0) return ROLE_OPTIONS
@@ -1453,7 +1628,7 @@ export default function OrganizationSettings() {
     <div className="flex min-h-full flex-col bg-white rounded-xl border border-gray-200 shadow-sm">
       <div className="p-6 border-b border-gray-100 bg-gray-50/50">
         <h2 className="text-xl font-bold text-gray-900 tracking-tight">组织与设置</h2>
-        <p className="text-sm text-gray-500 mt-1">查看企业微信集成状态，并管理平台内部组织权限与调试配置</p>
+        <p className="text-sm text-gray-500 mt-1">查看企业微信接入进度，并管理组织设置、连接状态与可用能力</p>
       </div>
 
       <Tabs value={activeSettingsTab} onValueChange={handleSettingsTabChange} variant="underline" className="flex flex-col">
@@ -1474,9 +1649,11 @@ export default function OrganizationSettings() {
             <TabsTrigger value="connectors" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
               连接器
             </TabsTrigger>
-            <TabsTrigger value="debug" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
-              调试与开发开关
-            </TabsTrigger>
+            {debugAccessEnabled ? (
+              <TabsTrigger value="debug" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 px-0 h-14 text-sm font-semibold transition-all">
+                调试与开发
+              </TabsTrigger>
+            ) : null}
           </TabsList>
         </div>
 
@@ -1485,12 +1662,44 @@ export default function OrganizationSettings() {
             <div className="rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                正在加载企业微信集成检查与组织权限数据...
+                正在加载企业微信接入状态与组织设置...
               </div>
             </div>
           ) : null}
           {hasLoaded ? (
           <>
+          {debugAccessEnabled ? (
+            <div className="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold text-slate-900">当前已进入调试与开发模式</div>
+                <div className="text-xs leading-5 text-slate-600">
+                  该模式仅用于平台联调与排查。{debugAccessExpiresAt > 0 ? `访问将在 ${formatUnix(debugAccessExpiresAt)} 自动失效。` : "完成排查后请及时退出。"}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {activeSettingsTab !== "debug" ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-white text-xs font-semibold"
+                    onClick={() => handleSettingsTabChange("debug")}
+                  >
+                    前往调试与开发
+                  </Button>
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-white text-xs font-semibold"
+                  onClick={() => void closeDebugAccess()}
+                  disabled={isClosingDebugAccess}
+                >
+                  {isClosingDebugAccess ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                  退出调试与开发
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <TabsContent value="wecom" className="mt-0">
             <div className="max-w-6xl space-y-8">
               <Card className="overflow-hidden border-gray-200 shadow-sm">
@@ -1517,7 +1726,7 @@ export default function OrganizationSettings() {
                         </div>
                         <div className="flex flex-wrap gap-4 text-[11px] text-gray-500">
                           <span>最近状态刷新：{formatDateTime((corpCapabilityState?.updated_at || integration?.last_checked_at || "").trim())}</span>
-                          <span>企业微信授权状态：{(integration?.authorization_status || "待检查").trim() || "待检查"}</span>
+                          <span>当前授权状态：{renderIntegrationAuthorizationStatus((integration?.authorization_status || "").trim())}</span>
                         </div>
                       </div>
                       <div className="flex shrink-0 flex-wrap gap-3">
@@ -2218,13 +2427,35 @@ export default function OrganizationSettings() {
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-orange-500" />
                   <div className="space-y-1">
-                    <div className="text-sm font-bold text-orange-900">调试与开发开关</div>
+                    <div className="text-sm font-bold text-orange-900">调试与开发</div>
                     <p className="text-xs leading-relaxed text-orange-700">
-                      本页用于平台侧排查和联调。主页面只展示面向企业管理员的状态，这里才承载原始检查结果、程序配置摘要和调试入口。
+                      本页仅用于平台侧排查和联调。主页面只展示企业管理员需要理解的接入状态，原始诊断与调试控制统一收在这里。
                     </p>
                   </div>
                 </div>
               </div>
+
+              {isLoadingDebugView && !debugView ? (
+                <Card className="border-gray-200 shadow-sm">
+                  <CardContent className="p-6">
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                      正在加载调试与开发数据...
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {!isLoadingDebugView && !debugView ? (
+                <Card className="border-gray-200 shadow-sm">
+                  <CardContent className="p-6 text-sm text-gray-600">
+                    当前还没有可展示的调试数据。请刷新或重新进入调试与开发模式。
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {debugView ? (
+              <>
 
               <Card className="border-gray-200 shadow-sm">
                 <CardHeader className="border-b border-gray-50 p-6">
@@ -2254,7 +2485,9 @@ export default function OrganizationSettings() {
                         onChange={(event) => setDataZoneDebugToken(event.target.value)}
                         placeholder={dataZoneDebugTokenPlaceholder}
                         disabled={isDataZoneDebugLocked}
-                        autoComplete="off"
+                        autoComplete="new-password"
+                        autoCapitalize="off"
+                        spellCheck={false}
                       />
                       <div className="text-[11px] leading-5 text-gray-500">
                         仅在需要联调企业微信数据专区程序时填写，开启成功后会返回当前企业的调试 access token。
@@ -2273,7 +2506,7 @@ export default function OrganizationSettings() {
                     </div>
                     <div>
                       <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">环境模式</div>
-                      <div className="mt-1 text-xs font-semibold text-gray-900">{((integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</div>
+                      <div className="mt-1 text-xs font-semibold text-gray-900">{((debugView?.integration?.app_mode || integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</div>
                     </div>
                   </div>
 
@@ -2312,8 +2545,8 @@ export default function OrganizationSettings() {
                   ) : null}
 
                   <div className="flex flex-wrap justify-end gap-3 border-t border-gray-100 pt-4">
-                    <Button variant="outline" className="bg-white text-xs font-bold" onClick={() => void loadView()} disabled={isLoading}>
-                      {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                    <Button variant="outline" className="bg-white text-xs font-bold" onClick={() => void loadDebugView()} disabled={isLoadingDebugView}>
+                    {isLoadingDebugView ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                       刷新状态
                     </Button>
                     {canCloseDataZoneDebugMode ? (
@@ -2360,19 +2593,19 @@ export default function OrganizationSettings() {
                   </div>
                 </CardHeader>
                 <CardContent className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-4">
-                  {[
-                    { label: "program_id", value: managedDataZoneProgramID || "-" },
-                    { label: "sync_msg ability", value: (dataZone?.sync_msg_ability_id || "-").trim() || "-" },
-                    { label: "callback_fetch ability", value: (dataZone?.callback_fetch_ability_id || "-").trim() || "-" },
-                    { label: "log_level", value: Number(dataZone?.log_level || 0) > 0 ? String(dataZone?.log_level) : "-" },
-                    { label: "public_key_ver", value: Number(dataZone?.public_key_ver || 0) > 0 ? String(dataZone?.public_key_ver) : "-" },
-                    { label: "public_key_fingerprint", value: (dataZone?.public_key_fingerprint || "-").trim() || "-" },
-                    { label: "public_key_set_at", value: formatUnix(dataZone?.public_key_set_at) },
-                    { label: "private_key_stored", value: dataZone?.private_key_stored ? "是" : "否" },
-                    { label: "private_key_encrypt_version", value: (dataZone?.private_key_encrypt_version || "-").trim() || "-" },
-                    { label: "receive_callback_set_at", value: formatUnix(dataZone?.receive_callback_set_at) },
-                    { label: "last_check_at", value: formatUnix(dataZone?.last_check_at) },
-                    { label: "last_check_error", value: (dataZone?.last_check_error || "-").trim() || "-" },
+                    {[
+                      { label: "program_id", value: managedDataZoneProgramID || "-" },
+                    { label: "sync_msg ability", value: (debugDataZone?.sync_msg_ability_id || "-").trim() || "-" },
+                    { label: "callback_fetch ability", value: (debugDataZone?.callback_fetch_ability_id || "-").trim() || "-" },
+                    { label: "log_level", value: Number(debugDataZone?.log_level || 0) > 0 ? String(debugDataZone?.log_level) : "-" },
+                    { label: "public_key_ver", value: Number(debugDataZone?.public_key_ver || 0) > 0 ? String(debugDataZone?.public_key_ver) : "-" },
+                    { label: "public_key_fingerprint", value: (debugDataZone?.public_key_fingerprint || "-").trim() || "-" },
+                    { label: "public_key_set_at", value: formatUnix(debugDataZone?.public_key_set_at) },
+                    { label: "private_key_stored", value: debugDataZone?.private_key_stored ? "是" : "否" },
+                    { label: "private_key_encrypt_version", value: (debugDataZone?.private_key_encrypt_version || "-").trim() || "-" },
+                    { label: "receive_callback_set_at", value: formatUnix(debugDataZone?.receive_callback_set_at) },
+                    { label: "last_check_at", value: formatUnix(debugDataZone?.last_check_at) },
+                    { label: "last_check_error", value: (debugDataZone?.last_check_error || "-").trim() || "-" },
                   ].map((item) => (
                     <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.label}</div>
@@ -2559,9 +2792,9 @@ export default function OrganizationSettings() {
                     <div>
                       <div className="mb-2 text-xs font-bold text-gray-900">capabilities</div>
                       <div className="space-y-2">
-                        {(view?.capabilities || []).length === 0 ? (
+                        {(debugView?.capabilities || []).length === 0 ? (
                           <div className="text-xs text-gray-500">暂无检查结果</div>
-                        ) : (view?.capabilities || []).map((item) => (
+                        ) : (debugView?.capabilities || []).map((item) => (
                           <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
@@ -2604,12 +2837,64 @@ export default function OrganizationSettings() {
                   </div>
                 </CardContent>
               </Card>
+              </>
+              ) : null}
             </div>
           </TabsContent>
           </>
           ) : null}
         </div>
       </Tabs>
+
+      <Dialog
+        isOpen={isDebugAccessDialogOpen}
+        onClose={closeDebugAccessDialog}
+        title="进入调试与开发"
+        className="max-w-[460px]"
+        footer={
+          <div className="flex w-full justify-end gap-3">
+            <Button variant="outline" onClick={closeDebugAccessDialog} disabled={isOpeningDebugAccess}>取消</Button>
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void openDebugAccess()} disabled={isOpeningDebugAccess}>
+              {isOpeningDebugAccess ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              进入
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-700">
+            此入口仅用于平台联调与故障排查，不面向普通企业管理员开放。请输入平台提供的调试访问密钥。
+          </div>
+          <InlineFeedbackSlot message={debugAccessError} kind="error" />
+          <div className="space-y-1.5">
+            <label htmlFor="debug-access-secret" className="text-xs font-semibold text-gray-700">平台调试访问密钥</label>
+            <Input
+              id="debug-access-secret"
+              name="debug_access_secret"
+              type="password"
+              value={debugAccessSecret}
+              autoComplete="new-password"
+              autoCapitalize="off"
+              spellCheck={false}
+              placeholder="输入平台提供的密钥"
+              onChange={(event) => {
+                setDebugAccessSecret(event.target.value)
+                setDebugAccessError("")
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void openDebugAccess()
+                }
+              }}
+              disabled={isOpeningDebugAccess}
+            />
+          </div>
+          <div className="text-[11px] leading-5 text-gray-500">
+            进入后会建立一段短期有效的调试访问，会在到期后自动失效，也可以随时手动退出。
+          </div>
+        </div>
+      </Dialog>
 
       <Dialog
         isOpen={isCreateRoleOpen}

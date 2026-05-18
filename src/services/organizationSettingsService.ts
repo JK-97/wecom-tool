@@ -220,9 +220,64 @@ type CapabilityAxisView = {
   last_ready_at?: string
 }
 
+export type OrganizationSettingsDebugView = Pick<
+  OrganizationSettingsView,
+  | "integration"
+  | "permission_checks"
+  | "capabilities"
+  | "object_checks"
+  | "recommendations"
+  | "debug_switches"
+  | "integration_permissions"
+  | "integration_admins"
+  | "integration_license_summary"
+  | "integration_license_accounts"
+  | "data_zone"
+  | "data_zone_debug_mode"
+  | "corp_capability_state"
+>
+
+export type OrganizationSettingsDebugAccessStatus = {
+  enabled: boolean
+  expires_at?: number
+}
+
 export async function getOrganizationSettingsView(): Promise<OrganizationSettingsView | null> {
   const payload = await requestJSON<unknown>("/api/v1/main/organization-settings/view")
   return normalizeOrganizationSettingsView(payload)
+}
+
+export async function getOrganizationSettingsDebugView(): Promise<OrganizationSettingsDebugView | null> {
+  const payload = await requestJSON<unknown>("/api/v1/main/organization-settings/debug-view")
+  return normalizeOrganizationSettingsView(payload)
+}
+
+export async function getOrganizationSettingsDebugAccessStatus(): Promise<OrganizationSettingsDebugAccessStatus> {
+  const payload = await requestJSON<unknown>("/api/v1/main/organization-settings/debug-access/status")
+  const row = asRecord(asRecord(payload).data ?? payload)
+  return {
+    enabled: readBool(row.enabled, row.Enabled) === true,
+    expires_at: readNumber(row.expires_at, row.ExpiresAt),
+  }
+}
+
+export async function openOrganizationSettingsDebugAccess(secret: string): Promise<OrganizationSettingsDebugAccessStatus> {
+  const payload = await requestJSON<unknown>("/api/v1/main/organization-settings/debug-access/open", {
+    method: "POST",
+    body: JSON.stringify({ secret }),
+  })
+  const row = asRecord(asRecord(payload).data ?? payload)
+  return {
+    enabled: true,
+    expires_at: readNumber(row.expires_at, row.ExpiresAt),
+  }
+}
+
+export async function closeOrganizationSettingsDebugAccess(): Promise<void> {
+  await requestJSON<unknown>("/api/v1/main/organization-settings/debug-access/close", {
+    method: "POST",
+    body: JSON.stringify({}),
+  })
 }
 
 export async function executeOrganizationSettingsCommand(command: string, payloadJSON = ""): Promise<string> {
