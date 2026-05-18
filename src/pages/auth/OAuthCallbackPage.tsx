@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { getSession } from "@/services/authService"
-import { normalizeErrorMessage } from "@/services/http"
+import { presentLoginError } from "@/lib/loginErrorPresentation"
 
 export default function OAuthCallbackPage() {
   const [searchParams] = useSearchParams()
@@ -57,7 +57,8 @@ export default function OAuthCallbackPage() {
         if (!mounted) {
           return
         }
-        setMessage(`登录回调失败：${normalizeErrorMessage(error)}`)
+        const presentation = presentLoginError(error)
+        setMessage(`${presentation.title}${presentation.description ? `：${presentation.description}` : ""}`)
       })
 
     return () => {
