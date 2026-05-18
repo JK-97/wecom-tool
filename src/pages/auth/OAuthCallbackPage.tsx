@@ -32,10 +32,6 @@ export default function OAuthCallbackPage() {
       const params = new URLSearchParams()
       params.set("code", code)
       params.set("state", state)
-      const source = (searchParams.get("source") || "").trim()
-      if (source !== "") {
-        params.set("source", source)
-      }
       window.location.replace(`/api/v1/session/oauth/callback?${params.toString()}`)
       return
     }

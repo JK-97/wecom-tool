@@ -117,7 +117,7 @@ export default function LoginPage() {
     setWebviewRedirecting(true)
     setError("")
 
-    void getOAuthStartURL(next, "webview_oauth")
+    void getOAuthStartURL(next)
       .then((url) => {
         if (cancelled) return
         window.location.assign(url)

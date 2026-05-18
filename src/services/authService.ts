@@ -89,10 +89,9 @@ async function getSSOStartURL(next: string): Promise<string> {
   return url
 }
 
-export async function getOAuthStartURL(next: string, mode: "webview_oauth"): Promise<string> {
+export async function getOAuthStartURL(next: string): Promise<string> {
   const params = new URLSearchParams()
   params.set("response", "json")
-  params.set("mode", mode)
   if (next.trim() !== "") {
     params.set("next", next.trim())
   }
