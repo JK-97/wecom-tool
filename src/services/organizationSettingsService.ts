@@ -182,6 +182,40 @@ export type OrganizationSettingsView = {
       edition_list?: number[]
     }>
   }
+  corp_capability_state?: {
+    corp_id?: string
+    updated_at?: string
+    install?: CapabilityAxisView
+    org_scope?: CapabilityAxisView & {
+      scope_kind?: string
+      member_count?: number
+      department_count?: number
+      visibility_hash?: string
+      auth_snapshot_hash?: string
+      details_json?: string
+    }
+    open_data?: CapabilityAxisView & {
+      auth_user_count?: number
+      details_json?: string
+    }
+    reception_channel?: CapabilityAxisView & {
+      active_count?: number
+      channel_hash?: string
+      details_json?: string
+    }
+    crm_bootstrap?: CapabilityAxisView & {
+      scope?: string
+      details_json?: string
+    }
+  }
+}
+
+type CapabilityAxisView = {
+  status?: string
+  blocked_reason?: string
+  last_error?: string
+  last_checked_at?: string
+  last_ready_at?: string
 }
 
 export async function getOrganizationSettingsView(): Promise<OrganizationSettingsView | null> {
@@ -412,6 +446,55 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
         })),
       }
     })(),
+    corp_capability_state: (() => {
+      const row = asRecord(view.corp_capability_state ?? view.CorpCapabilityState)
+      if (!row) return undefined
+      const install = asRecord(row.install ?? row.Install)
+      const orgScope = asRecord(row.org_scope ?? row.OrgScope)
+      const openData = asRecord(row.open_data ?? row.OpenData)
+      const receptionChannel = asRecord(row.reception_channel ?? row.ReceptionChannel)
+      const crmBootstrap = asRecord(row.crm_bootstrap ?? row.CrmBootstrap)
+      return {
+        corp_id: readString(row.corp_id, row.CorpID),
+        updated_at: readString(row.updated_at, row.UpdatedAt),
+        install: normalizeCapabilityAxisView(install),
+        org_scope: {
+          ...normalizeCapabilityAxisView(orgScope),
+          scope_kind: readString(orgScope.scope_kind, orgScope.ScopeKind),
+          member_count: readNumber(orgScope.member_count, orgScope.MemberCount),
+          department_count: readNumber(orgScope.department_count, orgScope.DepartmentCount),
+          visibility_hash: readString(orgScope.visibility_hash, orgScope.VisibilityHash),
+          auth_snapshot_hash: readString(orgScope.auth_snapshot_hash, orgScope.AuthSnapshotHash),
+          details_json: readString(orgScope.details_json, orgScope.DetailsJson),
+        },
+        open_data: {
+          ...normalizeCapabilityAxisView(openData),
+          auth_user_count: readNumber(openData.auth_user_count, openData.AuthUserCount),
+          details_json: readString(openData.details_json, openData.DetailsJson),
+        },
+        reception_channel: {
+          ...normalizeCapabilityAxisView(receptionChannel),
+          active_count: readNumber(receptionChannel.active_count, receptionChannel.ActiveCount),
+          channel_hash: readString(receptionChannel.channel_hash, receptionChannel.ChannelHash),
+          details_json: readString(receptionChannel.details_json, receptionChannel.DetailsJson),
+        },
+        crm_bootstrap: {
+          ...normalizeCapabilityAxisView(crmBootstrap),
+          scope: readString(crmBootstrap.scope, crmBootstrap.Scope),
+          details_json: readString(crmBootstrap.details_json, crmBootstrap.DetailsJson),
+        },
+      }
+    })(),
+  }
+}
+
+function normalizeCapabilityAxisView(row: Record<string, any>): CapabilityAxisView {
+  return {
+    status: readString(row.status, row.Status),
+    blocked_reason: readString(row.blocked_reason, row.BlockedReason),
+    last_error: readString(row.last_error, row.LastError),
+    last_checked_at: readString(row.last_checked_at, row.LastCheckedAt),
+    last_ready_at: readString(row.last_ready_at, row.LastReadyAt),
   }
 }
 

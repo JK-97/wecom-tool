@@ -41,6 +41,7 @@ const SETTINGS_TABS = ["wecom", "org", "roles", "toolbar", "connectors", "debug"
 type SettingsTab = (typeof SETTINGS_TABS)[number]
 type NoticeKind = "info" | "success" | "warning" | "error"
 type NoticeScope = SettingsTab | "global"
+type CapabilityCommand = "recheck_all_capabilities" | "recheck_org_scope" | "recheck_open_data" | "recheck_reception_channel" | "recheck_crm_bootstrap"
 
 function resolveSettingsTab(searchParams: URLSearchParams): SettingsTab {
   const tab = searchParams.get("tab")
@@ -223,6 +224,74 @@ function isObjectPassed(status: string): boolean {
   return (status || "").trim() === "ok"
 }
 
+function capabilityStatusLabel(status: string): string {
+  switch ((status || "").trim()) {
+    case "ready":
+      return "已就绪"
+    case "probing":
+      return "检查中"
+    case "blocked":
+      return "待处理"
+    case "degraded":
+      return "部分可用"
+    case "error":
+      return "异常"
+    case "queued":
+      return "已排队"
+    case "running":
+      return "执行中"
+    case "idle":
+      return "未触发"
+    default:
+      return "未知"
+  }
+}
+
+function capabilityBadgeClass(status: string): string {
+  switch ((status || "").trim()) {
+    case "ready":
+      return "bg-green-100 text-green-700 border-none"
+    case "probing":
+    case "queued":
+    case "running":
+      return "bg-blue-100 text-blue-700 border-none"
+    case "blocked":
+      return "bg-orange-100 text-orange-700 border-none"
+    case "degraded":
+      return "bg-amber-100 text-amber-700 border-none"
+    case "error":
+      return "bg-red-100 text-red-700 border-none"
+    default:
+      return "bg-gray-100 text-gray-700 border-none"
+  }
+}
+
+function capabilityReasonLabel(reason: string): string {
+  const normalized = (reason || "").trim()
+  if (!normalized) return ""
+  const mapping: Record<string, string> = {
+    authorization_not_found: "企业安装授权不存在",
+    authorization_revoked: "企业安装授权已撤销",
+    pending_contact_scope_confirmation: "等待企业管理员确认通讯录权限",
+    authorized_scope_empty: "当前授权范围为空",
+    tag_scope_not_expanded: "当前仅授权标签范围，尚未展开成员",
+    partial_department_permission_denied: "部分部门仍未取得可读权限",
+    pending_data_zone_setup: "数据专区尚未完成初始化",
+    data_zone_not_authorized: "数据专区权限尚未开通",
+    chatdata_no_auth_members: "会话存档尚未授权成员",
+    chatdata_public_key_missing: "数据专区公钥尚未配置",
+    chatdata_receive_callback_missing: "回调接收程序尚未配置",
+    chatarchive_not_enabled: "会话存档能力尚未启用",
+    kf_account_not_available: "客服账号暂不可用",
+    no_active_reception_channel: "当前没有可用接待渠道",
+    waiting_install_ready: "等待安装授权就绪",
+    waiting_org_scope_ready: "等待通讯录能力就绪",
+    waiting_open_data_ready: "等待数据专区能力就绪",
+    waiting_effective_visibility: "等待稳定的有效可见范围",
+  }
+  return mapping[normalized] || normalized
+}
+
 export default function OrganizationSettings() {
   const { showFeedback, clearFeedback } = usePageFeedback()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -244,6 +313,7 @@ export default function OrganizationSettings() {
   const [dataZoneCallbackFetchAbilityID, setDataZoneCallbackFetchAbilityID] = useState("do_async_job")
   const [dataZoneLogLevel, setDataZoneLogLevel] = useState("2")
   const [isConfiguringDataZoneProgram, setIsConfiguringDataZoneProgram] = useState(false)
+  const [capabilityCommandRunning, setCapabilityCommandRunning] = useState<CapabilityCommand | "">("")
 
   const [isRoleEditorOpen, setIsRoleEditorOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<NonNullable<OrganizationSettingsView["roles"]>[number] | null>(null)
@@ -260,7 +330,6 @@ export default function OrganizationSettings() {
   const [createRoleTemplate, setCreateRoleTemplate] = useState("blank")
   const [createRoleError, setCreateRoleError] = useState("")
   const [isCreatingRole, setIsCreatingRole] = useState(false)
-  const [isSyncingOrg, setIsSyncingOrg] = useState(false)
   const [isSettingDataZoneKey, setIsSettingDataZoneKey] = useState(false)
   const [updatingDebugKey, setUpdatingDebugKey] = useState("")
   const [isOpeningDataZoneDebugMode, setIsOpeningDataZoneDebugMode] = useState(false)
@@ -507,16 +576,16 @@ export default function OrganizationSettings() {
     }
   }
 
-  const syncOrgDirectory = async () => {
+  const recheckCapability = async (command: CapabilityCommand, scope: NoticeScope, successMessage: string) => {
     try {
-      setIsSyncingOrg(true)
-      const message = await executeOrganizationSettingsCommand("sync_org_directory")
-      showNotice("org", message || "组织目录同步已完成", "success")
+      setCapabilityCommandRunning(command)
+      const message = await executeOrganizationSettingsCommand(command)
+      showNotice(scope, message || successMessage, "success")
       await loadView()
     } catch (error) {
-      showNotice("org", normalizeErrorMessage(error), "error")
+      showNotice(scope, normalizeErrorMessage(error), "error")
     } finally {
-      setIsSyncingOrg(false)
+      setCapabilityCommandRunning("")
     }
   }
 
@@ -921,6 +990,12 @@ export default function OrganizationSettings() {
   }, [view?.members])
   const orgSync = view?.org_sync
   const appVisibility = view?.app_visibility
+  const corpCapabilityState = view?.corp_capability_state
+  const installCapability = corpCapabilityState?.install
+  const orgScopeCapability = corpCapabilityState?.org_scope
+  const openDataCapability = corpCapabilityState?.open_data
+  const receptionChannelCapability = corpCapabilityState?.reception_channel
+  const crmBootstrapCapability = corpCapabilityState?.crm_bootstrap
   const integrationAdmins = view?.integration_admins || []
   const integrationPermissions = view?.integration_permissions || []
   const integrationLicenseSummary = view?.integration_license_summary
@@ -1042,6 +1117,53 @@ export default function OrganizationSettings() {
       })),
     }))
   })()
+  const capabilityCards = [
+    {
+      key: "install" as const,
+      title: "安装授权",
+      description: "应用是否仍处于已安装授权状态。",
+      axis: installCapability,
+      command: "recheck_all_capabilities" as CapabilityCommand,
+      actionLabel: "重新检查全部",
+      meta: `最近更新：${(corpCapabilityState?.updated_at || "").trim() || "-"}`,
+    },
+    {
+      key: "org_scope" as const,
+      title: "通讯录权限",
+      description: "企业管理员确认后，组织范围与成员同步能力才会真正可用。",
+      axis: orgScopeCapability,
+      command: "recheck_org_scope" as CapabilityCommand,
+      actionLabel: "重新检查通讯录",
+      meta: `scope=${(orgScopeCapability?.scope_kind || "unknown").trim() || "unknown"} · 成员 ${Number(orgScopeCapability?.member_count || 0)} / 部门 ${Number(orgScopeCapability?.department_count || 0)}`,
+    },
+    {
+      key: "open_data" as const,
+      title: "数据专区",
+      description: "会话展示、公钥与回调接收程序等专区能力收敛状态。",
+      axis: openDataCapability,
+      command: "recheck_open_data" as CapabilityCommand,
+      actionLabel: "重新检查专区",
+      meta: `授权成员 ${Number(openDataCapability?.auth_user_count || 0)}`,
+    },
+    {
+      key: "reception_channel" as const,
+      title: "接待渠道",
+      description: "客服账号刷新、渠道激活与消息同步入口状态。",
+      axis: receptionChannelCapability,
+      command: "recheck_reception_channel" as CapabilityCommand,
+      actionLabel: "重新检查渠道",
+      meta: `active=${Number(receptionChannelCapability?.active_count || 0)}`,
+    },
+    {
+      key: "crm_bootstrap" as const,
+      title: "CRM Bootstrap",
+      description: "组织范围与专区能力满足后，CRM 初始化才会推进。",
+      axis: crmBootstrapCapability,
+      command: "recheck_crm_bootstrap" as CapabilityCommand,
+      actionLabel: "重新检查 CRM",
+      meta: `scope=${(crmBootstrapCapability?.scope || "all").trim() || "all"}`,
+    },
+  ]
   const toolbarRuntime = view?.toolbar_runtime || []
   const toolbarEntries = (() => {
     const hasKF = toolbarRuntime.some((item) => (item.entry_path || "").trim() === "/sidebar/kf")
@@ -1196,6 +1318,79 @@ export default function OrganizationSettings() {
                 重新执行检查
               </Button>
             </div>
+
+            <Card className="border-gray-200 shadow-sm">
+              <CardHeader className="p-5 border-b border-gray-50">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-blue-600" />
+                      企业 Capability Readiness
+                    </CardTitle>
+                    <div className="mt-1 text-xs text-gray-500">只读 sync-orchestrator 的 capability projection，不再用错误文案推测状态。</div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-white font-semibold"
+                    onClick={() => void recheckCapability("recheck_all_capabilities", "wecom", "已发起企业能力重新检查")}
+                    disabled={capabilityCommandRunning === "recheck_all_capabilities"}
+                  >
+                    {capabilityCommandRunning === "recheck_all_capabilities" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                    重新检查全部
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
+                {capabilityCards.map((item) => {
+                  const axis = item.axis
+                  const status = (axis?.status || "unknown").trim() || "unknown"
+                  const blockedReason = capabilityReasonLabel((axis?.blocked_reason || "").trim())
+                  const lastError = (axis?.last_error || "").trim()
+                  const lastCheckedAt = (axis?.last_checked_at || "").trim()
+                  const lastReadyAt = (axis?.last_ready_at || "").trim()
+                  const running = capabilityCommandRunning === item.command
+                  return (
+                    <div key={item.key} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-bold text-gray-900">{item.title}</div>
+                          <div className="mt-1 text-xs leading-5 text-gray-500">{item.description}</div>
+                        </div>
+                        <Badge className={capabilityBadgeClass(status)}>{capabilityStatusLabel(status)}</Badge>
+                      </div>
+                      <div className="mt-3 text-[11px] text-gray-500">{item.meta}</div>
+                      {blockedReason ? (
+                        <div className="mt-3 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs text-orange-800">
+                          {blockedReason}
+                        </div>
+                      ) : null}
+                      {lastError ? (
+                        <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                          {lastError}
+                        </div>
+                      ) : null}
+                      <div className="mt-3 space-y-1 text-[11px] text-gray-500">
+                        <div>最近检查：{formatDateTime(lastCheckedAt)}</div>
+                        <div>最近就绪：{formatDateTime(lastReadyAt)}</div>
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="bg-white text-xs font-semibold"
+                          onClick={() => void recheckCapability(item.command, "wecom", item.actionLabel)}
+                          disabled={running}
+                        >
+                          {running ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                          {item.actionLabel}
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </CardContent>
+            </Card>
 
             <div className="space-y-6">
               <div className="grid gap-6 sm:grid-cols-2">
@@ -1641,11 +1836,11 @@ export default function OrganizationSettings() {
                 </div>
                 <Button
                   className="bg-blue-600 hover:bg-blue-700 shadow-sm"
-                  onClick={() => void syncOrgDirectory()}
-                  disabled={isSyncingOrg}
+                  onClick={() => void recheckCapability("recheck_org_scope", "org", "已发起通讯录权限重新检查")}
+                  disabled={capabilityCommandRunning === "recheck_org_scope"}
                 >
-                  {isSyncingOrg ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                  {isSyncingOrg ? "同步中..." : "立即手动同步"}
+                  {capabilityCommandRunning === "recheck_org_scope" ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {capabilityCommandRunning === "recheck_org_scope" ? "检查中..." : "重新检查通讯录权限"}
                 </Button>
               </div>
 
@@ -1667,6 +1862,33 @@ export default function OrganizationSettings() {
                   </div>
 
                   <div className="p-6 space-y-4 bg-white">
+                    <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-bold text-gray-900">组织范围 Capability</div>
+                          <div className="mt-1 text-xs text-gray-500">这里展示的是真实 `org_scope` 收敛状态，而不是单次同步有没有报错。</div>
+                        </div>
+                        <Badge className={capabilityBadgeClass((orgScopeCapability?.status || "unknown").trim())}>
+                          {capabilityStatusLabel((orgScopeCapability?.status || "unknown").trim())}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 grid gap-3 text-[11px] text-gray-600 md:grid-cols-4">
+                        <div>scope_kind：{(orgScopeCapability?.scope_kind || "unknown").trim() || "unknown"}</div>
+                        <div>成员数：{Number(orgScopeCapability?.member_count || 0).toLocaleString("zh-CN")}</div>
+                        <div>部门数：{Number(orgScopeCapability?.department_count || 0).toLocaleString("zh-CN")}</div>
+                        <div>最近检查：{formatDateTime((orgScopeCapability?.last_checked_at || "").trim())}</div>
+                      </div>
+                      {capabilityReasonLabel((orgScopeCapability?.blocked_reason || "").trim()) ? (
+                        <div className="mt-3 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs text-orange-800">
+                          {capabilityReasonLabel((orgScopeCapability?.blocked_reason || "").trim())}
+                        </div>
+                      ) : null}
+                      {(orgScopeCapability?.last_error || "").trim() ? (
+                        <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                          {(orgScopeCapability?.last_error || "").trim()}
+                        </div>
+                      ) : null}
+                    </div>
                     <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4">
                       <div className="flex items-center justify-between gap-4">
                         <div>
