@@ -31,6 +31,34 @@ type Props = {
   onDebugAccessExpired?: () => void;
 };
 
+type AssistantOutputSummary = {
+  decision_type?: string;
+  reason_code?: string;
+  reason?: string;
+  summary?: string;
+  send_intent?: string;
+  approval_required?: boolean;
+  approval_reason_code?: string;
+  reply_count?: number;
+  reply_texts?: string[];
+  reply_preview?: string;
+  followup_preview?: string;
+  confidence?: number;
+  followup_required?: boolean;
+  reply_style?: string;
+  risk_level?: string;
+  risk_flags?: string[];
+  intent?: string;
+  topic?: string;
+  conversation_stage?: string;
+  relationship_stage?: string;
+  opportunity_signals?: string[];
+  next_best_actions?: string[];
+  needs_human_attention?: boolean;
+  handoff_decision?: string;
+  handoff_urgency?: string;
+};
+
 const RUN_KIND_OPTIONS = [
   { value: "", label: "全部执行类型" },
   { value: "realtime_reply", label: "智能客服 AI 回复" },
@@ -250,6 +278,10 @@ export function AssistantExecutionLogPanel({
   };
 
   const selectedSummary = detail?.summary;
+  const outputSummary = useMemo(
+    () => parseAssistantOutputSummary(detail?.output_summary_json),
+    [detail?.output_summary_json],
+  );
 
   return (
     <Card className="border-gray-200 shadow-sm">
@@ -603,6 +635,84 @@ export function AssistantExecutionLogPanel({
                       mono
                     />
                   </div>
+                  {outputSummary ? (
+                    <div className="border-t border-gray-100 px-3 pb-3 pt-1">
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        <SummaryItem
+                          label="发送策略"
+                          value={sendIntentLabel(outputSummary.send_intent)}
+                        />
+                        <SummaryItem
+                          label="人工复核"
+                          value={
+                            outputSummary.approval_required
+                              ? `需要复核${outputSummary.approval_reason_code ? ` · ${approvalReasonLabel(outputSummary.approval_reason_code)}` : ""}`
+                              : "无需复核"
+                          }
+                        />
+                        <SummaryItem
+                          label="风险等级"
+                          value={riskLevelLabel(outputSummary.risk_level)}
+                        />
+                        <SummaryItem
+                          label="置信度"
+                          value={formatConfidence(outputSummary.confidence)}
+                        />
+                        <SummaryItem
+                          label="客户意图"
+                          value={humanizeCode(outputSummary.intent)}
+                        />
+                        <SummaryItem
+                          label="当前主题"
+                          value={humanizeCode(outputSummary.topic)}
+                        />
+                        <SummaryItem
+                          label="会话阶段"
+                          value={humanizeCode(outputSummary.conversation_stage)}
+                        />
+                        <SummaryItem
+                          label="客户关系阶段"
+                          value={humanizeCode(outputSummary.relationship_stage)}
+                        />
+                      </div>
+                      {outputSummary.summary ? (
+                        <DetailTextBlock
+                          label="执行摘要"
+                          value={outputSummary.summary}
+                        />
+                      ) : null}
+                      {outputSummary.reason ? (
+                        <DetailTextBlock
+                          label="判断原因"
+                          value={outputSummary.reason}
+                        />
+                      ) : null}
+                      {outputSummary.reply_preview ? (
+                        <DetailTextBlock
+                          label="即时回复预览"
+                          value={outputSummary.reply_preview}
+                        />
+                      ) : null}
+                      {outputSummary.followup_preview ? (
+                        <DetailTextBlock
+                          label="后续跟进预览"
+                          value={outputSummary.followup_preview}
+                        />
+                      ) : null}
+                      {renderCompactStringList(
+                        "下一步动作",
+                        outputSummary.next_best_actions,
+                      )}
+                      {renderCompactStringList(
+                        "机会信号",
+                        outputSummary.opportunity_signals,
+                      )}
+                      {renderCompactStringList(
+                        "风险标记",
+                        outputSummary.risk_flags,
+                      )}
+                    </div>
+                  ) : null}
                 </SectionCard>
 
                 <SectionCard
@@ -1136,6 +1246,54 @@ function statusBadgeClass(value?: string): string {
   }
 }
 
+function sendIntentLabel(value?: string): string {
+  switch ((value || "").trim()) {
+    case "auto_send_candidate":
+      return "可自动发送";
+    case "manual_send":
+      return "进入人工复核";
+    case "do_not_send":
+      return "不发送";
+    default:
+      return "未标注";
+  }
+}
+
+function riskLevelLabel(value?: string): string {
+  switch ((value || "").trim()) {
+    case "high":
+      return "高风险";
+    case "medium":
+      return "中风险";
+    case "low":
+      return "低风险";
+    default:
+      return "未标注";
+  }
+}
+
+function approvalReasonLabel(value?: string): string {
+  const code = (value || "").trim();
+  if (!code) return "";
+  switch (code) {
+    case "refund_dispute":
+      return "退款争议";
+    case "complaint":
+    case "complaint_escalation":
+      return "投诉升级";
+    case "legal_risk":
+      return "法律风险";
+    case "payment_risk":
+      return "支付风险";
+    case "low_confidence":
+      return "置信度偏低";
+    case "approval_required":
+      return "策略要求复核";
+    default:
+      return humanizeCode(code);
+  }
+}
+
 function stepKindLabel(value?: string): string {
   switch ((value || "").trim()) {
     case "decision":
@@ -1262,6 +1420,54 @@ function formatParticipants(run?: AssistantExecutionRunSummary): string {
     .filter(Boolean);
   if (labels.length > 0) return labels.join(" / ");
   return (run?.contact_name || run?.channel_id || "-").trim() || "-";
+}
+
+function parseAssistantOutputSummary(
+  value?: string,
+): AssistantOutputSummary | null {
+  const text = (value || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as AssistantOutputSummary;
+  } catch {
+    return null;
+  }
+}
+
+function renderCompactStringList(label: string, values?: string[]) {
+  const items = (values || []).map((item) => (item || "").trim()).filter(Boolean);
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="mb-2 text-[11px] font-bold text-gray-700">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <span
+            key={`${label}-${item}`}
+            className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-700"
+          >
+            {humanizeCode(item)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatConfidence(value?: number): string {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return "-";
+  return `${Math.round(num * 100)}%`;
+}
+
+function humanizeCode(value?: string): string {
+  const text = (value || "").trim();
+  if (!text) return "-";
+  return text.replace(/_/g, " ");
 }
 
 function prettyJSON(value?: string): string {
