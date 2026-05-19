@@ -34,6 +34,7 @@ import {
 } from "@/services/connectorService"
 import { checkMainWebviewJSSDKRuntime } from "@/services/jssdkService"
 import { WecomDirectoryOpenDataName } from "@/components/wecom/WecomDirectoryOpenDataName"
+import { AssistantExecutionLogPanel } from "@/components/wecom/AssistantExecutionLogPanel"
 import muyuaiLogo from "@/assets/muyuai-logo.svg"
 
 const ROLE_OPTIONS = [
@@ -45,7 +46,9 @@ const ROLE_OPTIONS = [
 const BASE_SETTINGS_TABS = ["wecom", "org", "roles", "toolbar", "connectors"] as const
 const DEBUG_SETTINGS_TAB = "debug" as const
 const SETTINGS_TABS = [...BASE_SETTINGS_TABS, DEBUG_SETTINGS_TAB] as const
+const DEBUG_DETAIL_TABS = ["assistant", "datazone", "integration", "diagnostics", "switches"] as const
 type SettingsTab = (typeof SETTINGS_TABS)[number]
+type DebugDetailTab = (typeof DEBUG_DETAIL_TABS)[number]
 type NoticeKind = "info" | "success" | "warning" | "error"
 type NoticeScope = SettingsTab | "global"
 type CapabilityCommand = "recheck_all_capabilities" | "recheck_org_scope" | "recheck_open_data" | "recheck_reception_channel" | "recheck_crm_bootstrap"
@@ -342,6 +345,7 @@ export default function OrganizationSettings() {
   const [debugAccessError, setDebugAccessError] = useState("")
   const [isLoadingDebugView, setIsLoadingDebugView] = useState(false)
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>(() => resolveSettingsTab(searchParams, false))
+  const [activeDebugTab, setActiveDebugTab] = useState<DebugDetailTab>("assistant")
   const [isLoading, setIsLoading] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [isRunningCheck, setIsRunningCheck] = useState(false)
@@ -580,14 +584,7 @@ export default function OrganizationSettings() {
       setDebugView(data || null)
     } catch (error) {
       if (error instanceof APIRequestError && error.status === 403) {
-        setDebugAccessEnabled(false)
-        setDebugAccessExpiresAt(0)
-        setDebugView(null)
-        if (activeSettingsTab === "debug") {
-          setActiveSettingsTab("wecom")
-          setSearchParams(buildSettingsSearchParams(searchParams, "wecom"), { replace: true })
-        }
-        showFeedback({ message: "调试访问已失效，请重新通过隐藏入口进入。", kind: "warning" })
+        handleDebugAccessExpired("调试访问已失效，请重新通过隐藏入口进入。")
         return
       }
       showFeedback({ message: normalizeErrorMessage(error), kind: "error" })
@@ -617,6 +614,18 @@ export default function OrganizationSettings() {
     }
   }
 
+  const handleDebugAccessExpired = (message = "调试访问已失效，请重新通过隐藏入口进入。") => {
+    setDebugAccessEnabled(false)
+    setDebugAccessExpiresAt(0)
+    setDebugView(null)
+    setActiveDebugTab("assistant")
+    if (activeSettingsTab === "debug") {
+      setActiveSettingsTab("wecom")
+      setSearchParams(buildSettingsSearchParams(searchParams, "wecom"), { replace: true })
+    }
+    showFeedback({ message, kind: "warning" })
+  }
+
   useEffect(() => {
     void loadView()
     void loadConnectors()
@@ -629,6 +638,7 @@ export default function OrganizationSettings() {
       setDebugAccessError("")
       setDebugAccessSecret("")
       if (debugAccessEnabled) {
+        setActiveDebugTab("assistant")
         setActiveSettingsTab("debug")
         setSearchParams(buildSettingsSearchParams(searchParams, "debug"), { replace: true })
         if (!debugView) {
@@ -754,6 +764,7 @@ export default function OrganizationSettings() {
       setDebugAccessSecret("")
       setIsDebugAccessDialogOpen(false)
       await loadDebugView()
+      setActiveDebugTab("assistant")
       setActiveSettingsTab("debug")
       setSearchParams(buildSettingsSearchParams(searchParams, "debug"), { replace: true })
       showFeedback({ message: "已进入调试与开发。完成排查后请及时退出。", kind: "success" })
@@ -773,6 +784,7 @@ export default function OrganizationSettings() {
       setDebugView(null)
       setDebugAccessSecret("")
       setDebugAccessError("")
+      setActiveDebugTab("assistant")
       if (activeSettingsTab === "debug") {
         setActiveSettingsTab("wecom")
         setSearchParams(buildSettingsSearchParams(searchParams, "wecom"), { replace: true })
@@ -1668,7 +1680,7 @@ export default function OrganizationSettings() {
           ) : null}
           {hasLoaded ? (
           <>
-          {debugAccessEnabled ? (
+          {debugAccessEnabled && activeSettingsTab !== "debug" ? (
             <div className="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-1">
                 <div className="text-sm font-semibold text-slate-900">当前已进入调试与开发模式</div>
@@ -1676,20 +1688,18 @@ export default function OrganizationSettings() {
                   该模式仅用于平台联调与排查。{debugAccessExpiresAt > 0 ? `访问将在 ${formatUnix(debugAccessExpiresAt)} 自动失效。` : "完成排查后请及时退出。"}
                 </div>
               </div>
-              <div className="flex shrink-0 gap-2">
-                {activeSettingsTab !== "debug" ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="bg-white text-xs font-semibold"
-                    onClick={() => handleSettingsTabChange("debug")}
-                  >
-                    前往调试与开发
-                  </Button>
-                ) : null}
-                <Button
-                  variant="outline"
-                  size="sm"
+	              <div className="flex shrink-0 gap-2">
+	                <Button
+	                  variant="outline"
+	                  size="sm"
+	                  className="bg-white text-xs font-semibold"
+	                  onClick={() => handleSettingsTabChange("debug")}
+	                >
+	                  前往调试与开发
+	                </Button>
+	                <Button
+	                  variant="outline"
+	                  size="sm"
                   className="bg-white text-xs font-semibold"
                   onClick={() => void closeDebugAccess()}
                   disabled={isClosingDebugAccess}
@@ -2422,22 +2432,35 @@ export default function OrganizationSettings() {
           </TabsContent>
 
           <TabsContent value="debug" className="mt-0">
-            <div className="max-w-6xl space-y-6">
-              <div className="rounded-xl border border-orange-100 bg-orange-50 p-5">
+            <div className="max-w-none space-y-4">
+              <div className="flex flex-col gap-3 rounded-xl border border-orange-100 bg-orange-50 p-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-orange-500" />
                   <div className="space-y-1">
                     <div className="text-sm font-bold text-orange-900">调试与开发</div>
-                    <p className="text-xs leading-relaxed text-orange-700">
-                      本页仅用于平台侧排查和联调。主页面只展示企业管理员需要理解的接入状态，原始诊断与调试控制统一收在这里。
+                    <p className="max-w-3xl text-xs leading-relaxed text-orange-700">
+                      这里仅展示平台排查、联调与原始诊断信息。业务侧接入状态只在主页面呈现，避免把工程细节暴露给普通使用者。
                     </p>
                   </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="border-none bg-orange-100 px-2.5 py-1 text-[10px] font-bold text-orange-700">
+                    {debugAccessExpiresAt > 0 ? `访问至 ${formatUnix(debugAccessExpiresAt)}` : "当前已开启"}
+                  </Badge>
+                  <Button variant="outline" size="sm" className="bg-white text-xs font-semibold" onClick={() => void loadDebugView()} disabled={isLoadingDebugView}>
+                    {isLoadingDebugView ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                    刷新
+                  </Button>
+                  <Button variant="outline" size="sm" className="bg-white text-xs font-semibold" onClick={() => void closeDebugAccess()} disabled={isClosingDebugAccess}>
+                    {isClosingDebugAccess ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                    退出调试与开发
+                  </Button>
                 </div>
               </div>
 
               {isLoadingDebugView && !debugView ? (
                 <Card className="border-gray-200 shadow-sm">
-                  <CardContent className="p-6">
+                  <CardContent className="p-4">
                     <div className="flex items-center gap-2 text-sm text-gray-600">
                       <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                       正在加载调试与开发数据...
@@ -2448,396 +2471,436 @@ export default function OrganizationSettings() {
 
               {!isLoadingDebugView && !debugView ? (
                 <Card className="border-gray-200 shadow-sm">
-                  <CardContent className="p-6 text-sm text-gray-600">
+                  <CardContent className="p-4 text-sm text-gray-600">
                     当前还没有可展示的调试数据。请刷新或重新进入调试与开发模式。
                   </CardContent>
                 </Card>
               ) : null}
 
               {debugView ? (
-              <>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="border-b border-gray-50 p-6">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <CardTitle className="flex items-center gap-2 text-sm font-bold">
-                      <Zap className="h-4 w-4 text-blue-600" /> 数据专区调试模式
-                    </CardTitle>
-                    <Badge className={`${dataZoneBadgeClass(dataZoneDebugStatus.tone)} px-2.5 py-1 text-[10px] font-bold`}>
-                      {dataZoneDebugStatus.label}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-5 p-6">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <div className="text-xs font-bold text-gray-900">平台托管程序 ID</div>
-                      <Input value={managedDataZoneProgramID} disabled className="bg-gray-50 font-mono" />
-                      <div className="text-[11px] leading-5 text-gray-500">
-                        `program_id` 由后端平台配置统一托管，不再由企业侧手工保存。
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="text-xs font-bold text-gray-900">调试 token</div>
-                      <Input
-                        type="password"
-                        value={dataZoneDebugToken}
-                        onChange={(event) => setDataZoneDebugToken(event.target.value)}
-                        placeholder={dataZoneDebugTokenPlaceholder}
-                        disabled={isDataZoneDebugLocked}
-                        autoComplete="new-password"
-                        autoCapitalize="off"
-                        spellCheck={false}
-                      />
-                      <div className="text-[11px] leading-5 text-gray-500">
-                        仅在需要联调企业微信数据专区程序时填写，开启成功后会返回当前企业的调试 access token。
-                      </div>
-                    </div>
+                <Tabs value={activeDebugTab} onValueChange={(value) => {
+                  if ((DEBUG_DETAIL_TABS as readonly string[]).includes(value)) {
+                    setActiveDebugTab(value as DebugDetailTab)
+                  }
+                }} variant="underline" className="flex flex-col">
+                  <div className="rounded-xl border border-gray-200 bg-white px-4">
+                    <TabsList className="h-auto flex w-full flex-wrap gap-2 bg-transparent py-2">
+                      <TabsTrigger value="assistant" className="h-9 rounded-lg border border-transparent px-3 text-xs font-semibold data-[state=active]:border-blue-200 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+                        Assistant 执行日志
+                      </TabsTrigger>
+                      <TabsTrigger value="datazone" className="h-9 rounded-lg border border-transparent px-3 text-xs font-semibold data-[state=active]:border-blue-200 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+                        数据专区调试
+                      </TabsTrigger>
+                      <TabsTrigger value="integration" className="h-9 rounded-lg border border-transparent px-3 text-xs font-semibold data-[state=active]:border-blue-200 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+                        程序与密钥
+                      </TabsTrigger>
+                      <TabsTrigger value="diagnostics" className="h-9 rounded-lg border border-transparent px-3 text-xs font-semibold data-[state=active]:border-blue-200 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+                        诊断明细
+                      </TabsTrigger>
+                      <TabsTrigger value="switches" className="h-9 rounded-lg border border-transparent px-3 text-xs font-semibold data-[state=active]:border-blue-200 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+                        调试开关
+                      </TabsTrigger>
+                    </TabsList>
                   </div>
 
-                  <div className="grid gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 md:grid-cols-3">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">调试状态</div>
-                      <div className="mt-1 text-xs font-semibold text-gray-900">{dataZoneDebugStatus.label}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">最近检查</div>
-                      <div className="mt-1 text-xs font-semibold text-gray-900">{formatUnix(dataZoneDebugMode?.last_checked_at)}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">环境模式</div>
-                      <div className="mt-1 text-xs font-semibold text-gray-900">{((debugView?.integration?.app_mode || integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</div>
-                    </div>
-                  </div>
+                  <TabsContent value="assistant" className="mt-4">
+                    <AssistantExecutionLogPanel
+                      enabled={debugAccessEnabled && activeSettingsTab === "debug"}
+                      onDebugAccessExpired={() => handleDebugAccessExpired("调试访问已失效，请重新通过隐藏入口进入。")}
+                    />
+                  </TabsContent>
 
-                  {!managedDataZoneProgramID ? (
-                    <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
-                      当前环境尚未配置平台托管的专区程序 ID，调试模式暂时不可开启，需要平台侧先完成后端配置。
-                    </div>
-                  ) : null}
-
-                  {dataZoneDebugMode?.last_check_error && !isDataZoneDebugExpired ? (
-                    <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-700">
-                      {dataZoneDebugMode.last_check_error}
-                    </div>
-                  ) : null}
-
-                  {isDataZoneDebugExpired ? (
-                    <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
-                      {dataZoneDebugExpiredNote || "debug_token 已过期，平台已自动切换为关闭状态。请更新后重新开启。"}
-                    </div>
-                  ) : isDataZoneDebugEnabled ? (
-                    <div className="rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-xs leading-relaxed text-green-800">
-                      当前处于开启状态，平台会在 debug_token 过期后自动切回关闭状态。
-                    </div>
-                  ) : null}
-
-                  {isDataZoneDebugEnabled && dataZoneDebugMode?.corp_access_token ? (
-                    <div className="space-y-2 rounded-xl border border-green-100 bg-green-50 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs font-bold text-green-900">企业 access token</div>
-                        <div className="text-[10px] text-green-700">过期时间：{formatUnix(dataZoneDebugMode.corp_access_token_expires_at)}</div>
-                      </div>
-                      <div className="break-all rounded-lg border border-green-100 bg-white px-3 py-2 font-mono text-[11px] text-gray-700">
-                        {dataZoneDebugMode.corp_access_token}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="flex flex-wrap justify-end gap-3 border-t border-gray-100 pt-4">
-                    <Button variant="outline" className="bg-white text-xs font-bold" onClick={() => void loadDebugView()} disabled={isLoadingDebugView}>
-                    {isLoadingDebugView ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                      刷新状态
-                    </Button>
-                    {canCloseDataZoneDebugMode ? (
-                      <Button
-                        variant="outline"
-                        className="bg-white text-xs font-bold"
-                        onClick={() => void closeDataZoneDebugMode()}
-                        disabled={isClosingDataZoneDebugMode || !managedDataZoneProgramID}
-                      >
-                        {isClosingDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        关闭调试模式
-                      </Button>
-                    ) : null}
-                    {canOpenDataZoneDebugMode ? (
-                      <Button
-                        className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700"
-                        onClick={() => void openDataZoneDebugMode()}
-                        disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked || !managedDataZoneProgramID}
-                      >
-                        {isOpeningDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        开启调试模式
-                      </Button>
-                    ) : null}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="border-b border-gray-50 p-6">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <CardTitle className="flex items-center gap-2 text-sm font-bold">
-                      <KeyRound className="h-4 w-4 text-gray-700" /> 专区程序与密钥信息
-                    </CardTitle>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="bg-white text-xs font-semibold"
-                      onClick={() => void runIntegrationCheck()}
-                      disabled={isRunningCheck}
-                    >
-                      {isRunningCheck ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
-                      重新执行底层检查
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-4">
-                    {[
-                      { label: "program_id", value: managedDataZoneProgramID || "-" },
-                    { label: "sync_msg ability", value: (debugDataZone?.sync_msg_ability_id || "-").trim() || "-" },
-                    { label: "callback_fetch ability", value: (debugDataZone?.callback_fetch_ability_id || "-").trim() || "-" },
-                    { label: "log_level", value: Number(debugDataZone?.log_level || 0) > 0 ? String(debugDataZone?.log_level) : "-" },
-                    { label: "public_key_ver", value: Number(debugDataZone?.public_key_ver || 0) > 0 ? String(debugDataZone?.public_key_ver) : "-" },
-                    { label: "public_key_fingerprint", value: (debugDataZone?.public_key_fingerprint || "-").trim() || "-" },
-                    { label: "public_key_set_at", value: formatUnix(debugDataZone?.public_key_set_at) },
-                    { label: "private_key_stored", value: debugDataZone?.private_key_stored ? "是" : "否" },
-                    { label: "private_key_encrypt_version", value: (debugDataZone?.private_key_encrypt_version || "-").trim() || "-" },
-                    { label: "receive_callback_set_at", value: formatUnix(debugDataZone?.receive_callback_set_at) },
-                    { label: "last_check_at", value: formatUnix(debugDataZone?.last_check_at) },
-                    { label: "last_check_error", value: (debugDataZone?.last_check_error || "-").trim() || "-" },
-                  ].map((item) => (
-                    <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.label}</div>
-                      <div className="mt-2 break-all font-mono text-xs text-gray-800">{item.value}</div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="border-b border-gray-50 p-6">
-                  <CardTitle className="flex items-center gap-2 text-sm font-bold">
-                    <Shield className="h-4 w-4 text-gray-700" /> 原始 Capability 诊断
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 p-6">
-                  {capabilityDiagnostics.map((item) => {
-                    const axis = item.axis
-                    return (
-                      <div key={item.key} className="rounded-2xl border border-gray-100 bg-white p-4">
+                  <TabsContent value="datazone" className="mt-4 space-y-4">
+                    <Card className="border-gray-200 shadow-sm">
+                      <CardHeader className="border-b border-gray-50 p-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="text-sm font-bold text-gray-900">{item.title}</div>
-                          <Badge className={`${capabilityBadgeClass((axis?.status || "unknown").trim())} px-2 py-0.5 text-[10px] font-bold`}>
-                            {capabilityStatusLabel((axis?.status || "unknown").trim())}
+                          <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                            <Zap className="h-4 w-4 text-blue-600" /> 数据专区调试模式
+                          </CardTitle>
+                          <Badge className={`${dataZoneBadgeClass(dataZoneDebugStatus.tone)} px-2.5 py-1 text-[10px] font-bold`}>
+                            {dataZoneDebugStatus.label}
                           </Badge>
                         </div>
-                        <div className="mt-3 grid gap-3 text-[11px] text-gray-500 md:grid-cols-2 xl:grid-cols-4">
-                          <div>blocked_reason：{capabilityReasonLabel((axis?.blocked_reason || "").trim()) || "-"}</div>
-                          <div>last_checked_at：{formatDateTime((axis?.last_checked_at || "").trim())}</div>
-                          <div>last_ready_at：{formatDateTime((axis?.last_ready_at || "").trim())}</div>
-                          <div>last_error：{(axis?.last_error || "-").trim() || "-"}</div>
+                      </CardHeader>
+                      <CardContent className="space-y-4 p-4">
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <div className="text-xs font-bold text-gray-900">平台托管程序 ID</div>
+                            <Input value={managedDataZoneProgramID} disabled className="bg-gray-50 font-mono" />
+                            <div className="text-[11px] leading-5 text-gray-500">
+                              `program_id` 由后端平台配置统一托管，不再由企业侧手工保存。
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="text-xs font-bold text-gray-900">调试 token</div>
+                            <Input
+                              type="password"
+                              value={dataZoneDebugToken}
+                              onChange={(event) => setDataZoneDebugToken(event.target.value)}
+                              placeholder={dataZoneDebugTokenPlaceholder}
+                              disabled={isDataZoneDebugLocked}
+                              autoComplete="new-password"
+                              autoCapitalize="off"
+                              spellCheck={false}
+                            />
+                            <div className="text-[11px] leading-5 text-gray-500">
+                              仅在需要联调企业微信数据专区程序时填写，开启成功后会返回当前企业的调试 access token。
+                            </div>
+                          </div>
                         </div>
-                        {item.meta.length > 0 ? (
-                          <div className="mt-3 grid gap-3 rounded-xl border border-gray-100 bg-gray-50 p-3 text-[11px] text-gray-600 md:grid-cols-2 xl:grid-cols-3">
-                            {item.meta.map((meta) => (
-                              <div key={`${item.key}-${meta.label}`}>
-                                <span className="text-gray-400">{meta.label}：</span>
-                                <span className="break-all font-mono text-gray-700">{meta.value}</span>
-                              </div>
-                            ))}
+
+                        <div className="grid gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 md:grid-cols-3">
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">调试状态</div>
+                            <div className="mt-1 text-xs font-semibold text-gray-900">{dataZoneDebugStatus.label}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">最近检查</div>
+                            <div className="mt-1 text-xs font-semibold text-gray-900">{formatUnix(dataZoneDebugMode?.last_checked_at)}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">环境模式</div>
+                            <div className="mt-1 text-xs font-semibold text-gray-900">{((debugView?.integration?.app_mode || integration?.app_mode || "third_party_provider").trim() || "third_party_provider").toUpperCase()}</div>
+                          </div>
+                        </div>
+
+                        {!managedDataZoneProgramID ? (
+                          <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+                            当前环境尚未配置平台托管的专区程序 ID，调试模式暂时不可开启，需要平台侧先完成后端配置。
                           </div>
                         ) : null}
-                        {item.detailsJSON ? (
-                          <pre className="mt-3 overflow-x-auto rounded-xl border border-gray-100 bg-gray-50 p-3 text-[11px] leading-5 text-gray-700">{item.detailsJSON}</pre>
-                        ) : null}
-                      </div>
-                    )
-                  })}
-                </CardContent>
-              </Card>
 
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <Card className="border-gray-200 shadow-sm">
-                  <CardHeader className="border-b border-gray-50 p-6">
-                    <CardTitle className="text-sm font-bold text-gray-900">应用权限</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 p-6">
-                    <div className="text-xs text-gray-600">已获取权限项：{integrationPermissions.length}</div>
-                    {permissionTree.length === 0 ? (
-                      <div className="text-xs text-gray-500">暂未获取权限明细</div>
-                    ) : (
-                      <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                        {permissionTree.map((categoryNode) => (
-                          <details key={categoryNode.category} open className="rounded border border-gray-100 bg-white">
-                            <summary className="cursor-pointer list-none select-none border-b border-gray-50 px-3 py-2 text-xs font-bold text-gray-800">
-                              {categoryNode.category}
-                            </summary>
-                            <div className="space-y-2 p-2">
-                              {categoryNode.groups.map((groupNode) => (
-                                <details key={`${categoryNode.category}-${groupNode.group}`} open className="rounded border border-gray-100 bg-gray-50/40">
-                                  <summary className="cursor-pointer list-none select-none border-b border-gray-100 px-2 py-1.5 text-[11px] font-semibold text-gray-700">
-                                    {groupNode.group}
+                        {dataZoneDebugMode?.last_check_error && !isDataZoneDebugExpired ? (
+                          <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-700">
+                            {dataZoneDebugMode.last_check_error}
+                          </div>
+                        ) : null}
+
+                        {isDataZoneDebugExpired ? (
+                          <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+                            {dataZoneDebugExpiredNote || "debug_token 已过期，平台已自动切换为关闭状态。请更新后重新开启。"}
+                          </div>
+                        ) : isDataZoneDebugEnabled ? (
+                          <div className="rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-xs leading-relaxed text-green-800">
+                            当前处于开启状态，平台会在 debug_token 过期后自动切回关闭状态。
+                          </div>
+                        ) : null}
+
+                        {isDataZoneDebugEnabled && dataZoneDebugMode?.corp_access_token ? (
+                          <div className="space-y-2 rounded-xl border border-green-100 bg-green-50 p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-xs font-bold text-green-900">企业 access token</div>
+                              <div className="text-[10px] text-green-700">过期时间：{formatUnix(dataZoneDebugMode.corp_access_token_expires_at)}</div>
+                            </div>
+                            <div className="break-all rounded-lg border border-green-100 bg-white px-3 py-2 font-mono text-[11px] text-gray-700">
+                              {dataZoneDebugMode.corp_access_token}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div className="flex flex-wrap justify-end gap-3 border-t border-gray-100 pt-4">
+                          <Button variant="outline" className="bg-white text-xs font-bold" onClick={() => void loadDebugView()} disabled={isLoadingDebugView}>
+                            {isLoadingDebugView ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                            刷新状态
+                          </Button>
+                          {canCloseDataZoneDebugMode ? (
+                            <Button
+                              variant="outline"
+                              className="bg-white text-xs font-bold"
+                              onClick={() => void closeDataZoneDebugMode()}
+                              disabled={isClosingDataZoneDebugMode || !managedDataZoneProgramID}
+                            >
+                              {isClosingDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              关闭调试模式
+                            </Button>
+                          ) : null}
+                          {canOpenDataZoneDebugMode ? (
+                            <Button
+                              className="bg-blue-600 text-xs font-bold shadow-sm hover:bg-blue-700"
+                              onClick={() => void openDataZoneDebugMode()}
+                              disabled={isOpeningDataZoneDebugMode || isDataZoneDebugLocked || !managedDataZoneProgramID}
+                            >
+                              {isOpeningDataZoneDebugMode ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              开启调试模式
+                            </Button>
+                          ) : null}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+
+                  <TabsContent value="integration" className="mt-4 space-y-4">
+                    <Card className="border-gray-200 shadow-sm">
+                      <CardHeader className="border-b border-gray-50 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                            <KeyRound className="h-4 w-4 text-gray-700" /> 专区程序与密钥信息
+                          </CardTitle>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-white text-xs font-semibold"
+                            onClick={() => void runIntegrationCheck()}
+                            disabled={isRunningCheck}
+                          >
+                            {isRunningCheck ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                            重新执行底层检查
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-4">
+                        {[
+                          { label: "program_id", value: managedDataZoneProgramID || "-" },
+                          { label: "sync_msg ability", value: (debugDataZone?.sync_msg_ability_id || "-").trim() || "-" },
+                          { label: "callback_fetch ability", value: (debugDataZone?.callback_fetch_ability_id || "-").trim() || "-" },
+                          { label: "log_level", value: Number(debugDataZone?.log_level || 0) > 0 ? String(debugDataZone?.log_level) : "-" },
+                          { label: "public_key_ver", value: Number(debugDataZone?.public_key_ver || 0) > 0 ? String(debugDataZone?.public_key_ver) : "-" },
+                          { label: "public_key_fingerprint", value: (debugDataZone?.public_key_fingerprint || "-").trim() || "-" },
+                          { label: "public_key_set_at", value: formatUnix(debugDataZone?.public_key_set_at) },
+                          { label: "private_key_stored", value: debugDataZone?.private_key_stored ? "是" : "否" },
+                          { label: "private_key_encrypt_version", value: (debugDataZone?.private_key_encrypt_version || "-").trim() || "-" },
+                          { label: "receive_callback_set_at", value: formatUnix(debugDataZone?.receive_callback_set_at) },
+                          { label: "last_check_at", value: formatUnix(debugDataZone?.last_check_at) },
+                          { label: "last_check_error", value: (debugDataZone?.last_check_error || "-").trim() || "-" },
+                        ].map((item) => (
+                          <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.label}</div>
+                            <div className="mt-2 break-all font-mono text-xs text-gray-800">{item.value}</div>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                      <Card className="border-gray-200 shadow-sm">
+                        <CardHeader className="border-b border-gray-50 p-4">
+                          <CardTitle className="text-sm font-bold text-gray-900">应用权限</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3 p-4">
+                          <div className="text-xs text-gray-600">已获取权限项：{integrationPermissions.length}</div>
+                          {permissionTree.length === 0 ? (
+                            <div className="text-xs text-gray-500">暂未获取权限明细</div>
+                          ) : (
+                            <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                              {permissionTree.map((categoryNode) => (
+                                <details key={categoryNode.category} open className="rounded border border-gray-100 bg-white">
+                                  <summary className="cursor-pointer list-none select-none border-b border-gray-50 px-3 py-2 text-xs font-bold text-gray-800">
+                                    {categoryNode.category}
                                   </summary>
-                                  <div className="space-y-1.5 p-2">
-                                    {groupNode.items.map((row) => (
-                                      <div key={`${groupNode.group}-${row.code}`} className="rounded border border-gray-100 bg-white px-2 py-1.5">
-                                        <div className="text-[11px] font-semibold text-gray-800">{renderPermissionDisplay(row.code)}</div>
-                                        {typeof row.expire_time === "number" && row.expire_time > 0 ? (
-                                          <div className="text-[10px] text-orange-600">到期：{formatUnix(row.expire_time)}</div>
-                                        ) : null}
-                                      </div>
+                                  <div className="space-y-2 p-2">
+                                    {categoryNode.groups.map((groupNode) => (
+                                      <details key={`${categoryNode.category}-${groupNode.group}`} open className="rounded border border-gray-100 bg-gray-50/40">
+                                        <summary className="cursor-pointer list-none select-none border-b border-gray-100 px-2 py-1.5 text-[11px] font-semibold text-gray-700">
+                                          {groupNode.group}
+                                        </summary>
+                                        <div className="space-y-1.5 p-2">
+                                          {groupNode.items.map((row) => (
+                                            <div key={`${groupNode.group}-${row.code}`} className="rounded border border-gray-100 bg-white px-2 py-1.5">
+                                              <div className="text-[11px] font-semibold text-gray-800">{renderPermissionDisplay(row.code)}</div>
+                                              {typeof row.expire_time === "number" && row.expire_time > 0 ? (
+                                                <div className="text-[10px] text-orange-600">到期：{formatUnix(row.expire_time)}</div>
+                                              ) : null}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </details>
                                     ))}
                                   </div>
                                 </details>
                               ))}
                             </div>
-                          </details>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                          )}
+                        </CardContent>
+                      </Card>
 
-                <Card className="border-gray-200 shadow-sm">
-                  <CardHeader className="border-b border-gray-50 p-6">
-                    <CardTitle className="text-sm font-bold text-gray-900">应用管理员</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 p-6">
-                    {integrationAdmins.length === 0 ? (
-                      <div className="text-xs text-gray-500">暂无管理员数据，请重新执行底层检查。</div>
-                    ) : (
-                      integrationAdmins.map((item) => (
-                        <div key={`${item.userid || ""}-${String(item.auth_type || 0)}`} className="flex items-center justify-between rounded-xl border border-gray-100 p-3">
-                          <div className="text-xs font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
-                          <Badge className="bg-blue-100 px-1.5 py-0 text-[10px] text-blue-700 border-none">auth_type: {Number(item.auth_type || 0)}</Badge>
+                      <div className="space-y-4">
+                        <Card className="border-gray-200 shadow-sm">
+                          <CardHeader className="border-b border-gray-50 p-4">
+                            <CardTitle className="text-sm font-bold text-gray-900">应用管理员</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3 p-4">
+                            {integrationAdmins.length === 0 ? (
+                              <div className="text-xs text-gray-500">暂无管理员数据，请重新执行底层检查。</div>
+                            ) : (
+                              integrationAdmins.map((item) => (
+                                <div key={`${item.userid || ""}-${String(item.auth_type || 0)}`} className="flex items-center justify-between rounded-xl border border-gray-100 p-3">
+                                  <div className="text-xs font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
+                                  <Badge className="border-none bg-blue-100 px-1.5 py-0 text-[10px] text-blue-700">auth_type: {Number(item.auth_type || 0)}</Badge>
+                                </div>
+                              ))
+                            )}
+                          </CardContent>
+                        </Card>
+
+                        <Card className="border-gray-200 shadow-sm">
+                          <CardHeader className="border-b border-gray-50 p-4">
+                            <CardTitle className="text-sm font-bold text-gray-900">接口账号许可</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3 p-4">
+                            <div className="text-xs text-gray-600">
+                              激活账号：{Number(integrationLicenseSummary?.active_total || 0)} / {Number(integrationLicenseSummary?.total || 0)}
+                              {integrationLicenseSummary?.has_more ? "（还有更多）" : ""}
+                            </div>
+                            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                              {integrationLicenseAccounts.slice(0, 80).map((item) => (
+                                <div key={`${item.userid || ""}-${String(item.active_time || 0)}`} className="rounded border border-gray-100 p-2">
+                                  <div className="text-[11px] font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
+                                  <div className="text-[10px] text-gray-500">类型：{Number(item.type || 0)}</div>
+                                  <div className="text-[10px] text-gray-500">激活时间：{formatUnix(item.active_time)}</div>
+                                  <div className="text-[10px] text-gray-500">到期时间：{formatUnix(item.expire_time)}</div>
+                                </div>
+                              ))}
+                              {integrationLicenseAccounts.length === 0 ? (
+                                <div className="text-xs text-gray-500">暂无激活账号许可数据</div>
+                              ) : null}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="diagnostics" className="mt-4 space-y-4">
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                      <Card className="border-gray-200 shadow-sm">
+                        <CardHeader className="border-b border-gray-50 p-4">
+                          <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                            <Shield className="h-4 w-4 text-gray-700" /> 原始 Capability 诊断
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4 p-4">
+                          {capabilityDiagnostics.map((item) => {
+                            const axis = item.axis
+                            return (
+                              <div key={item.key} className="rounded-2xl border border-gray-100 bg-white p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div className="text-sm font-bold text-gray-900">{item.title}</div>
+                                  <Badge className={`${capabilityBadgeClass((axis?.status || "unknown").trim())} px-2 py-0.5 text-[10px] font-bold`}>
+                                    {capabilityStatusLabel((axis?.status || "unknown").trim())}
+                                  </Badge>
+                                </div>
+                                <div className="mt-3 grid gap-3 text-[11px] text-gray-500 md:grid-cols-2 xl:grid-cols-4">
+                                  <div>blocked_reason：{capabilityReasonLabel((axis?.blocked_reason || "").trim()) || "-"}</div>
+                                  <div>last_checked_at：{formatDateTime((axis?.last_checked_at || "").trim())}</div>
+                                  <div>last_ready_at：{formatDateTime((axis?.last_ready_at || "").trim())}</div>
+                                  <div>last_error：{(axis?.last_error || "-").trim() || "-"}</div>
+                                </div>
+                                {item.meta.length > 0 ? (
+                                  <div className="mt-3 grid gap-3 rounded-xl border border-gray-100 bg-gray-50 p-3 text-[11px] text-gray-600 md:grid-cols-2 xl:grid-cols-3">
+                                    {item.meta.map((meta) => (
+                                      <div key={`${item.key}-${meta.label}`}>
+                                        <span className="text-gray-400">{meta.label}：</span>
+                                        <span className="break-all font-mono text-gray-700">{meta.value}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {item.detailsJSON ? (
+                                  <pre className="mt-3 overflow-x-auto rounded-xl border border-gray-100 bg-gray-50 p-3 text-[11px] leading-5 text-gray-700">{item.detailsJSON}</pre>
+                                ) : null}
+                              </div>
+                            )
+                          })}
+                        </CardContent>
+                      </Card>
+
+                      <Card className="border-gray-200 shadow-sm">
+                        <CardHeader className="border-b border-gray-50 p-4">
+                          <CardTitle className="text-sm font-bold text-gray-900">旧检查输出</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4 p-4">
+                          <div>
+                            <div className="mb-2 text-xs font-bold text-gray-900">permission_checks</div>
+                            <div className="space-y-2">
+                              {permissionChecks.length === 0 ? (
+                                <div className="text-xs text-gray-500">暂无检查结果</div>
+                              ) : permissionChecks.map((item) => (
+                                <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
+                                    <Badge className={`${(item.status || "").trim() === "ok" || (item.status || "").trim() === "granted" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"} border-none px-1.5 py-0 text-[10px]`}>
+                                      {(item.status || "-").trim() || "-"}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-2 text-[11px] text-gray-500">影响：{(item.impact || "-").trim() || "-"}</div>
+                                  <div className="mt-1 text-[11px] text-gray-500">建议：{(item.suggestion || "-").trim() || "-"}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="mb-2 text-xs font-bold text-gray-900">object_checks</div>
+                            <div className="space-y-2">
+                              {objectChecks.length === 0 ? (
+                                <div className="text-xs text-gray-500">暂无检查结果</div>
+                              ) : objectChecks.map((item) => (
+                                <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
+                                    <Badge className={`${isObjectPassed((item.status || "").trim()) ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"} border-none px-1.5 py-0 text-[10px]`}>
+                                      {(item.status || "-").trim() || "-"}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-2 text-[11px] text-gray-500">摘要：{(item.summary || "-").trim() || "-"}</div>
+                                  <div className="mt-1 text-[11px] text-gray-500">影响：{(item.impact || "-").trim() || "-"}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="mb-2 text-xs font-bold text-gray-900">capabilities</div>
+                            <div className="space-y-2">
+                              {(debugView?.capabilities || []).length === 0 ? (
+                                <div className="text-xs text-gray-500">暂无检查结果</div>
+                              ) : (debugView?.capabilities || []).map((item) => (
+                                <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
+                                    <Badge className={`${item.available ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"} border-none px-1.5 py-0 text-[10px]`}>
+                                      {item.available ? "available" : "unavailable"}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-2 text-[11px] text-gray-500">reason：{(item.reason || "-").trim() || "-"}</div>
+                                  <div className="mt-1 text-[11px] text-gray-500">next_step：{(item.next_step || "-").trim() || "-"}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="switches" className="mt-4 space-y-4">
+                    <Card className="border-gray-200 shadow-sm">
+                      <CardHeader className="border-b border-gray-50 p-4">
+                        <CardTitle className="flex items-center gap-2 text-sm font-bold">
+                          <Settings className="h-4 w-4 text-gray-700" /> 调试开关
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-4 rounded-xl border border-gray-100 bg-white p-4">
+                          <div className="space-y-1">
+                            <div className="text-xs font-bold text-gray-900">{(toolbarDebugSwitch?.label || "显示工具栏调试入口").trim()}</div>
+                            <div className="text-[11px] leading-relaxed text-gray-500">
+                              {((toolbarDebugSwitch?.description || "").trim() || "仅控制平台内部工具栏诊断面板入口，不影响企业微信真实能力或数据专区官方调试模式。")}
+                            </div>
+                          </div>
+                          <Switch
+                            name="enable_toolbar_debug_entry"
+                            checked={Boolean(toolbarDebugSwitch?.enabled)}
+                            disabled={updatingDebugKey === "enable_toolbar_debug_entry"}
+                            onCheckedChange={(checked) => {
+                              void updateDebugSwitch("enable_toolbar_debug_entry", Boolean(checked))
+                            }}
+                          />
                         </div>
-                      ))
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <Card className="border-gray-200 shadow-sm">
-                  <CardHeader className="border-b border-gray-50 p-6">
-                    <CardTitle className="text-sm font-bold text-gray-900">接口账号许可</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 p-6">
-                    <div className="text-xs text-gray-600">
-                      激活账号：{Number(integrationLicenseSummary?.active_total || 0)} / {Number(integrationLicenseSummary?.total || 0)}
-                      {integrationLicenseSummary?.has_more ? "（还有更多）" : ""}
-                    </div>
-                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                      {integrationLicenseAccounts.slice(0, 80).map((item) => (
-                        <div key={`${item.userid || ""}-${String(item.active_time || 0)}`} className="rounded border border-gray-100 p-2">
-                          <div className="text-[11px] font-semibold text-gray-800">{(item.userid || "-").trim() || "-"}</div>
-                          <div className="text-[10px] text-gray-500">类型：{Number(item.type || 0)}</div>
-                          <div className="text-[10px] text-gray-500">激活时间：{formatUnix(item.active_time)}</div>
-                          <div className="text-[10px] text-gray-500">到期时间：{formatUnix(item.expire_time)}</div>
-                        </div>
-                      ))}
-                      {integrationLicenseAccounts.length === 0 ? (
-                        <div className="text-xs text-gray-500">暂无激活账号许可数据</div>
-                      ) : null}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-gray-200 shadow-sm">
-                  <CardHeader className="border-b border-gray-50 p-6">
-                    <CardTitle className="text-sm font-bold text-gray-900">旧检查输出</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4 p-6">
-                    <div>
-                      <div className="mb-2 text-xs font-bold text-gray-900">permission_checks</div>
-                      <div className="space-y-2">
-                        {permissionChecks.length === 0 ? (
-                          <div className="text-xs text-gray-500">暂无检查结果</div>
-                        ) : permissionChecks.map((item) => (
-                          <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
-                              <Badge className={`${(item.status || "").trim() === "ok" || (item.status || "").trim() === "granted" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"} border-none px-1.5 py-0 text-[10px]`}>
-                                {(item.status || "-").trim() || "-"}
-                              </Badge>
-                            </div>
-                            <div className="mt-2 text-[11px] text-gray-500">影响：{(item.impact || "-").trim() || "-"}</div>
-                            <div className="mt-1 text-[11px] text-gray-500">建议：{(item.suggestion || "-").trim() || "-"}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="mb-2 text-xs font-bold text-gray-900">object_checks</div>
-                      <div className="space-y-2">
-                        {objectChecks.length === 0 ? (
-                          <div className="text-xs text-gray-500">暂无检查结果</div>
-                        ) : objectChecks.map((item) => (
-                          <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
-                              <Badge className={`${isObjectPassed((item.status || "").trim()) ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"} border-none px-1.5 py-0 text-[10px]`}>
-                                {(item.status || "-").trim() || "-"}
-                              </Badge>
-                            </div>
-                            <div className="mt-2 text-[11px] text-gray-500">摘要：{(item.summary || "-").trim() || "-"}</div>
-                            <div className="mt-1 text-[11px] text-gray-500">影响：{(item.impact || "-").trim() || "-"}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="mb-2 text-xs font-bold text-gray-900">capabilities</div>
-                      <div className="space-y-2">
-                        {(debugView?.capabilities || []).length === 0 ? (
-                          <div className="text-xs text-gray-500">暂无检查结果</div>
-                        ) : (debugView?.capabilities || []).map((item) => (
-                          <div key={(item.code || item.name || "").trim()} className="rounded-xl border border-gray-100 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs font-semibold text-gray-900">{(item.name || item.code || "-").trim()}</div>
-                              <Badge className={`${item.available ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"} border-none px-1.5 py-0 text-[10px]`}>
-                                {item.available ? "available" : "unavailable"}
-                              </Badge>
-                            </div>
-                            <div className="mt-2 text-[11px] text-gray-500">reason：{(item.reason || "-").trim() || "-"}</div>
-                            <div className="mt-1 text-[11px] text-gray-500">next_step：{(item.next_step || "-").trim() || "-"}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card className="border-gray-200 shadow-sm">
-                <CardHeader className="border-b border-gray-50 p-6">
-                  <CardTitle className="flex items-center gap-2 text-sm font-bold">
-                    <Settings className="h-4 w-4 text-gray-700" /> 内部诊断入口
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between gap-4 rounded-xl border border-gray-100 bg-white p-4">
-                    <div className="space-y-1">
-                      <div className="text-xs font-bold text-gray-900">{(toolbarDebugSwitch?.label || "显示工具栏调试入口").trim()}</div>
-                      <div className="text-[11px] leading-relaxed text-gray-500">
-                        {((toolbarDebugSwitch?.description || "").trim() || "仅控制平台内部工具栏诊断面板入口，不影响企业微信真实能力或数据专区官方调试模式。")}
-                      </div>
-                    </div>
-                    <Switch
-                      name="enable_toolbar_debug_entry"
-                      checked={Boolean(toolbarDebugSwitch?.enabled)}
-                      disabled={updatingDebugKey === "enable_toolbar_debug_entry"}
-                      onCheckedChange={(checked) => {
-                        void updateDebugSwitch("enable_toolbar_debug_entry", Boolean(checked))
-                      }}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-              </>
+                      </CardContent>
+                    </Card>
+                  </TabsContent>
+                </Tabs>
               ) : null}
             </div>
           </TabsContent>

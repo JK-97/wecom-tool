@@ -242,6 +242,99 @@ export type OrganizationSettingsDebugAccessStatus = {
   expires_at?: number
 }
 
+export type AssistantExecutionParticipant = {
+  role?: string
+  participant_id?: string
+  label?: string
+}
+
+export type AssistantExecutionRunSummary = {
+  run_ref?: string
+  scene_type?: string
+  conversation_type?: string
+  conversation_key?: string
+  channel_type?: string
+  corp_id?: string
+  channel_id?: string
+  participants?: AssistantExecutionParticipant[]
+  contact_name?: string
+  owner_userid?: string
+  run_kind?: string
+  trigger_source?: string
+  trigger_reason?: string
+  model?: string
+  strategy?: string
+  status?: string
+  decision_type?: string
+  started_at?: string
+  completed_at?: string
+  latency_ms?: number
+  output_summary_json?: string
+}
+
+export type AssistantExecutionStepEvent = {
+  event_ref?: string
+  sequence_no?: number
+  event_kind?: string
+  message_text?: string
+  payload_json?: string
+  occurred_at?: string
+  latency_ms?: number
+}
+
+export type AssistantExecutionStep = {
+  step_ref?: string
+  parent_step_ref?: string
+  sequence_no?: number
+  parallel_group?: string
+  lane_key?: string
+  step_kind?: string
+  step_name?: string
+  status?: string
+  model?: string
+  tool_name?: string
+  system_prompt_text?: string
+  rendered_input_text?: string
+  input_json?: string
+  output_text?: string
+  output_json?: string
+  started_at?: string
+  completed_at?: string
+  latency_ms?: number
+  error_message?: string
+  events?: AssistantExecutionStepEvent[]
+}
+
+export type AssistantExecutionRunDetail = {
+  summary?: AssistantExecutionRunSummary
+  input_summary_json?: string
+  output_summary_json?: string
+  steps?: AssistantExecutionStep[]
+}
+
+export type AssistantExecutionRunsQuery = {
+  scene_type?: string
+  conversation_type?: string
+  conversation_key?: string
+  channel_id?: string
+  participant?: string
+  run_kind?: string
+  status?: string
+  decision_type?: string
+  model?: string
+  started_at_from?: string
+  started_at_to?: string
+  page?: number
+  page_size?: number
+}
+
+export type AssistantExecutionRunsPage = {
+  items: AssistantExecutionRunSummary[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export async function getOrganizationSettingsView(): Promise<OrganizationSettingsView | null> {
   const payload = await requestJSON<unknown>("/api/v1/main/organization-settings/view")
   return normalizeOrganizationSettingsView(payload)
@@ -291,6 +384,43 @@ export async function executeOrganizationSettingsCommand(command: string, payloa
   const row = asRecord(payload)
   const data = asRecord(row.data)
   return `${readString(data.message, row.message) || "操作已完成"}`.trim()
+}
+
+export async function getOrganizationSettingsDebugAssistantRuns(query: AssistantExecutionRunsQuery = {}): Promise<AssistantExecutionRunsPage> {
+  const searchParams = new URLSearchParams()
+  const append = (key: string, value?: string | number) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      searchParams.set(key, String(value))
+      return
+    }
+    const text = `${value || ""}`.trim()
+    if (text) {
+      searchParams.set(key, text)
+    }
+  }
+  append("scene_type", query.scene_type)
+  append("conversation_type", query.conversation_type)
+  append("conversation_key", query.conversation_key)
+  append("channel_id", query.channel_id)
+  append("participant", query.participant)
+  append("run_kind", query.run_kind)
+  append("status", query.status)
+  append("decision_type", query.decision_type)
+  append("model", query.model)
+  append("started_at_from", query.started_at_from)
+  append("started_at_to", query.started_at_to)
+  append("page", query.page)
+  append("page_size", query.page_size)
+  const suffix = searchParams.toString() ? `?${searchParams.toString()}` : ""
+  const payload = await requestJSON<unknown>(`/api/v1/main/organization-settings/debug/assistant-runs${suffix}`)
+  return normalizeAssistantExecutionRunsPage(payload)
+}
+
+export async function getOrganizationSettingsDebugAssistantRunDetail(runRef: string): Promise<AssistantExecutionRunDetail | null> {
+  const normalizedRunRef = runRef.trim()
+  if (!normalizedRunRef) return null
+  const payload = await requestJSON<unknown>(`/api/v1/main/organization-settings/debug/assistant-runs/${encodeURIComponent(normalizedRunRef)}`)
+  return normalizeAssistantExecutionRunDetail(asRecord(payload).run ?? asRecord(asRecord(payload).data).run)
 }
 
 function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettingsView | null {
@@ -544,6 +674,87 @@ function normalizeOrganizationSettingsView(payload: unknown): OrganizationSettin
         },
       }
     })(),
+  }
+}
+
+function normalizeAssistantExecutionRunsPage(payload: unknown): AssistantExecutionRunsPage {
+  const root = asRecord(payload)
+  const view = asRecord(root.data ?? root)
+  return {
+    items: readArray(view.items ?? view.Items).map((row) => normalizeAssistantExecutionRunSummary(row)).filter((row) => Object.keys(row).length > 0),
+    total: readNumber(view.total, view.Total) || 0,
+    page: readNumber(view.page, view.Page) || 1,
+    page_size: readNumber(view.page_size, view.PageSize) || 20,
+  }
+}
+
+function normalizeAssistantExecutionRunDetail(payload: unknown): AssistantExecutionRunDetail | null {
+  const row = asRecord(payload)
+  if (!row || Object.keys(row).length === 0) return null
+  return {
+    summary: normalizeAssistantExecutionRunSummary(asRecord(row.summary ?? row.Summary)),
+    input_summary_json: readString(row.input_summary_json, row.InputSummaryJson),
+    output_summary_json: readString(row.output_summary_json, row.OutputSummaryJson),
+    steps: readArray(row.steps ?? row.Steps).map((step) => ({
+      step_ref: readString(step.step_ref, step.StepRef),
+      parent_step_ref: readString(step.parent_step_ref, step.ParentStepRef),
+      sequence_no: readNumber(step.sequence_no, step.SequenceNo),
+      parallel_group: readString(step.parallel_group, step.ParallelGroup),
+      lane_key: readString(step.lane_key, step.LaneKey),
+      step_kind: readString(step.step_kind, step.StepKind),
+      step_name: readString(step.step_name, step.StepName),
+      status: readString(step.status, step.Status),
+      model: readString(step.model, step.Model),
+      tool_name: readString(step.tool_name, step.ToolName),
+      system_prompt_text: readString(step.system_prompt_text, step.SystemPromptText),
+      rendered_input_text: readString(step.rendered_input_text, step.RenderedInputText),
+      input_json: readString(step.input_json, step.InputJson),
+      output_text: readString(step.output_text, step.OutputText),
+      output_json: readString(step.output_json, step.OutputJson),
+      started_at: readString(step.started_at, step.StartedAt),
+      completed_at: readString(step.completed_at, step.CompletedAt),
+      latency_ms: readNumber(step.latency_ms, step.LatencyMs),
+      error_message: readString(step.error_message, step.ErrorMessage),
+      events: readArray(step.events ?? step.Events).map((event) => ({
+        event_ref: readString(event.event_ref, event.EventRef),
+        sequence_no: readNumber(event.sequence_no, event.SequenceNo),
+        event_kind: readString(event.event_kind, event.EventKind),
+        message_text: readString(event.message_text, event.MessageText),
+        payload_json: readString(event.payload_json, event.PayloadJson),
+        occurred_at: readString(event.occurred_at, event.OccurredAt),
+        latency_ms: readNumber(event.latency_ms, event.LatencyMs),
+      })),
+    })),
+  }
+}
+
+function normalizeAssistantExecutionRunSummary(row: Record<string, any>): AssistantExecutionRunSummary {
+  return {
+    run_ref: readString(row.run_ref, row.RunRef),
+    scene_type: readString(row.scene_type, row.SceneType),
+    conversation_type: readString(row.conversation_type, row.ConversationType),
+    conversation_key: readString(row.conversation_key, row.ConversationKey),
+    channel_type: readString(row.channel_type, row.ChannelType),
+    corp_id: readString(row.corp_id, row.CorpId, row.CorpID),
+    channel_id: readString(row.channel_id, row.ChannelId, row.ChannelID),
+    participants: readArray(row.participants ?? row.Participants).map((participant) => ({
+      role: readString(participant.role, participant.Role),
+      participant_id: readString(participant.participant_id, participant.ParticipantId, participant.ParticipantID),
+      label: readString(participant.label, participant.Label),
+    })),
+    contact_name: readString(row.contact_name, row.ContactName),
+    owner_userid: readString(row.owner_userid, row.OwnerUserid, row.OwnerUserID),
+    run_kind: readString(row.run_kind, row.RunKind),
+    trigger_source: readString(row.trigger_source, row.TriggerSource),
+    trigger_reason: readString(row.trigger_reason, row.TriggerReason),
+    model: readString(row.model, row.Model),
+    strategy: readString(row.strategy, row.Strategy),
+    status: readString(row.status, row.Status),
+    decision_type: readString(row.decision_type, row.DecisionType),
+    started_at: readString(row.started_at, row.StartedAt),
+    completed_at: readString(row.completed_at, row.CompletedAt),
+    latency_ms: readNumber(row.latency_ms, row.LatencyMs),
+    output_summary_json: readString(row.output_summary_json, row.OutputSummaryJson),
   }
 }
 
