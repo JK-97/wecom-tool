@@ -29,6 +29,8 @@ const TaskDetailPage = lazy(() => import("./pages/main/TaskDetailPage"))
 const ReceptionChannels = lazy(() => import("./pages/main/ReceptionChannels"))
 const RoutingRules = lazy(() => import("./pages/main/RoutingRules"))
 const Guide = lazy(() => import("./pages/main/Guide"))
+const RPASendQueuePage = lazy(() => import("./pages/main/RPASendQueuePage"))
+const RPAReviewQueuePage = lazy(() => import("./pages/main/RPAReviewQueuePage"))
 
 function RouteFallback() {
   return (
@@ -105,6 +107,8 @@ export default function App() {
                 <Route path="reception-channels" element={<ReceptionChannels />} />
                 <Route path="routing-rules" element={<RoutingRules />} />
                 <Route path="guide" element={<Guide />} />
+                <Route path="rpa-send-queue" element={<RPASendQueuePage />} />
+                <Route path="rpa-review-queue" element={<RPAReviewQueuePage />} />
               </Route>
             </Routes>
           </Suspense>

@@ -20,7 +20,6 @@ import {
   type ToolbarRPAAction,
   type ToolbarRPABootstrap,
   type ToolbarRPAOperatorTaskView,
-  type ToolbarRPASessionTask,
 } from "@/services/rpaToolbarService";
 import {
   sidebarBody,
@@ -927,16 +926,16 @@ function buildFlowPresentation(input: {
   snapshot: ToolbarRPABootstrap | null;
   hasActiveRun: boolean;
   automationEnabled: boolean;
-  hasPendingWindow: boolean;
-  reviewSessionsCount: number;
+  sendQueueCount: number;
+  reviewQueueCount: number;
 }): FlowPresentation {
   const {
     actionType,
     snapshot,
     hasActiveRun,
     automationEnabled,
-    hasPendingWindow,
-    reviewSessionsCount,
+    sendQueueCount,
+    reviewQueueCount,
   } = input;
   if (!automationEnabled) {
     return {
@@ -946,16 +945,6 @@ function buildFlowPresentation(input: {
       nextStep: "当前仍可随时切回人工模式处理会话。",
       tone: "slate",
       visual: "idle",
-    };
-  }
-  if (!hasActiveRun && hasPendingWindow) {
-    return {
-      eyebrow: "恢复中",
-      title: "客户消息已进入恢复队列",
-      subtitle: "已记录待发送任务，正在等待发送服务恢复后继续处理。",
-      nextStep: "服务恢复后会自动生成发送任务，无需重新触发客户消息。",
-      tone: "amber",
-      visual: "ack",
     };
   }
   if (actionType === "navigate_to_chat") {
@@ -1028,12 +1017,22 @@ function buildFlowPresentation(input: {
       visual: "done",
     };
   }
-  if (reviewSessionsCount > 0) {
+  if (!hasActiveRun && sendQueueCount > 0) {
+    return {
+      eyebrow: "待发送",
+      title: `待发送队列中有 ${sendQueueCount} 条回复`,
+      subtitle: "这些回复已经正式入队，系统会按队列顺序继续发送。",
+      nextStep: "点击“查看全部”可在浏览器中查看完整待发送队列。",
+      tone: "blue",
+      visual: "typing",
+    };
+  }
+  if (reviewQueueCount > 0) {
     return {
       eyebrow: "待复核",
-      title: "有会话正在等待人工复核",
-      subtitle: "自动模式会先完成当前会话，然后按顺序进入待复核会话继续处理。",
-      nextStep: "你也可以提前点进复核队列，让当前消息优先自动复查。",
+      title: `待复核队列中有 ${reviewQueueCount} 条会话`,
+      subtitle: "这些会话已经进入人工处理范围，不会再用生成状态打扰当前界面。",
+      nextStep: "点击“查看全部”可在浏览器中查看完整待复核队列。",
       tone: "amber",
       visual: "review",
     };
@@ -1129,21 +1128,6 @@ function sessionStatusLabel(value?: string): string {
   }
 }
 
-function reviewListStatusLabel(value?: string): string {
-  switch ((value || "").trim()) {
-    case "confirm_uncertain":
-      return "发送记录超时确认";
-    case "review_resend_pending":
-      return "正在复查发送结果";
-    case "need_manual":
-      return "需要人工确认";
-    case "failed":
-      return "发送异常待处理";
-    default:
-      return sessionStatusLabel(value);
-  }
-}
-
 function statusTextForAutomation(
   snapshot: ToolbarRPABootstrap | null,
   automationEnabled: boolean,
@@ -1178,9 +1162,13 @@ function stopCopyForReason(reason?: string): {
 }
 
 function completedOverlayDurationMS(snapshot?: ToolbarRPABootstrap | null): number {
+  const sendQueueTotal = Number(snapshot?.send_queue_preview?.total || 0);
+  const reviewQueueTotal = Number(snapshot?.review_queue_preview?.total || 0);
   const totalPending = Number(snapshot?.queue_summary?.total_pending || 0);
-  if (totalPending > 0) return 1000;
-  if (snapshot?.operator_view?.next_queued_task || snapshot?.operator_view?.pending_window) {
+  if (sendQueueTotal > 0 || reviewQueueTotal > 0 || totalPending > 0) {
+    return 1000;
+  }
+  if (snapshot?.operator_view?.next_queued_task) {
     return 1000;
   }
   return 2200;
@@ -1468,8 +1456,21 @@ export function ToolbarRPAMode({
       action?.task_id ||
       "",
   ].join(":");
-  const pendingWindow =
-    effectiveSnapshot?.pending_window || snapshot?.pending_window || null;
+  const sendQueuePreview =
+    effectiveSnapshot?.send_queue_preview ||
+    snapshot?.send_queue_preview ||
+    operatorView?.send_queue_preview ||
+    null;
+  const reviewQueuePreview =
+    effectiveSnapshot?.review_queue_preview ||
+    snapshot?.review_queue_preview ||
+    operatorView?.review_queue_preview ||
+    null;
+  const sendQueueItems = sendQueuePreview?.items || [];
+  const reviewQueueItems = reviewQueuePreview?.items || [];
+  const sendQueueTotal = Number(sendQueuePreview?.total || 0);
+  const reviewQueueTotal = Number(reviewQueuePreview?.total || 0);
+  const hasQueueWork = sendQueueTotal > 0 || reviewQueueTotal > 0;
   const runStatus = (
     effectiveSnapshot?.run?.status ||
     snapshot?.run?.status ||
@@ -2786,32 +2787,6 @@ export function ToolbarRPAMode({
   ).filter(Boolean);
   const currentTaskView = operatorView?.current_task || null;
   const nextQueuedTaskView = operatorView?.next_queued_task || null;
-  const pendingWindowTaskView = pendingWindow
-    ? ({
-        session: {
-          session_task_id: "",
-          status: pendingWindow.status || "",
-          open_kfid: pendingWindow.open_kfid || "",
-          external_userid: pendingWindow.external_userid || "",
-          contact_name: pendingWindow.contact_name || "",
-          channel_label: pendingWindow.channel_label || "",
-        },
-        message: {
-          message_task_id: "",
-          status: pendingWindow.status || "",
-          send_order: 0,
-          text: pendingWindow.last_customer_message_preview || "",
-          message_preview: pendingWindow.last_customer_message_preview || "",
-          message_hash: "",
-        },
-        target: {
-          open_kfid: pendingWindow.open_kfid || "",
-          external_userid: pendingWindow.external_userid || "",
-          display_name: pendingWindow.contact_name || "",
-          channel_label: pendingWindow.channel_label || "",
-        },
-      } satisfies ToolbarRPAOperatorTaskView)
-    : null;
   const stateForPausedTask = effectiveSnapshot || snapshot;
   const pausedSnapshotSession =
     stateForPausedTask?.target_session ||
@@ -2865,7 +2840,6 @@ export function ToolbarRPAMode({
   const latestPausedTaskView =
     nextQueuedTaskView ||
     currentTaskView ||
-    pendingWindowTaskView ||
     snapshotTaskView;
   const pausedTaskView =
     latestPausedTaskView || lastPausedTaskViewRef.current || null;
@@ -2999,7 +2973,7 @@ export function ToolbarRPAMode({
             },
           ]
         : [];
-  const queuePendingTotal = Number(snapshot?.queue_summary?.total_pending || 0);
+  const queuePendingTotal = sendQueueTotal;
   const pauseCountdownDeadlineMS =
     effectivePauseDeadlineMS ||
     (uiIsPaused && snapshotPauseAutoStopRemainingMS > 0
@@ -3046,25 +3020,21 @@ export function ToolbarRPAMode({
       snapshot?.target_session?.open_kfid ||
       snapshot?.current_session?.open_kfid ||
       snapshot?.session_task?.open_kfid ||
-      pendingWindow?.open_kfid ||
       (isCompleted ? completionTargetSource.open_kfid || "" : ""),
     external_userid:
       snapshot?.target_session?.external_userid ||
       snapshot?.current_session?.external_userid ||
       snapshot?.session_task?.external_userid ||
-      pendingWindow?.external_userid ||
       (isCompleted ? completionTargetSource.external_userid || "" : ""),
     display_name:
       snapshot?.target_session?.contact_name ||
       snapshot?.current_session?.contact_name ||
       snapshot?.session_task?.contact_name ||
-      pendingWindow?.contact_name ||
       (isCompleted ? completionTargetSource.display_name || "" : ""),
     channel_label:
       snapshot?.target_session?.channel_label ||
       snapshot?.current_session?.channel_label ||
       snapshot?.session_task?.channel_label ||
-      pendingWindow?.channel_label ||
       (isCompleted ? completionTargetSource.channel_label || "" : ""),
   };
   const resolvedTarget = {
@@ -3076,21 +3046,6 @@ export function ToolbarRPAMode({
     channel_label:
       currentTarget.channel_label || fallbackTarget.channel_label || "",
   };
-  const reviewSessions = useMemo(
-    () =>
-      (snapshot?.pending_session_tasks || []).filter(
-        (item) =>
-          [
-            "confirm_uncertain",
-            "review_resend_pending",
-            "need_manual",
-            "failed",
-          ].includes((item.status || "").trim()) &&
-          (item.current_message_task_id || "").trim(),
-      ),
-    [snapshot?.pending_session_tasks],
-  );
-  const reviewManualTotal = Number(snapshot?.review_manual?.total || 0);
   const navigationAlreadyMatched =
     snapshot?.navigation?.already_matched === true;
   const knownCurrentDiffersFromTarget =
@@ -3130,16 +3085,15 @@ export function ToolbarRPAMode({
     (displayActionType === "idle_poll" ||
       (!displayActionType &&
         !hasActiveRun &&
-        automationEnabled &&
-        !pendingWindow));
+        automationEnabled));
   const showStandalonePipeline = uiIsPaused || isIdlePoll || isCompleted;
   const presentation = buildFlowPresentation({
     actionType: displayActionType,
     snapshot,
     hasActiveRun,
     automationEnabled,
-    hasPendingWindow: Boolean(pendingWindow),
-    reviewSessionsCount: reviewSessions.length,
+    sendQueueCount: sendQueueTotal,
+    reviewQueueCount: reviewQueueTotal,
   });
   const toneStyles = flowToneClasses(presentation.tone);
   const automationStatusText = statusTextForAutomation(
@@ -3153,10 +3107,8 @@ export function ToolbarRPAMode({
     snapshot?.current_session?.contact_name ||
     snapshot?.session_task?.contact_name ||
     (isCompleted ? completionTargetSource.display_name || "" : "") ||
-    pendingWindow?.contact_name ||
     resolvedTarget.external_userid ||
     (isCompleted ? completionTargetSource.external_userid || "" : "") ||
-    pendingWindow?.external_userid ||
     "";
   const customerExternalUserID =
     resolvedTarget.external_userid ||
@@ -3164,7 +3116,6 @@ export function ToolbarRPAMode({
     snapshot?.current_session?.external_userid ||
     snapshot?.session_task?.external_userid ||
     (isCompleted ? completionTargetSource.external_userid || "" : "") ||
-    pendingWindow?.external_userid ||
     "";
   const agentOpenKFID =
     resolvedTarget.open_kfid ||
@@ -3172,7 +3123,6 @@ export function ToolbarRPAMode({
     snapshot?.current_session?.open_kfid ||
     snapshot?.session_task?.open_kfid ||
     (isCompleted ? completionTargetSource.open_kfid || "" : "") ||
-    pendingWindow?.open_kfid ||
     currentSessionContext?.open_kfid ||
     "";
   const mappedAgentLabel = (channelDisplayMap?.[agentOpenKFID] || "").trim();
@@ -3192,13 +3142,7 @@ export function ToolbarRPAMode({
   const hasDisplayableTargetCard =
     uiIsPaused ||
     isIdlePoll ||
-    Boolean(
-      customerName ||
-        customerExternalUserID ||
-        agentOpenKFID ||
-        pendingWindow?.open_kfid ||
-        pendingWindow?.external_userid,
-    );
+    Boolean(customerName || customerExternalUserID || agentOpenKFID);
   const targetCardToneClass = uiIsPaused
     ? "border-amber-500 bg-amber-50"
     : isIdlePoll
@@ -3222,21 +3166,21 @@ export function ToolbarRPAMode({
             : "text-indigo-600"
           : "text-blue-600";
   const targetCardLabel =
-    pendingWindow && !hasActiveRun
-      ? "待恢复发送会话"
-      : uiIsPausing
-        ? "当前任务完成后暂停"
-        : uiIsPaused
-          ? "待恢复发送任务"
-          : isIdlePoll
-            ? "等待新发送任务"
-            : isCompleted
-              ? "本次发送已完成"
-              : displayActionType === "navigate_to_chat"
-                ? navigationSkippedInRun
-                  ? "已在目标会话"
-                  : "即将切换目标会话"
-                : "正在处理会话";
+    uiIsPausing
+      ? "当前任务完成后暂停"
+      : uiIsPaused
+        ? "待恢复发送任务"
+        : isIdlePoll
+          ? hasQueueWork
+            ? "待发送队列待执行"
+            : "等待新发送任务"
+          : isCompleted
+            ? "本次发送已完成"
+            : displayActionType === "navigate_to_chat"
+              ? navigationSkippedInRun
+                ? "已在目标会话"
+                : "即将切换目标会话"
+              : "正在处理会话";
   const messageOrder =
     messages[0]?.order ||
     snapshot?.message_task?.send_order ||
@@ -3400,26 +3344,6 @@ export function ToolbarRPAMode({
     await onAutomationModeChange?.(false);
   };
 
-  const requestReviewResend = async (session: ToolbarRPASessionTask) => {
-    if (!stableRunID || commandLoading) return;
-    clearTimer();
-    setCommandLoading(`review:${session.session_task_id || ""}`);
-    setErrorText("");
-    try {
-      const next = await executeKFToolbarRPARunCommand(stableRunID, {
-        command: "request_review_resend",
-        session_task_id: session.session_task_id || "",
-        message_task_id: session.current_message_task_id || "",
-      });
-      applyNextSnapshot(next, { force: true });
-      setNotice("已加入复核队列；当前会话完成后会进入该会话并自动复查重发。");
-    } catch (error) {
-      setErrorText(normalizeErrorMessage(error));
-    } finally {
-      setCommandLoading("");
-    }
-  };
-
   const stepIndexByAction: Record<string, number> = {
     navigate_to_chat: 1,
     fill_current_message: 2,
@@ -3446,33 +3370,6 @@ export function ToolbarRPAMode({
     "wait_wecom_confirm",
     "review_auto_resend",
   ];
-  const actionTone = uiIsPaused
-    ? "amber"
-    : pendingWindow && !hasActiveRun
-      ? "amber"
-      : displayActionType === "wait_rpa_ack"
-        ? "amber"
-        : displayActionType === "wait_wecom_confirm"
-          ? "sky"
-          : displayActionType === "review_auto_resend"
-            ? "orange"
-            : displayActionType === "need_manual"
-              ? "red"
-              : displayActionType === "completed"
-                ? "green"
-                : "blue";
-  const actionToneClasses =
-    actionTone === "amber"
-      ? "border-amber-200 bg-amber-50 text-amber-800"
-      : actionTone === "sky"
-        ? "border-sky-200 bg-sky-50 text-sky-800"
-        : actionTone === "orange"
-          ? "border-orange-200 bg-orange-50 text-orange-800"
-          : actionTone === "red"
-            ? "border-red-200 bg-red-50 text-red-800"
-            : actionTone === "green"
-              ? "border-green-200 bg-green-50 text-green-800"
-              : "border-blue-200 bg-blue-50 text-blue-800";
   const headerBg = automationEnabled
     ? uiIsPaused
       ? "bg-amber-600"
@@ -3493,6 +3390,38 @@ export function ToolbarRPAMode({
   const canStopNow =
     automationEnabled && !commandLoading && !isUpdatingAutomationMode;
   const stopCopy = stopCopyForReason(effectiveStopReason);
+  const sendQueuePreviewItems = sendQueueItems.slice(0, 2);
+  const reviewQueuePreviewItems = reviewQueueItems.slice(0, 2);
+  // Queue detail belongs in the browser workbench, not in the narrow toolbar.
+  const openToolbarBrowserPage = (path: string) => {
+    if (typeof window === "undefined") return;
+    window.open(path, "_blank", "noopener,noreferrer");
+  };
+  const queueChannelLabel = (channelLabel?: string | null) =>
+    (channelLabel || "").trim() || "微信客服";
+  const queueAgentLabel = (
+    openKFID?: string | null,
+    channelLabel?: string | null,
+  ) => {
+    const trimmedOpenKFID = (openKFID || "").trim();
+    const mapped = (channelDisplayMap?.[trimmedOpenKFID] || "").trim();
+    return mapped || (channelLabel || "").trim() || trimmedOpenKFID || "待确认";
+  };
+  const queueCustomerLabel = (
+    contactName?: string | null,
+    externalUserID?: string | null,
+  ) => (contactName || "").trim() || (externalUserID || "").trim() || "待确认客户";
+  const queueItemSummary = (item: {
+    open_kfid?: string;
+    external_userid?: string;
+    contact_name?: string;
+    channel_label?: string;
+  }) =>
+    [
+      queueChannelLabel(item.channel_label),
+      queueAgentLabel(item.open_kfid, item.channel_label),
+      queueCustomerLabel(item.contact_name, item.external_userid),
+    ].join(" / ");
 
   return (
     <div
@@ -3648,15 +3577,21 @@ export function ToolbarRPAMode({
                     >
                       买家:{" "}
                       {isIdlePoll
-                        ? "等待新客户..."
+                        ? hasQueueWork
+                          ? "队列等待执行"
+                          : "等待新客户..."
                         : uiIsPaused && !pausedHasDisplayTask
                           ? "暂无待发送买家"
                           : customerName || "-"}
                     </div>
                     <div className="mt-1 truncate font-mono text-[10px] text-gray-500">
                       客户ID:{" "}
-                      {isIdlePoll || (uiIsPaused && !pausedHasDisplayTask)
-                        ? "---"
+                      {isIdlePoll
+                        ? hasQueueWork
+                          ? `待发送 ${sendQueueTotal} / 待复核 ${reviewQueueTotal}`
+                          : "---"
+                        : uiIsPaused && !pausedHasDisplayTask
+                          ? "---"
                         : customerExternalUserID || "-"}
                     </div>
                     {!isIdlePoll ? (
@@ -3669,37 +3604,7 @@ export function ToolbarRPAMode({
               </div>
             ) : null}
 
-            {pendingWindow && !hasActiveRun ? (
-              <div
-                className={`rounded-lg border p-3.5 shadow-sm ${actionToneClasses}`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white/80">
-                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-bold">
-                        {presentation.title}
-                      </div>
-                      <span className="rounded bg-amber-200/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
-                        已记录
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[11px] leading-snug text-gray-600">
-                      {presentation.subtitle}
-                    </div>
-                    {(
-                      pendingWindow.last_customer_message_preview || ""
-                    ).trim() ? (
-                      <div className="mt-2 rounded border border-amber-200/80 bg-white/70 px-2 py-1.5 text-[11px] leading-5 text-amber-900">
-                        {pendingWindow.last_customer_message_preview}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : showStandalonePipeline ? (
+            {showStandalonePipeline ? (
               <div className="space-y-2.5">
                 <div className="flex justify-between text-[11px] font-bold uppercase text-gray-500">
                   <span>发送进度</span>
@@ -4040,84 +3945,98 @@ export function ToolbarRPAMode({
               </div>
             ) : null}
 
-            <div className="pt-1">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
-                  复核列表 ({Math.max(reviewSessions.length, reviewManualTotal)}
-                  )
+            <div className="space-y-3 pt-1">
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5">
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      待发送队列
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-slate-400">
+                      仅展示真实发送顺序的前 2 条
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                      {sendQueueTotal}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openToolbarBrowserPage("/main/rpa-send-queue")}
+                      className="text-[11px] font-medium text-[#0052D9] underline underline-offset-4 hover:text-[#003C9E]"
+                    >
+                      查看全部
+                    </button>
+                  </div>
                 </div>
-                {reviewSessions.length > 0 || reviewManualTotal > 0 ? (
-                  <span className="rounded border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-600">
-                    异常
-                  </span>
-                ) : null}
-              </div>
-              {reviewSessions.length > 0 ? (
-                <div className="space-y-2">
-                  {reviewSessions.map((item) => {
-                    const loadingKey = `review:${item.session_task_id || ""}`;
-                    const status = (item.status || "").trim();
-                    const isReviewPending = status === "review_resend_pending";
-                    const canRequestReview = status === "confirm_uncertain";
-                    const displayName =
-                      item.contact_name || item.external_userid || "待复核会话";
-                    const reviewHint = (
-                      item.message_text ||
-                      item.error_message ||
-                      ""
-                    ).trim();
-                    return (
+                <div className="space-y-2 px-3 py-3">
+                  {sendQueuePreviewItems.length > 0 ? (
+                    sendQueuePreviewItems.map((item, index) => (
                       <div
-                        key={
-                          item.session_task_id || item.current_message_task_id
-                        }
-                        className="flex items-center justify-between gap-3 rounded-lg border border-red-100 bg-red-50 p-2.5 shadow-sm"
+                        key={item.prepared_reply_id || `${item.open_kfid || ""}-${index}`}
+                        className="rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2"
                       >
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-red-100 bg-white text-xs font-bold text-red-600 shadow-sm">
-                            {displayName.slice(0, 1)}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-bold text-gray-800">
-                              {displayName}
-                            </div>
-                            <div className="mt-0.5 text-[10px] text-gray-500">
-                              {reviewListStatusLabel(item.status)}
-                            </div>
-                            {reviewHint ? (
-                              <div className="mt-0.5 truncate text-[10px] text-gray-400">
-                                {reviewHint}
-                              </div>
-                            ) : null}
-                          </div>
+                        <div className="truncate text-[12px] font-semibold text-slate-800">
+                          {index + 1}. {queueItemSummary(item)}
                         </div>
-                        <button
-                          type="button"
-                          disabled={!!commandLoading || !canRequestReview}
-                          onClick={() => void requestReviewResend(item)}
-                          className="shrink-0 rounded border border-red-200 bg-white px-3 py-1.5 text-[11px] font-bold text-red-600 shadow-sm transition-colors hover:bg-red-100 disabled:opacity-60"
-                        >
-                          {commandLoading === loadingKey
-                            ? "处理中"
-                            : isReviewPending
-                              ? "复查中"
-                              : canRequestReview
-                                ? "处理"
-                                : "需人工"}
-                        </button>
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          已准备 {Math.max(Number(item.reply_count || 0), 1)} 条回复
+                        </div>
                       </div>
-                    );
-                  })}
+                    ))
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-3 text-center text-[11px] text-slate-400">
+                      暂无待发送回复
+                    </div>
+                  )}
                 </div>
-              ) : reviewManualTotal > 0 ? (
-                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                  复核列表正在刷新，请稍后重试。
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-amber-200/80 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-amber-100 px-3 py-2.5">
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                      待复核队列
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-amber-500">
+                      仅展示当前最需要关注的前 2 条
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                      {reviewQueueTotal}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openToolbarBrowserPage("/main/rpa-review-queue")}
+                      className="text-[11px] font-medium text-amber-700 underline underline-offset-4 hover:text-amber-800"
+                    >
+                      查看全部
+                    </button>
+                  </div>
                 </div>
-              ) : (
-                <div className="rounded border border-dashed border-gray-200 bg-gray-50 py-3 text-center text-[11px] italic text-gray-400">
-                  暂无异常需要复核
+                <div className="space-y-2 px-3 py-3">
+                  {reviewQueuePreviewItems.length > 0 ? (
+                    reviewQueuePreviewItems.map((item, index) => (
+                      <div
+                        key={item.queue_entry_id || `${item.prepared_reply_id || item.message_task_id || ""}-${index}`}
+                        className="rounded-lg border border-amber-100 bg-amber-50/80 px-2.5 py-2"
+                      >
+                        <div className="truncate text-[12px] font-semibold text-slate-800">
+                          {index + 1}. {queueItemSummary(item)}
+                        </div>
+                        <div className="mt-1 truncate text-[10px] text-amber-700">
+                          {(item.reason || item.message_preview || "等待人工处理").trim()}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 py-3 text-center text-[11px] text-slate-400">
+                      暂无待复核会话
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </>
         )}
@@ -4210,7 +4129,7 @@ export function ToolbarRPAMode({
             </button>
           </div>
           <div className="shrink-0 rounded bg-white px-2 py-1 text-[10px] font-bold text-gray-500 shadow-sm">
-            待发任务：{queuePendingTotal}
+            待发送：{sendQueueTotal}
           </div>
         </div>
       </div>

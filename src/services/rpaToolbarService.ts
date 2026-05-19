@@ -128,17 +128,41 @@ export type ToolbarRPAAutomationState = {
   updated_at?: string;
 };
 
-export type ToolbarRPAAutoReplyWindow = {
-  status?: string;
+export type ToolbarRPASendQueueItem = {
+  prepared_reply_id?: string;
   open_kfid?: string;
   external_userid?: string;
   contact_name?: string;
   channel_label?: string;
-  last_customer_message_preview?: string;
-  last_customer_message_at?: string;
-  pending_message_count?: number;
-  generated_run_id?: string;
-  updated_at?: string;
+  reply_preview?: string;
+  reply_count?: number;
+  prepared_at?: string;
+};
+
+export type ToolbarRPASendQueuePreview = {
+  total?: number;
+  items?: ToolbarRPASendQueueItem[];
+};
+
+export type ToolbarRPAReviewQueueItem = {
+  queue_entry_id?: string;
+  source_type?: string;
+  source_status?: string;
+  open_kfid?: string;
+  external_userid?: string;
+  contact_name?: string;
+  channel_label?: string;
+  message_preview?: string;
+  reason?: string;
+  queued_at?: string;
+  prepared_reply_id?: string;
+  session_task_id?: string;
+  message_task_id?: string;
+};
+
+export type ToolbarRPAReviewQueuePreview = {
+  total?: number;
+  items?: ToolbarRPAReviewQueueItem[];
 };
 
 export type ToolbarRPABootstrap = {
@@ -146,7 +170,8 @@ export type ToolbarRPABootstrap = {
   enabled?: boolean;
   status?: string;
   automation?: ToolbarRPAAutomationState | null;
-  pending_window?: ToolbarRPAAutoReplyWindow | null;
+  send_queue_preview?: ToolbarRPASendQueuePreview | null;
+  review_queue_preview?: ToolbarRPAReviewQueuePreview | null;
   run?: ToolbarRPARunInfo;
   session_task?: ToolbarRPASessionTask;
   message_task?: ToolbarRPAMessageTask;
@@ -223,7 +248,8 @@ export type ToolbarRPAOperatorView = {
   after_hold_view?: ToolbarRPAOperatorView | null;
   queue_summary?: RPAStateSnapshot["queue_summary"];
   review_manual?: RPAStateSnapshot["review_manual"];
-  pending_window?: ToolbarRPAAutoReplyWindow | null;
+  send_queue_preview?: ToolbarRPASendQueuePreview | null;
+  review_queue_preview?: ToolbarRPAReviewQueuePreview | null;
   rpa_state?: RPAStateSnapshot | null;
 };
 
@@ -270,7 +296,9 @@ export type RPAStateSnapshot = {
     pending_runs?: number;
     pending_session_tasks?: number;
     pending_message_tasks?: number;
-    pending_windows?: number;
+    preparing_replies?: number;
+    ready_prepared_replies?: number;
+    review_required_replies?: number;
     total_pending?: number;
   } | null;
   current_session?: {
@@ -331,7 +359,8 @@ export type RPAStateSnapshot = {
   server_time?: string;
   request_id?: string;
   paused_auto_stop_remaining_ms?: number;
-  pending_window?: ToolbarRPAAutoReplyWindow | null;
+  send_queue_preview?: ToolbarRPASendQueuePreview | null;
+  review_queue_preview?: ToolbarRPAReviewQueuePreview | null;
 };
 
 export type ToolbarRPAOperatorBinding = {
@@ -403,7 +432,21 @@ function normalizeQueueSummary(
       "pending_message_tasks",
       "PendingMessageTasks",
     ),
-    pending_windows: readNumber(record, "pending_windows", "PendingWindows"),
+    preparing_replies: readNumber(
+      record,
+      "preparing_replies",
+      "PreparingReplies",
+    ),
+    ready_prepared_replies: readNumber(
+      record,
+      "ready_prepared_replies",
+      "ReadyPreparedReplies",
+    ),
+    review_required_replies: readNumber(
+      record,
+      "review_required_replies",
+      "ReviewRequiredReplies",
+    ),
     total_pending: readNumber(record, "total_pending", "TotalPending"),
   };
 }
@@ -593,34 +636,78 @@ function normalizeRunInfo(value: unknown): ToolbarRPARunInfo | undefined {
   };
 }
 
-function normalizePendingWindow(
+function normalizeSendQueueItem(
   value: unknown,
-): ToolbarRPAAutoReplyWindow | null {
+): ToolbarRPASendQueueItem | null {
   const record = asRecord(value);
   if (!record) return null;
   return {
-    status: readString(record, "status", "Status"),
+    prepared_reply_id: readString(
+      record,
+      "prepared_reply_id",
+      "PreparedReplyID",
+    ),
     open_kfid: readString(record, "open_kfid", "OpenKFID"),
     external_userid: readString(record, "external_userid", "ExternalUserID"),
     contact_name: readString(record, "contact_name", "ContactName"),
     channel_label: readString(record, "channel_label", "ChannelLabel"),
-    last_customer_message_preview: readString(
+    reply_preview: readString(record, "reply_preview", "ReplyPreview"),
+    reply_count: readNumber(record, "reply_count", "ReplyCount"),
+    prepared_at: readString(record, "prepared_at", "PreparedAt"),
+  };
+}
+
+function normalizeSendQueuePreview(
+  value: unknown,
+): ToolbarRPASendQueuePreview | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const rawItems = readField<unknown[]>(record, "items", "Items") || [];
+  return {
+    total: readNumber(record, "total", "Total"),
+    items: rawItems
+      .map((item) => normalizeSendQueueItem(item))
+      .filter(Boolean) as ToolbarRPASendQueueItem[],
+  };
+}
+
+function normalizeReviewQueueItem(
+  value: unknown,
+): ToolbarRPAReviewQueueItem | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  return {
+    queue_entry_id: readString(record, "queue_entry_id", "QueueEntryID"),
+    source_type: readString(record, "source_type", "SourceType"),
+    source_status: readString(record, "source_status", "SourceStatus"),
+    open_kfid: readString(record, "open_kfid", "OpenKFID"),
+    external_userid: readString(record, "external_userid", "ExternalUserID"),
+    contact_name: readString(record, "contact_name", "ContactName"),
+    channel_label: readString(record, "channel_label", "ChannelLabel"),
+    message_preview: readString(record, "message_preview", "MessagePreview"),
+    reason: readString(record, "reason", "Reason"),
+    queued_at: readString(record, "queued_at", "QueuedAt"),
+    prepared_reply_id: readString(
       record,
-      "last_customer_message_preview",
-      "LastCustomerMessagePreview",
+      "prepared_reply_id",
+      "PreparedReplyID",
     ),
-    last_customer_message_at: readString(
-      record,
-      "last_customer_message_at",
-      "LastCustomerMessageAt",
-    ),
-    pending_message_count: readNumber(
-      record,
-      "pending_message_count",
-      "PendingMessageCount",
-    ),
-    generated_run_id: readString(record, "generated_run_id", "GeneratedRunID"),
-    updated_at: readString(record, "updated_at", "UpdatedAt"),
+    session_task_id: readString(record, "session_task_id", "SessionTaskID"),
+    message_task_id: readString(record, "message_task_id", "MessageTaskID"),
+  };
+}
+
+function normalizeReviewQueuePreview(
+  value: unknown,
+): ToolbarRPAReviewQueuePreview | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const rawItems = readField<unknown[]>(record, "items", "Items") || [];
+  return {
+    total: readNumber(record, "total", "Total"),
+    items: rawItems
+      .map((item) => normalizeReviewQueueItem(item))
+      .filter(Boolean) as ToolbarRPAReviewQueueItem[],
   };
 }
 
@@ -681,8 +768,11 @@ function normalizeStateLike(state: unknown): RPAStateSnapshot | null {
       "paused_auto_stop_remaining_ms",
       "PausedAutoStopRemainingMS",
     ),
-    pending_window: normalizePendingWindow(
-      readField(record, "pending_window", "PendingWindow"),
+    send_queue_preview: normalizeSendQueuePreview(
+      readField(record, "send_queue_preview", "SendQueuePreview"),
+    ),
+    review_queue_preview: normalizeReviewQueuePreview(
+      readField(record, "review_queue_preview", "ReviewQueuePreview"),
     ),
   };
 }
@@ -782,22 +872,8 @@ function normalizeRPAStateSnapshot(
     server_time: state.server_time,
     request_id: state.request_id,
     paused_auto_stop_remaining_ms: state.paused_auto_stop_remaining_ms || 0,
-    pending_window: state.pending_window
-      ? {
-          status: state.pending_window.status,
-          open_kfid: state.pending_window.open_kfid,
-          external_userid: state.pending_window.external_userid,
-          contact_name: state.pending_window.contact_name,
-          channel_label: state.pending_window.channel_label,
-          last_customer_message_preview:
-            state.pending_window.last_customer_message_preview,
-          last_customer_message_at:
-            state.pending_window.last_customer_message_at,
-          pending_message_count: state.pending_window.pending_message_count,
-          generated_run_id: state.pending_window.generated_run_id,
-          updated_at: state.pending_window.updated_at,
-        }
-      : null,
+    send_queue_preview: state.send_queue_preview || null,
+    review_queue_preview: state.review_queue_preview || null,
     queue_summary: state.queue_summary || null,
     current_session: state.current_session || null,
     target_session: state.target_session || null,
@@ -897,8 +973,11 @@ function normalizeToolbarRPAOperatorView(
     review_manual: normalizeReviewManual(
       readField(record, "review_manual", "ReviewManual"),
     ),
-    pending_window: normalizePendingWindow(
-      readField(record, "pending_window", "PendingWindow"),
+    send_queue_preview: normalizeSendQueuePreview(
+      readField(record, "send_queue_preview", "SendQueuePreview"),
+    ),
+    review_queue_preview: normalizeReviewQueuePreview(
+      readField(record, "review_queue_preview", "ReviewQueuePreview"),
     ),
     rpa_state: normalizeStateLike(readField(record, "rpa_state", "RPAState")),
   };
@@ -935,7 +1014,8 @@ function normalizeToolbarRPAOperatorBootstrap(
             updated_at: operatorView.automation.updated_at,
           }
         : null,
-      pending_window: operatorView?.pending_window || null,
+      send_queue_preview: operatorView?.send_queue_preview || null,
+      review_queue_preview: operatorView?.review_queue_preview || null,
       queue_summary: operatorView?.queue_summary || null,
       review_manual: operatorView?.review_manual || null,
       version: Number(payload.version || 0),
@@ -1130,6 +1210,42 @@ export async function updateKFToolbarRPAAutomationMode(
     },
   );
   return payload?.data || null;
+}
+
+export async function listKFToolbarRPASendQueue(params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<ToolbarRPASendQueuePreview | null> {
+  const search = new URLSearchParams();
+  if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+    search.set("offset", String(params.offset));
+  }
+  const query = search.toString();
+  const payload = await requestJSON<APIReply<ToolbarRPASendQueuePreview>>(
+    `/api/v1/kf/toolbar/rpa/send-queue${query ? `?${query}` : ""}`,
+  );
+  return normalizeSendQueuePreview(payload?.data || null);
+}
+
+export async function listKFToolbarRPAReviewQueue(params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<ToolbarRPAReviewQueuePreview | null> {
+  const search = new URLSearchParams();
+  if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+    search.set("limit", String(params.limit));
+  }
+  if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+    search.set("offset", String(params.offset));
+  }
+  const query = search.toString();
+  const payload = await requestJSON<APIReply<ToolbarRPAReviewQueuePreview>>(
+    `/api/v1/kf/toolbar/rpa/review-queue${query ? `?${query}` : ""}`,
+  );
+  return normalizeReviewQueuePreview(payload?.data || null);
 }
 
 export function openToolbarRPAOperatorViewStream(input: {
