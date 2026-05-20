@@ -259,59 +259,61 @@ export async function getCSCommandCenterSessionDetail(params: {
   return payload?.data || null;
 }
 
-export function openRealtimeUpdatesSocket(input: {
+export function openRealtimeUpdatesStream(input: {
   open_kfid?: string;
   since_cursor?: number;
   onMessage: (payload: CommandCenterRealtimeEnvelope) => void;
-  onClose?: () => void;
   onError?: (event: Event) => void;
-}): WebSocket {
-  const url = buildRealtimeSocketURL({
-    open_kfid: input.open_kfid,
-    since_cursor: input.since_cursor,
-  });
-  const socket = new WebSocket(url);
-  socket.onmessage = (event) => {
+  onOpen?: () => void;
+}): EventSource {
+  const stream = new EventSource(
+    buildRealtimeStreamURL({
+      open_kfid: input.open_kfid,
+      since_cursor: input.since_cursor,
+    }).toString(),
+    { withCredentials: true },
+  );
+  stream.addEventListener("realtime_updates", (event) => {
     try {
+      const messageEvent = event as MessageEvent;
       const payload = JSON.parse(
-        String(event.data || ""),
+        String(messageEvent.data || ""),
       ) as CommandCenterRealtimeEnvelope;
       input.onMessage(payload);
     } catch {
       // Ignore malformed payloads and keep the stream alive.
     }
-  };
-  if (input.onClose) {
-    socket.onclose = () => input.onClose?.();
+  });
+  if (input.onOpen) {
+    stream.onopen = input.onOpen;
   }
   if (input.onError) {
-    socket.onerror = input.onError;
+    stream.onerror = input.onError;
+  } else {
+    stream.onerror = () => {
+      // Let native EventSource handle abnormal reconnects.
+    };
   }
-  return socket;
+  return stream;
 }
 
-function buildRealtimeSocketURL(params?: {
+function buildRealtimeStreamURL(params?: {
   open_kfid?: string;
   since_cursor?: number;
-}): string {
+}): URL {
   const base =
     (import.meta.env.VITE_API_BASE_URL || "").trim() ||
     (typeof window !== "undefined"
       ? window.location.origin
       : "http://localhost");
-  const url = new URL("/api/v1/realtime/ws", base);
-  if (url.protocol === "https:") {
-    url.protocol = "wss:";
-  } else {
-    url.protocol = "ws:";
-  }
+  const url = new URL("/api/v1/realtime/stream", base);
   if (params?.open_kfid) {
     url.searchParams.set("open_kfid", params.open_kfid);
   }
   if (params?.since_cursor && params.since_cursor > 0) {
     url.searchParams.set("since_cursor", String(params.since_cursor));
   }
-  return url.toString();
+  return url;
 }
 
 export async function executeCSCommandCenterCommand(input: {

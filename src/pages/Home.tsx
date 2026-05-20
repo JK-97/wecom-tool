@@ -105,7 +105,7 @@ export default function Home() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-4 pb-4 text-sm text-gray-500">
-                    客服接待管理。实时监控会话状态、SLA倒计时与转人工调度。
+                    客服接待管理。实时查看会话状态、SLA倒计时与转人工调度。
                   </CardContent>
                 </Card>
               </Link>

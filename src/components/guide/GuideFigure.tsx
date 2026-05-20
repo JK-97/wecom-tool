@@ -113,7 +113,7 @@ function CommandCenterMockup() {
         </div>
       </div>
       <div className="rounded-xl border border-gray-200 p-3">
-        <div className="mb-3 text-xs font-semibold text-gray-500">AI 实时监控</div>
+        <div className="mb-3 text-xs font-semibold text-gray-500">会话重点</div>
         <div className="space-y-2">
           <div className="rounded-md bg-orange-50 p-2 text-xs text-orange-700">风险提示</div>
           <div className="rounded-md bg-gray-50 p-2 text-xs text-gray-600">会话摘要</div>

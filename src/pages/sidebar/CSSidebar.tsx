@@ -18,7 +18,7 @@ import {
 } from "@/services/jssdkService";
 import { executeContactSidebarCommand } from "@/services/sidebarService";
 import {
-  openRealtimeUpdatesSocket,
+  openRealtimeUpdatesStream,
   type CommandCenterRealtimeEvent,
   type CommandCenterRealtimeEnvelope,
 } from "@/services/commandCenterService";
@@ -67,6 +67,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { ToolbarRPAMode } from "./ToolbarRPAMode";
 
 type NormalizedSuggestion = {
@@ -431,7 +432,11 @@ function consumeAutomationNavigationHandoff(input?: {
   return handoff;
 }
 
-function readInitialToolbarQuery() {
+// The toolbar primarily resolves context from enterprise WeCom runtime handoff.
+// During browser-side verification or fallback entry, accept explicit URL query
+// params as a deterministic secondary source so the page can still load a
+// concrete session.
+function readToolbarQuery(search: string) {
   if (typeof window === "undefined") {
     return {
       entry: "single_kf_tools",
@@ -445,20 +450,36 @@ function readInitialToolbarQuery() {
   const automationHandoff = !manualHandoff
     ? consumeAutomationNavigationHandoff()
     : null;
+  const query = new URLSearchParams(search || "");
+  const queryEntry = (query.get("entry") || "").trim();
+  const queryOpenKFID = (query.get("open_kfid") || "").trim();
+  const queryExternalUserID = (query.get("external_userid") || "").trim();
+  const queryRunID = (
+    query.get("run_id") ||
+    query.get("rpa_run_id") ||
+    ""
+  ).trim();
+  const queryToolbarMode = (query.get("toolbar_mode") || "").trim();
   return {
-    entry: "single_kf_tools",
+    entry:
+      (manualHandoff ? "single_kf_tools" : "") ||
+      (automationHandoff ? "single_kf_tools" : "") ||
+      queryEntry ||
+      "single_kf_tools",
     open_kfid: (
       manualHandoff?.open_kfid ||
       automationHandoff?.open_kfid ||
+      queryOpenKFID ||
       ""
     ).trim(),
     external_userid: (
       manualHandoff?.external_userid ||
       automationHandoff?.external_userid ||
+      queryExternalUserID ||
       ""
     ).trim(),
-    rpa_run_id: (automationHandoff?.run_id || "").trim(),
-    toolbar_mode: automationHandoff ? "rpa" : "",
+    rpa_run_id: (automationHandoff?.run_id || queryRunID || "").trim(),
+    toolbar_mode: automationHandoff ? "rpa" : queryToolbarMode,
   };
 }
 
@@ -546,7 +567,7 @@ function toolbarSessionStatusLabel(raw?: string, statusID?: number): string {
     case "unassigned":
       return "未处理";
     case "assistant":
-      return "AI 接待中";
+      return "智能接待中";
     case "queueing":
       return "排队中";
     case "human":
@@ -564,7 +585,7 @@ function toolbarSessionStatusLabel(raw?: string, statusID?: number): string {
     case 0:
       return "未处理";
     case 1:
-      return "AI 接待中";
+      return "智能接待中";
     case 2:
       return "排队中";
     case 3:
@@ -1005,70 +1026,71 @@ function summarizeToolbarStatusCopy(input?: {
   const summaryStatus = (input?.summaryStatus || "").trim().toLowerCase();
   if (summaryStatus === "queued") {
     return {
-      badgeText: "待更新",
+      badgeText: "待整理",
       badgeVariant: "warning",
-      helperText: "检测到新的客户消息，AI 正在准备本轮分析与回复建议。",
+      helperText: "收到新消息后，系统正在更新这次会话的重点和建议回复。",
     };
   }
   if (summaryStatus === "running") {
     return {
-      badgeText: "分析中",
+      badgeText: "整理中",
       badgeVariant: "warning",
-      helperText: "AI 正在整理客户意图、阻力和下一步服务动作。",
+      helperText: "系统正在整理客户诉求、关注点和下一步跟进建议。",
     };
   }
   if (summaryStatus === "failed") {
     return {
-      badgeText: "分析失败",
+      badgeText: "整理失败",
       badgeVariant: "warning",
-      helperText: "本轮分析暂未完成，可等待后续事件或手动刷新聊天区后再查看。",
+      helperText: "这次整理暂未完成，可稍后自动重试或刷新后再看。",
     };
   }
   switch (sessionStatusID) {
     case 0:
       return {
-        badgeText: "待建模",
+        badgeText: "信息待补充",
         badgeVariant: "secondary",
-        helperText:
-          "当前会话仍处于未处理状态，建议等待客户表达更多信息后再形成稳定判断。",
+        helperText: "当前信息还不够完整，等客户继续表达后会更清楚。",
       };
     case 1:
       return {
-        badgeText: "助手监测中",
+        badgeText: "系统跟进中",
         badgeVariant: "success",
-        helperText:
-          "智能助手接待中，分析重点放在客户目标、风险信号和接手前上下文准备。",
+        helperText: "当前由系统先行跟进，会持续更新客户诉求和建议回复。",
       };
     case 2:
       return {
-        badgeText: "待人工接手",
+        badgeText: "等待人工接入",
         badgeVariant: "warning",
-        helperText:
-          "会话在待接入池排队中，当前分析更偏向接手摘要和优先级判断。",
+        helperText: "会话正在等待人工接入，页面会优先整理接手摘要和优先级。",
       };
     case 3:
       return {
-        badgeText: "人工辅助中",
+        badgeText: "人工处理中",
         badgeVariant: "success",
-        helperText: "人工接待中，分析会持续刷新成交信号、主要阻力和建议动作。",
+        helperText: "当前由人工跟进，页面会持续补充客户关注点和建议动作。",
       };
     case 4:
       return {
-        badgeText: "历史结论",
+        badgeText: "最近结论",
         badgeVariant: "secondary",
-        helperText: "会话已结束，当前展示的是最近一次沉淀下来的分析结论。",
+        helperText: "会话已结束，当前展示的是最近一次整理好的结果。",
       };
     default:
       return {
-        badgeText: "已准备",
+        badgeText: "已更新",
         badgeVariant: "secondary",
-        helperText: "当前展示的是最新可用的会话分析结果。",
+        helperText: "当前展示的是这次会话的最新整理结果。",
       };
   }
 }
 
 export default function CSSidebar() {
-  const query = useMemo(() => readInitialToolbarQuery(), []);
+  const location = useLocation();
+  const query = useMemo(
+    () => readToolbarQuery(location.search),
+    [location.search],
+  );
   const shouldResolveRuntimeContext =
     (query.entry || "").trim() === "single_kf_tools" &&
     (!(query.external_userid || "").trim() || !(query.open_kfid || "").trim());
@@ -1753,9 +1775,7 @@ export default function CSSidebar() {
     ).trim();
     if (!openKFID || !externalUserID) return;
 
-    let stopped = false;
-    let reconnectTimer: number | null = null;
-    let socket: WebSocket | null = null;
+    let stream: EventSource | null = null;
 
     const queueRefresh = (options?: { preserveConversation?: boolean }) => {
       if (refreshTimerRef.current !== null) {
@@ -1867,35 +1887,18 @@ export default function CSSidebar() {
       }
     };
 
-    const connect = () => {
-      if (stopped) return;
-      socket = openRealtimeUpdatesSocket({
-        open_kfid: openKFID,
-        since_cursor: realtimeCursorRef.current,
-        onMessage: handleMessage,
-        onClose: () => {
-          if (stopped) return;
-          reconnectTimer = window.setTimeout(connect, 1200);
-        },
-      });
-    };
-
-    connect();
+    stream = openRealtimeUpdatesStream({
+      open_kfid: openKFID,
+      since_cursor: realtimeCursorRef.current,
+      onMessage: handleMessage,
+    });
     return () => {
-      stopped = true;
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
       }
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-      }
-      if (
-        socket &&
-        (socket.readyState === WebSocket.OPEN ||
-          socket.readyState === WebSocket.CONNECTING)
-      ) {
-        socket.close();
+      if (stream && stream.readyState !== EventSource.CLOSED) {
+        stream.close();
       }
     };
   }, [
@@ -2891,7 +2894,7 @@ export default function CSSidebar() {
                     <div className="flex min-w-0 items-center gap-2">
                       <Sparkles className="h-3.5 w-3.5 shrink-0 text-purple-600" />
                       <span className="truncate text-xs font-bold text-gray-800">
-                        AI 会话感知
+                        会话重点
                       </span>
                     </div>
                     {summaryGeneratedAt ? (
@@ -2903,32 +2906,32 @@ export default function CSSidebar() {
                   <div className="space-y-3.5 p-3.5">
                     <div>
                       <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                        核心诉求与意图
+                        客户核心诉求
                       </div>
                       <div className="text-xs font-medium leading-relaxed text-gray-700">
                         {summaryPrimaryIntent ||
                           (summaryIsAnalyzing
-                            ? "正在整理当前会话分析..."
-                            : "暂未形成稳定的客户意图判断。")}
+                            ? "正在整理这次会话的重点..."
+                            : "暂未形成稳定的客户诉求判断。")}
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="rounded-md border border-green-100 bg-green-50 p-2.5">
                         <div className="mb-1 flex items-center gap-1 text-[10px] font-bold text-green-700">
                           <CheckCircle2 className="h-3 w-3" />
-                          积极信号
+                          继续推进的信号
                         </div>
                         <div className="text-[11px] font-medium leading-5 text-green-800">
-                          {summaryDecisionSignals[0] || "等待更多客户信号"}
+                          {summaryDecisionSignals[0] || "等待更多客户反馈"}
                         </div>
                       </div>
                       <div className="rounded-md border border-red-100 bg-red-50 p-2.5">
                         <div className="mb-1 flex items-center gap-1 text-[10px] font-bold text-red-700">
                           <AlertTriangle className="h-3 w-3" />
-                          风险/阻力
+                          需要留意
                         </div>
                         <div className="text-[11px] font-medium leading-5 text-red-800">
-                          {summaryBlockingIssues[0] || "暂未发现明确风险"}
+                          {summaryBlockingIssues[0] || "暂未发现明显阻碍"}
                         </div>
                       </div>
                     </div>
@@ -2936,7 +2939,7 @@ export default function CSSidebar() {
                       <div className="grid gap-1.5 text-[11px] leading-5 text-gray-600">
                         <div>
                           <span className="font-bold text-gray-700">
-                            下一步：
+                            跟进建议：
                           </span>
                           {summaryNextBestActions.join("；")}
                         </div>
@@ -2963,7 +2966,7 @@ export default function CSSidebar() {
                         <Lightbulb className="h-4 w-4 shrink-0 text-[#0052D9]" />
                         <div className="min-w-0">
                           <div className="truncate text-xs font-bold text-[#0052D9]">
-                            建议操作：
+                            建议跟进：
                             {suggestedActionText || "继续安抚并确认下一步"}
                           </div>
                           {suggestionGeneratedAt ? (
@@ -3157,7 +3160,7 @@ export default function CSSidebar() {
                       <Lightbulb className="h-4 w-4" />
                     </div>
                     <div className="min-w-0">
-                      <div className={sidebarSectionLabel}>AI 建议回复</div>
+                      <div className={sidebarSectionLabel}>建议回复</div>
                       <p className="mt-1 text-sm leading-6 text-slate-600">
                         {humanOnlyPrompt}
                       </p>

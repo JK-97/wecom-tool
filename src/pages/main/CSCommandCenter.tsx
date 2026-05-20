@@ -31,7 +31,7 @@ import {
   getCSCommandCenterSessionDetail,
   getCSCommandCenterView,
   markCommandCenterSessionRead,
-  openRealtimeUpdatesSocket,
+  openRealtimeUpdatesStream,
   transitionKFServiceState,
   type CommandCenterMessage,
   type CommandCenterRealtimeEnvelope,
@@ -219,7 +219,7 @@ function commandCenterOpportunityLevelLabel(raw?: string): string {
 function commandCenterHandoffLabel(raw?: string): string {
   switch ((raw || "").trim()) {
     case "ai_can_continue":
-      return "AI 可继续处理";
+      return "可继续自动接待";
     case "human_recommended":
       return "建议人工关注";
     case "human_required":
@@ -818,27 +818,27 @@ function CommandCenterStatusBadge(props: { status: string; label?: string }) {
   if (status === "running" || status === "queued") {
     return (
       <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-blue-100 px-1.5 py-0 text-[10px] text-blue-700">
-        {props.label || "进行中"}
+        {props.label || "整理中"}
       </Badge>
     );
   }
   if (status === "failed") {
     return (
       <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-red-100 px-1.5 py-0 text-[10px] text-red-700">
-        {props.label || "分析失败"}
+        {props.label || "整理失败"}
       </Badge>
     );
   }
   if (status === "succeeded") {
     return (
       <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-green-100 px-1.5 py-0 text-[10px] text-green-700">
-        {props.label || "最近已完成"}
+        {props.label || "刚刚更新"}
       </Badge>
     );
   }
   return (
     <Badge className="inline-flex h-5 min-w-[68px] justify-center border-none bg-gray-100 px-1.5 py-0 text-[10px] text-gray-600">
-      {props.label || "未启动"}
+      {props.label || "暂未更新"}
     </Badge>
   );
 }
@@ -1382,7 +1382,7 @@ export default function CSCommandCenter() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const socket = openRealtimeUpdatesSocket({
+    const stream = openRealtimeUpdatesStream({
       open_kfid: queryOpenKFID,
       since_cursor: realtimeCursorRef.current,
       onMessage: (payload: CommandCenterRealtimeEnvelope) => {
@@ -1404,11 +1404,8 @@ export default function CSCommandCenter() {
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
       }
-      if (
-        socket.readyState === WebSocket.OPEN ||
-        socket.readyState === WebSocket.CONNECTING
-      ) {
-        socket.close();
+      if (stream.readyState !== EventSource.CLOSED) {
+        stream.close();
       }
     };
   }, [queryOpenKFID]);
@@ -2389,7 +2386,7 @@ export default function CSCommandCenter() {
                                   <div className="mb-1 flex justify-end">
                                     {row.isAssistantMessage ? (
                                       <span className="text-[11px] font-medium text-blue-600">
-                                        AI 助手
+                                        系统回复
                                       </span>
                                     ) : row.isStaffMessage ? (
                                       renderMessageStaffName({
@@ -2525,7 +2522,7 @@ export default function CSCommandCenter() {
                       className="h-auto flex-col gap-1 rounded-lg px-2 py-2 text-[11px] text-gray-500 data-[state=active]:bg-white data-[state=active]:text-blue-700"
                     >
                       <ShieldAlert className="h-4 w-4" />
-                      <span>AI 实时监控</span>
+                      <span>会话重点</span>
                     </TabsTrigger>
                     <TabsTrigger
                       value="upgrade"

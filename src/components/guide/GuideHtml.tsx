@@ -446,7 +446,7 @@ function CommandCenterDemo() {
 
         <aside className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="grid grid-cols-3 gap-1 bg-gray-100 p-1 text-[10px]">
-            <span className="rounded bg-white px-1.5 py-1 text-center text-blue-700 shadow-sm">AI 实时监控</span>
+            <span className="rounded bg-white px-1.5 py-1 text-center text-blue-700 shadow-sm">会话重点</span>
             <span className="px-1.5 py-1 text-center text-gray-500">客户升级</span>
             <span className="px-1.5 py-1 text-center text-gray-500">来源路由</span>
           </div>
